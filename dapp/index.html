@@ -12,11 +12,12 @@
 <style>
 :root {
   --bg:#fff;--fg:#000;--fg-muted:#666;--fg-dim:#999;
-  --border:#000;--border-muted:#ddd;--input-ph:#ccc;
+  --border:#000;--border-muted:#ddd;--input-ph:#aaa;
   --surface:#f9f9f9;--surface-hover:#f5f5f5;--list-hover:#f0f0f0;
   --btn-bg:#000;--btn-fg:#fff;--btn-hover:#333;
-  --btn-dis-bg:#ccc;--btn-dis-border:#ccc;--btn-dis-fg:inherit;
+  --btn-dis-bg:transparent;--btn-dis-border:#ccc;--btn-dis-fg:#999;
   --sec-bg:#fff;--sec-border:#000;
+  --card-border:#ccc;--card-shadow:none;
   --modal-overlay:rgba(0,0,0,0.8);--modal-bg:#fff;--modal-border:#000;
   --status-error:#fff0f0;--status-success:#f0fff0;
   --slip-border:rgba(0,0,0,0.25);--slip-hover:rgba(0,0,0,0.45);--slip-focus:#000;
@@ -31,12 +32,13 @@
   --link-fg:inherit;--remove-fg:#999;
 }
 .dark {
-  --bg:#0a0a0a;--fg:#e8e8e0;--fg-muted:#777;--fg-dim:#555;
-  --border:#333;--border-muted:#333;--input-ph:#444;
+  --bg:#0a0a0a;--fg:#e8e8e0;--fg-muted:#888;--fg-dim:#666;
+  --border:#333;--border-muted:#333;--input-ph:#555;
   --surface:#111;--surface-hover:#151515;--list-hover:#1a1a1a;
   --btn-bg:#e8e8e0;--btn-fg:#0a0a0a;--btn-hover:#ccc;
-  --btn-dis-bg:#333;--btn-dis-border:#333;--btn-dis-fg:#666;
+  --btn-dis-bg:transparent;--btn-dis-border:#444;--btn-dis-fg:#666;
   --sec-bg:#0a0a0a;--sec-border:#333;
+  --card-border:#333;--card-shadow:none;
   --modal-overlay:rgba(0,0,0,0.85);--modal-bg:#111;--modal-border:#333;
   --status-error:#1a0000;--status-success:#001a00;
   --slip-border:rgba(255,255,255,0.15);--slip-hover:rgba(255,255,255,0.3);--slip-focus:#e8e8e0;
@@ -59,6 +61,7 @@ body {
   padding: 60px 20px 20px;
   max-width: 480px;
   margin: 0 auto;
+  overflow-x: hidden;
 }
 a { color: var(--link-fg); }
 h1 {
@@ -66,10 +69,10 @@ h1 {
   font-weight: 400;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  margin-bottom: 40px;
+  margin-bottom: 24px;
 }
 .section {
-  margin-bottom: 32px;
+  margin-bottom: 16px;
 }
 label {
   display: block;
@@ -81,17 +84,17 @@ label {
 }
 input[type="number"], input[type="text"], .amount-input {
   width: 100%;
-  padding: 12px 0;
+  padding: 8px 0;
   font-size: 24px;
   font-family: inherit;
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
   outline: none;
   background: transparent;
   color: var(--fg);
 }
 input::placeholder { color: var(--input-ph); }
-input:focus { border-bottom-width: 2px; }
+input:focus { border-bottom-width: 2.5px; }
 button {
   display: inline-block;
   padding: 12px 24px;
@@ -131,73 +134,130 @@ button.secondary:hover { background: var(--surface-hover); }
 .token-select {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  padding: 6px 12px;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: opacity 0.15s;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.token-select:hover { background: var(--surface-hover); }
+.token-select:hover { opacity: 0.6; }
 .token-icon { width: 24px; height: 24px; display: inline-flex; align-items: center; }
 .token-symbol { font-weight: 600; color: var(--fg); }
+.token-chevron { font-size: 10px; color: var(--fg-dim); margin-left: -2px; }
+
+/* Quick-pick token row */
+.quick-tokens {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.quick-token {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.15s ease, border-color 0.15s ease, filter 0.15s ease, opacity 0.15s ease;
+  position: relative;
+  filter: grayscale(0.6);
+  opacity: 0.55;
+}
+.quick-token:hover {
+  transform: scale(1.15);
+  filter: grayscale(0);
+  opacity: 1;
+}
+.quick-token .qi { width: 22px; height: 22px; border-radius: 50%; pointer-events: none; }
+.quick-token[aria-label]::after {
+  content: attr(aria-label);
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--info-tip-bg);
+  border: 1px solid var(--info-tip-border);
+  color: var(--info-tip-fg);
+  box-shadow: var(--info-tip-shadow);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.quick-token:hover::after { opacity: 1; }
 
 /* Token input sections */
 .token-section {
-  margin-bottom: 24px;
+  margin-bottom: 12px;
 }
 .token-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
+  gap: 8px;
+  min-width: 0;
 }
 .amount-input { font-weight: 400; }
 .balance {
   font-size: 12px;
   color: var(--fg-muted);
-  margin-top: 8px;
-}
-.token-subactions {
+  margin-top: 6px;
   display: flex;
-  justify-content: flex-end;
-  margin: 6px 0;
+  align-items: center;
+  gap: 6px;
 }
 .max-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 11px;
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color 0.15s, background 0.15s;
   margin: 0;
+  border-radius: 3px;
 }
-.max-btn:hover { background: var(--btn-bg); color: var(--btn-fg); }
-.max-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.max-btn:hover { color: var(--fg); background: var(--surface-hover); }
+.max-btn:disabled { opacity: 0.4; cursor: not-allowed; background: none; }
 
 /* Swap arrow */
 .swap-arrow {
   display: flex;
   justify-content: center;
-  margin: 4px 0 16px;
+  margin: 2px 0 8px;
 }
 .arrow-btn {
   background: var(--bg);
   border: 1px solid var(--border);
-  padding: 8px;
+  border-radius: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   cursor: pointer;
-  transition: transform 0.2s, background 0.2s;
+  transition: transform 0.3s ease, background 0.2s, border-color 0.2s;
   margin: 0;
 }
-.arrow-btn:hover { transform: rotate(180deg); background: var(--surface-hover); }
-.arrow-btn svg { stroke: var(--fg); }
+.arrow-btn:hover { transform: rotate(180deg); background: var(--btn-bg); border-color: var(--btn-bg); }
+.arrow-btn:hover svg { stroke: var(--btn-fg); }
+.arrow-btn svg { stroke: var(--fg); transition: stroke 0.2s; }
 
 /* Swap button */
 .swap-btn {
@@ -205,13 +265,14 @@ button.secondary:hover { background: var(--surface-hover); }
   color: var(--btn-fg);
   border: 1px solid var(--btn-bg);
   padding: 14px 24px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  text-transform: none;
+  letter-spacing: 0.02em;
   cursor: pointer;
   width: 100%;
-  margin-top: 16px;
+  margin-top: 12px;
+  transition: all 0.2s;
 }
 .swap-btn:hover:not(:disabled) { background: var(--btn-hover); }
 .swap-btn:disabled { background: var(--btn-dis-bg); border-color: var(--btn-dis-border); color: var(--btn-dis-fg); cursor: not-allowed; }
@@ -229,6 +290,14 @@ button.secondary:hover { background: var(--surface-hover); }
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 3px 0;
+}
+.quote-rate {
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--card-border);
+  margin-top: 4px;
 }
 .quote-row > :nth-child(2) {
   margin-left: auto;
@@ -301,6 +370,8 @@ button.secondary:hover { background: var(--surface-hover); }
 /* Price impact */
 .impact-warn { color: #e67e22; }
 .impact-danger { color: #e74c3c; font-weight: 600; }
+.quote-info.impact-high { background: rgba(231,76,60,0.06); }
+.dark .quote-info.impact-high { background: rgba(231,76,60,0.1); }
 
 /* All routes collapsible */
 .routes-toggle {
@@ -358,6 +429,7 @@ button.secondary:hover { background: var(--surface-hover); }
   align-items: center;
   padding: 20px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .modal-overlay.active { display: flex; }
 body.modal-open { overflow: hidden; }
@@ -367,6 +439,10 @@ body.modal-open { overflow: hidden; }
   padding: 20px;
   width: 100%;
   max-width: 360px;
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .modal-header {
   display: flex;
@@ -424,6 +500,11 @@ body.modal-open { overflow: hidden; }
   transition: background 0.2s;
 }
 .token-list-item:hover { background: var(--list-hover); }
+.token-list-item.highlight {
+  background: var(--surface);
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
+}
 .token-balance { margin-left: auto; font-size: 12px; color: var(--token-bal); font-variant-numeric: tabular-nums; }
 
 /* Custom token input */
@@ -487,14 +568,16 @@ body.modal-open { overflow: hidden; }
 .site-footer {
   position: relative;
   text-align: center;
-  padding: 40px 20px;
+  padding: 48px 20px;
   font-size: 11px;
-  opacity: 0.4;
+  opacity: 0.35;
   letter-spacing: 0.5px;
+  font-weight: 300;
 }
 .site-footer a {
   color: inherit;
   text-decoration: underline;
+  margin: 0 2px;
 }
 .site-footer a:hover { opacity: 0.7; }
 
@@ -504,17 +587,28 @@ body.modal-open { overflow: hidden; }
   .wallet { top: 16px; right: 16px; }
   .wallet button { padding: 10px 14px; font-size: 11px; }
   h1 { margin-bottom: 30px; font-size: 13px; }
-  input[type="number"], input[type="text"] { font-size: 20px; padding: 14px 0; }
+  input[type="number"], input[type="text"] { font-size: 20px; padding: 8px 0; }
   .amount-input { font-size: 20px; }
-  .swap-btn { padding: 14px 20px; }
-  .modal { max-width: 100%; margin: 0 10px; }
+  .swap-btn { padding: 12px 20px; }
+  .modal { max-width: 100%; margin: 0 10px; max-height: calc(100vh - 40px); overflow-y: auto; }
   .dark-toggle { top: 18px; left: 16px; }
+  .swap-card { padding: 20px 16px; }
+  .quick-token { min-width: 26px; min-height: 26px; padding: 4px; }
 }
 @media (max-width: 380px) {
   body { padding: 70px 12px 20px; }
   input[type="number"], input[type="text"] { font-size: 18px; }
   .amount-input { font-size: 18px; }
   h1 { font-size: 12px; }
+  .swap-card { padding: 16px 12px; }
+  .token-select { padding: 4px 2px; gap: 4px; font-size: 11px; }
+  .token-icon { width: 20px; height: 20px; }
+  .quick-tokens { gap: 4px; }
+  .quick-token { width: 24px; height: 24px; }
+  .quick-token .qi { width: 20px; height: 20px; }
+  .quote-info { padding: 10px 8px; font-size: 12px; }
+  .balance { font-size: 11px; gap: 4px; flex-wrap: wrap; }
+  .max-btn { font-size: 9px; padding: 2px 3px; }
 }
 
 /* Info tooltip */
@@ -582,6 +676,31 @@ body.modal-open { overflow: hidden; }
   justify-content: center;
 }
 .dark-toggle:hover { opacity: 1; }
+
+/* Swap card container */
+.swap-card {
+  border: 1px solid var(--card-border);
+  border-radius: 0;
+  padding: 24px;
+  background: var(--bg);
+}
+
+/* Receiver accordion */
+.receiver-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 0;
+  margin-top: 4px;
+  border-top: 1px solid var(--card-border);
+}
+.receiver-toggle label {
+  cursor: pointer;
+  pointer-events: none;
+  margin: 0;
+}
 </style>
 </head>
 <body>
@@ -595,6 +714,9 @@ body.modal-open { overflow: hidden; }
 
 <h1 style="display:flex;align-items:center;gap:8px">Swap <span class="info-tip"><span class="info-icon" onclick="this.parentElement.classList.toggle('open');event.stopPropagation()">i</span><span class="info-tooltip"><a href="https://github.com/zammdefi/zrouter" target="_blank" rel="noopener" style="color:inherit;font-weight:600">zRouter</a> is a fully on-chain DEX aggregator. Routes are discovered and optimized by zQuoter directly on the blockchain — no off-chain APIs, no solvers, no servers.<br><br>Aggregates Uniswap V2/V3/V4, SushiSwap, Curve, zAMM, and Lido with atomic multi-hop execution, split routing, and per-leg slippage protection.<br><br>Zero protocol fees. No intermediaries. Your trade goes directly from your wallet to the liquidity pools.</span></span></h1>
 
+<!-- Swap card -->
+<div class="swap-card">
+
 <!-- From token section -->
 <div class="section token-section">
   <div class="token-header">
@@ -602,19 +724,17 @@ body.modal-open { overflow: hidden; }
     <div class="token-select" onclick="openTokenModal('from')">
       <span id="fromTokenIcon" class="token-icon"></span>
       <span id="fromTokenSymbol" class="token-symbol">ETH</span>
+      <span class="token-chevron">&#9662;</span>
     </div>
   </div>
-  <div class="token-subactions">
-    <button class="max-btn" type="button" onclick="setMaxFromBalance()">MAX</button>
-  </div>
   <input type="number" id="fromAmount" class="amount-input" placeholder="0.0" step="any">
-  <div id="fromBalance" class="balance">Balance: --</div>
+  <div class="balance"><span id="fromBalance">Balance: --</span> <span style="color:var(--fg-dim)">&middot;</span> <button class="max-btn" type="button" onclick="setPercentBalance(25)">25%</button> <button class="max-btn" type="button" onclick="setPercentBalance(50)">50%</button> <button class="max-btn" type="button" onclick="setPercentBalance(75)">75%</button> <button class="max-btn" type="button" onclick="setPercentBalance(100)">100%</button></div>
 </div>
 
 <!-- Swap direction arrow -->
 <div class="swap-arrow">
   <button class="arrow-btn" onclick="swapTokens()">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 10L12 15L17 10"/></svg>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2.5"><path d="M7 10L12 15L17 10"/></svg>
   </button>
 </div>
 
@@ -622,12 +742,16 @@ body.modal-open { overflow: hidden; }
 <div class="section token-section">
   <div class="token-header">
     <label style="margin:0">To</label>
-    <div class="token-select" onclick="openTokenModal('to')">
-      <span id="toTokenIcon" class="token-icon"></span>
-      <span id="toTokenSymbol" class="token-symbol">zOrg</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div id="quickTokens" class="quick-tokens"></div>
+      <div class="token-select" onclick="openTokenModal('to')">
+        <span id="toTokenIcon" class="token-icon"></span>
+        <span id="toTokenSymbol" class="token-symbol">zOrg</span>
+        <span class="token-chevron">&#9662;</span>
+      </div>
     </div>
   </div>
-  <input type="number" id="toAmount" class="amount-input" placeholder="0.0" readonly>
+  <input type="text" id="toAmount" class="amount-input" placeholder="0.0" readonly>
   <div id="toBalance" class="balance">Balance: --</div>
 </div>
 
@@ -644,6 +768,8 @@ body.modal-open { overflow: hidden; }
     <span class="slip-inline">
       <input id="slippagePct" class="slip-num" type="number" inputmode="decimal" min="0" max="20" step="0.1" value="0.5" aria-label="Slippage (%)">
       <span class="slip-unit">%</span>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="opacity:0.35;margin-left:-2px"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      <span id="splitSlipNote" style="display:none;font-size:11px;color:var(--fg-muted);margin-left:6px"></span>
     </span>
   </div>
   <div class="quote-row" id="refreshRow">
@@ -654,6 +780,7 @@ body.modal-open { overflow: hidden; }
       </button>
     </span>
   </div>
+  <div id="quoteRate" class="quote-rate" style="display:none"></div>
   <div id="allRoutesWrap" style="display:none">
     <div class="routes-toggle" onclick="toggleAllRoutes()">
       <span class="chevron" id="routesChevron" style="font-size:9px">&#9654;</span>
@@ -664,18 +791,21 @@ body.modal-open { overflow: hidden; }
 </div>
 
 <!-- Receiver (optional) -->
-<div style="margin-top:12px">
-  <div style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none" onclick="const w=document.getElementById('receiverWrap');const open=w.style.display!=='none';w.style.display=open?'none':'block';this.querySelector('.chevron').textContent=open?'\u25B6':'\u25BC'">
-    <span class="chevron" style="font-size:9px;color:#666">&#9654;</span>
+<div>
+  <div class="receiver-toggle" onclick="const w=document.getElementById('receiverWrap');const open=w.style.display!=='none';w.style.display=open?'none':'block';this.querySelector('.chevron').textContent=open?'\u25B6':'\u25BC'">
+    <span class="chevron" style="font-size:9px;color:var(--fg-muted)">&#9654;</span>
     <label style="margin:0;cursor:pointer;pointer-events:none">Receiver</label>
   </div>
   <div id="receiverWrap" style="display:none;margin-top:8px">
-    <input type="text" id="receiverAddress" placeholder="0x... (defaults to connected wallet)" style="font-size:14px;padding:10px 0">
+    <input type="text" id="receiverAddress" placeholder="0x address, name.wei, or name.eth" style="font-size:14px;padding:8px 0">
+    <div id="receiverResolved" style="display:none;font-size:12px;margin-top:4px;color:var(--fg-muted);word-break:break-all"></div>
   </div>
 </div>
 
 <!-- Swap button -->
 <button id="swapBtn" class="swap-btn" disabled>Connect Wallet</button>
+
+</div><!-- end swap-card -->
 
 <!-- Direct ZAMM stake link -->
 <div id="directStakeLink" style="text-align:center;margin-top:10px;font-size:13px;opacity:0.7">
@@ -750,6 +880,10 @@ const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const WEINS_ADDRESS = "0x0000000000696760E15f265e828DB644A0c242EB";
 const PNKSTR_HOOK_ADDRESS = "0xfAaad5B731F52cDc9746F2414c823eca9B06E844";
+const V4_ROUTER_ADDRESS = "0x00000000000044a361Ae3cAc094c9D1b14Eece97";
+// V4 USDC/PNKSTR hookless pool params (fee=10000, tickSpacing=200)
+const PNKSTR_USDC_V4_FEE = 10000;
+const PNKSTR_USDC_V4_TICK = 200;
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
 const ZAMM_HOOKED = "0x000000000000040470635EB91b7CE4D132D616eD";
 const ZAMM_HOOKLESS = "0x00000000000008882D72EfA6cCE4B6a40b24C860";
@@ -759,7 +893,7 @@ const ZORG_ID = 1334160193485309697971829933264346612480800613613n;
 const ZORG_PAY_TOKEN = "0xe9b1cfea55baa219e34301f2f31b9fd0921664ed"; // ERC20 equivalent of the ERC6909 swap output
 const ZORG_DAO = "0x5E58BA0e06ED0F5558f83bE732a4b899a674053E";
 const ZORG_DAO_TOKEN = "0x00a6bA94BBb5474725515De88fE04F854f2dCb12";
-const WEINS_ABI = ["function computeId(string) pure returns (uint256)", "function text(uint256,string) view returns (string)", "function contenthash(uint256) view returns (bytes)", "function reverseResolve(address) view returns (string)"];
+const WEINS_ABI = ["function computeId(string) pure returns (uint256)", "function text(uint256,string) view returns (string)", "function contenthash(uint256) view returns (bytes)", "function reverseResolve(address) view returns (string)", "function ownerOf(uint256) view returns (address)"];
 const IPFS_GATEWAYS = ["https://content.wrappr.wtf/ipfs/", "https://dweb.link/ipfs/"];
 const BUILTIN_ADDRS = new Set([ZERO_ADDRESS, WETH_ADDRESS, USDC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS, WSTETH_ADDRESS, RETH_ADDRESS, DAI_ADDRESS, PNKSTR_ADDRESS, ZORG_DAO_TOKEN].map(a => a.toLowerCase()));
 
@@ -1217,10 +1351,11 @@ function updateWalletDisplay() {
   $('walletBtn').textContent = connectedAddress.slice(0, 6) + '...' + connectedAddress.slice(-4);
   updateWcBanner();
   // Resolve .wei name in background
+  const _capturedAddr = connectedAddress;
   quoteRPC.call(async (rpc) => {
     const ns = getWeinsContract(rpc);
-    const name = await ns.reverseResolve(connectedAddress);
-    if (name && connectedAddress) $('walletBtn').textContent = name.toLowerCase();
+    const name = await ns.reverseResolve(_capturedAddr);
+    if (name && connectedAddress === _capturedAddr) $('walletBtn').textContent = name.toLowerCase();
   }).catch(() => {});
 }
 
@@ -1342,13 +1477,14 @@ function validateTokenList(rawArray) {
     if (!entry || typeof entry !== 'object') continue;
     const { address, symbol, decimals } = entry;
     if (!address || !symbol || decimals == null) continue;
-    if (!ethers.isAddress(address)) continue;
-    const checksummed = ethers.getAddress(address);
+    const addrClean = String(address).trim().toLowerCase();
+    if (!ethers.isAddress(addrClean)) continue;
+    const checksummed = ethers.getAddress(addrClean);
     if (checksummed === ZERO_ADDRESS) continue;
     const addrLower = checksummed.toLowerCase();
     if (seen.has(addrLower)) continue;
     const sym = String(symbol).trim();
-    if (!sym || sym.length > 24 || !/^[A-Za-z0-9.]+$/.test(sym)) continue;
+    if (!sym || sym.length > 24 || !/^[A-Za-z0-9.$_-]+$/.test(sym)) continue;
     const dec = Number(decimals);
     if (!Number.isInteger(dec) || dec < 0 || dec > 36) continue;
     seen.add(addrLower);
@@ -1422,6 +1558,7 @@ async function fetchIPFS(cid) {
 }
 
 let _weiResolveSeq = 0;
+let _weiResolving = false;
 
 async function resolveWeiList(nameInput) {
   let name = nameInput.toLowerCase().trim();
@@ -1435,6 +1572,7 @@ async function resolveWeiList(nameInput) {
   }
 
   const seq = ++_weiResolveSeq;
+  _weiResolving = true;
   const statusEl = $('weiListStatus');
   statusEl.className = 'token-search-status';
   statusEl.textContent = 'Loading ' + fullName + '...';
@@ -1496,13 +1634,16 @@ async function resolveWeiList(nameInput) {
     statusEl.className = 'token-search-status';
     statusEl.textContent = 'Loaded ' + validated.length + ' tokens from ' + fullName;
 
+    _weiResolving = false;
     const filter = $('tokenSearchInput')?.value || '';
     renderTokenList(filter);
   } catch (e) {
+    _weiResolving = false;
     if (seq !== _weiResolveSeq) return;
     statusEl.className = 'token-search-status error';
     statusEl.textContent = 'Failed to resolve ' + fullName;
     console.error('.wei resolve error:', e);
+    renderTokenList($('tokenSearchInput')?.value || '');
   }
 }
 
@@ -1625,6 +1766,9 @@ function renderTokenList(filter) {
       empty.textContent = 'Searching extended token list\u2026';
       frag.appendChild(empty);
       resolveWeiList('token-list.wei');
+    } else if (q && _weiResolving) {
+      empty.textContent = 'Searching extended token list\u2026';
+      frag.appendChild(empty);
     } else {
       empty.textContent = q ? 'No tokens match \u201c' + q + '\u201d' : 'No tokens';
       frag.appendChild(empty);
@@ -1632,6 +1776,29 @@ function renderTokenList(filter) {
   }
 
   list.appendChild(frag);
+
+  // Highlight best match when searching
+  if (q && q.length >= 2) {
+    const rows = list.querySelectorAll('.token-list-item');
+    let bestRow = null;
+    for (const row of rows) {
+      const sym = (row.getAttribute('data-symbol') || '').toLowerCase();
+      const t = tokens[row.getAttribute('data-symbol')];
+      // Exact symbol or address match gets priority
+      if (sym === q || (t && t.address.toLowerCase() === q)) {
+        bestRow = row;
+        break;
+      }
+      // First partial match as fallback
+      if (!bestRow && (sym.includes(q) || (t && t.address.toLowerCase().includes(q)))) {
+        bestRow = row;
+      }
+    }
+    if (bestRow) {
+      bestRow.classList.add('highlight');
+      bestRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
 }
 
 let _weiDebounceTimer = null;
@@ -1832,6 +1999,19 @@ const fmt = (nStr, max = 6) => {
       : s;
   }
   return n.toLocaleString(undefined, { maximumFractionDigits: max });
+};
+// Format output amounts: thousands separators, smart decimal truncation
+const fmtOutput = (nStr) => {
+  if (nStr == null) return "--";
+  const n = Number(nStr);
+  if (!Number.isFinite(n)) return nStr;
+  // Adaptive decimals: large numbers get fewer decimals
+  let maxDec;
+  if (Math.abs(n) >= 10000) maxDec = 2;
+  else if (Math.abs(n) >= 100) maxDec = 3;
+  else if (Math.abs(n) >= 1) maxDec = 4;
+  else maxDec = 6;
+  return n.toLocaleString(undefined, { maximumFractionDigits: maxDec, minimumFractionDigits: 0 });
 };
 
 // ---- Allowance cache ----
@@ -2106,7 +2286,8 @@ async function checkPermit2Allowance(tokenAddress) {
 
 async function signPermit2(tokenAddress, amount) {
   const deadline = BigInt(Math.trunc(Date.now() / 1000) + 3600);
-  const nonce = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
+  const _nonceBytes = new Uint8Array(8); crypto.getRandomValues(_nonceBytes);
+  const nonce = _nonceBytes.reduce((n, b) => (n << 8n) | BigInt(b), 0n);
   const values = {
     permitted: { token: tokenAddress, amount },
     spender: ZROUTER_ADDRESS,
@@ -2243,6 +2424,7 @@ const ROUTER_IFACE = new ethers.Interface([
   "function multicall(bytes[]) payable returns (bytes[])",
   "function sweep(address,uint256,uint256,address) payable",
   "function swapVZ(address to,bool exactOut,uint256 feeOrHook,address tokenIn,address tokenOut,uint256 idIn,uint256 idOut,uint256 swapAmount,uint256 amountLimit,uint256 deadline) payable returns (uint256 amountIn, uint256 amountOut)",
+  "function swapV4(address to,bool exactOut,uint24 swapFee,int24 tickSpace,address tokenIn,address tokenOut,uint256 swapAmount,uint256 amountLimit,uint256 deadline) payable returns (uint256 amountIn, uint256 amountOut)",
   "function wrap(uint256 amount) payable",
   "function permit(address token, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)",
   "function permitDAI(uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s)",
@@ -2339,7 +2521,8 @@ async function handleAmountChange() {
 
   // ETH ↔ WETH wrap/unwrap: 1:1, no DEX needed (only when sending to self)
   const _receiverRaw = ($("receiverAddress")?.value || "").trim();
-  const _hasCustomReceiver = _receiverRaw && ethers.isAddress(_receiverRaw) && ethers.getAddress(_receiverRaw) !== connectedAddress;
+  const _resolvedAddr = getReceiver();
+  const _hasCustomReceiver = _receiverRaw && (isReceiverPending() || (_resolvedAddr && _resolvedAddr !== connectedAddress));
   const wrapDir = !_hasCustomReceiver ? isWrapUnwrap(fromToken, toToken) : null;
   if (wrapDir) {
     const fromData = tokens[fromToken];
@@ -2374,14 +2557,32 @@ async function handleAmountChange() {
   try {
     setHTML(swapBtn, `<span class="loading"></span> Getting quote...`);
     setDisabled(swapBtn, true);
+    toAmountEl.value = "";
+    toAmountEl.placeholder = "Fetching\u2026";
 
     const quote = await requestQuote(amtStr, fromSnap, toSnap);
 
     if (seq !== _quoteSeq || fromSnap !== fromToken || toSnap !== toToken) return;
 
     const toData = tokens[toSnap];
-    const outStr = ethers.formatUnits(quote.expectedOutput, toData.decimals);
-    if (toAmountEl.value !== outStr) toAmountEl.value = outStr;
+    toAmountEl.placeholder = "0.0";
+    const outRaw = ethers.formatUnits(quote.expectedOutput, toData.decimals);
+    const outDisplay = fmtOutput(outRaw);
+    if (toAmountEl.value !== outDisplay) toAmountEl.value = outDisplay;
+
+    // Exchange rate line
+    const rateEl = $('quoteRate');
+    if (rateEl) {
+      const inNum = Number(amtStr);
+      const outNum = Number(outRaw);
+      if (inNum > 0 && Number.isFinite(outNum)) {
+        const rate = outNum / inNum;
+        rateEl.textContent = `1 ${tokens[fromSnap].symbol} \u2248 ${fmt(rate.toString(), 2)} ${toData.symbol}`;
+        rateEl.style.display = '';
+      } else {
+        rateEl.style.display = 'none';
+      }
+    }
 
     // Route display
     const route = quote.isSplit
@@ -2391,6 +2592,19 @@ async function handleAmountChange() {
         : `${quote.sourceA}`;
     fitRouteText(route);
     updateChartLink(quote);
+
+    // Split/multi-hop slippage note
+    const ssn = $('splitSlipNote');
+    if (ssn) {
+      if (quote.isSplit || quote.isTwoHop) {
+        const slippageBps = readSlippage();
+        const perLeg = Math.min(Math.max(slippageBps * 3, 150), 500) / 100;
+        ssn.textContent = `(${perLeg}% per leg)`;
+        ssn.style.display = '';
+      } else {
+        ssn.style.display = 'none';
+      }
+    }
 
     // Price impact
     displayPriceImpact(amtStr, fromSnap, toSnap, quote);
@@ -2437,6 +2651,7 @@ async function handleAmountChange() {
   } catch (e) {
     console.error("Quote error:", e);
     toAmountEl.value = "";
+    toAmountEl.placeholder = "0.0";
     setShown(quoteInfoEl, false);
     stopQuoteRefresh();
     const msg = /Too many decimals|Invalid number|Empty amount/i.test(String(e?.message || ""))
@@ -2452,7 +2667,9 @@ async function handleAmountChange() {
   }
 }
 
-async function setMaxFromBalance() {
+async function setMaxFromBalance() { setPercentBalance(100); }
+
+async function setPercentBalance(pct) {
   try {
     if (!provider || !connectedAddress) {
       toggleWallet();
@@ -2463,7 +2680,6 @@ async function setMaxFromBalance() {
     let raw = getCachedBalance(f.address);
 
     if (raw == null) {
-      // Cache miss — single fallback RPC
       if (f.address === ZERO_ADDRESS) {
         raw = await provider.getBalance(connectedAddress);
       } else {
@@ -2474,17 +2690,20 @@ async function setMaxFromBalance() {
       setCachedBalance(f.address, raw);
     }
 
-    // Reserve 5% for gas when sending ETH
-    if (f.address === ZERO_ADDRESS) raw = (raw * 95n) / 100n;
+    // Apply percentage
+    raw = (raw * BigInt(pct)) / 100n;
 
-    const maxStr = ethers.formatUnits(raw, f.decimals);
-    const pretty = maxStr.includes(".") ? maxStr.replace(/\.?0+$/, "") : maxStr;
+    // Reserve 5% for gas when sending ETH at 100%
+    if (f.address === ZERO_ADDRESS && pct === 100) raw = (raw * 95n) / 100n;
+
+    const valStr = ethers.formatUnits(raw, f.decimals);
+    const pretty = valStr.includes(".") ? valStr.replace(/\.?0+$/, "") : valStr;
 
     const input = $("fromAmount");
     input.value = pretty || "0";
     handleAmountChange();
   } catch (e) {
-    console.error("MAX error:", e);
+    console.error("Percent balance error:", e);
   }
 }
 
@@ -2536,12 +2755,98 @@ function initSimpleSlippage() {
 }
 document.addEventListener("DOMContentLoaded", initSimpleSlippage);
 
-// ---- Quote via RPC ----
+// ---- Receiver name resolution ----
+let _resolvedReceiver = null; // { input, address } or null
+let _receiverResolveSeq = 0;
+
 function getReceiver() {
+  if (!connectedAddress) return null;
   const v = ($("receiverAddress")?.value || "").trim();
-  if (v && ethers.isAddress(v) && v !== ZERO_ADDRESS) return ethers.getAddress(v);
+  if (!v) return connectedAddress;
+  if (ethers.isAddress(v) && v !== ZERO_ADDRESS) return ethers.getAddress(v);
+  if (_resolvedReceiver && _resolvedReceiver.input === v && _resolvedReceiver.address) return _resolvedReceiver.address;
   return connectedAddress;
 }
+
+function isReceiverPending() {
+  const v = ($("receiverAddress")?.value || "").trim();
+  if (!v || ethers.isAddress(v)) return false;
+  return !_resolvedReceiver || _resolvedReceiver.input !== v || !_resolvedReceiver.address;
+}
+
+let _receiverDebounce = null;
+function onReceiverInput() {
+  clearTimeout(_receiverDebounce);
+  const v = ($("receiverAddress")?.value || "").trim();
+  const el = $("receiverResolved");
+
+  // Clear state
+  _resolvedReceiver = null;
+
+  // Direct 0x address
+  if (!v) { el.style.display = "none"; return; }
+  if (ethers.isAddress(v)) {
+    el.style.display = "block";
+    el.style.color = "var(--fg-muted)";
+    el.textContent = ethers.getAddress(v);
+    _resolvedReceiver = { input: v, address: ethers.getAddress(v) };
+    return;
+  }
+
+  // Name resolution (.wei or .eth)
+  if (v.endsWith(".wei") || v.endsWith(".eth")) {
+    el.style.display = "block";
+    el.style.color = "var(--fg-muted)";
+    el.textContent = "Resolving " + v + "...";
+    _receiverDebounce = setTimeout(() => resolveReceiverName(v), 350);
+  } else {
+    el.style.display = "block";
+    el.style.color = "#c0392b";
+    el.textContent = "Enter 0x address, name.wei, or name.eth";
+  }
+}
+
+async function resolveReceiverName(name) {
+  const seq = ++_receiverResolveSeq;
+  const el = $("receiverResolved");
+  try {
+    let resolved = null;
+    if (name.endsWith(".wei")) {
+      resolved = await quoteRPC.call(async (rpc) => {
+        const ns = getWeinsContract(rpc);
+        const tokenId = await ns.computeId(name);
+        const owner = await ns.ownerOf(tokenId).catch(() => null);
+        if (!owner || owner === ZERO_ADDRESS) return null;
+        return ethers.getAddress(owner);
+      });
+    } else if (name.endsWith(".eth")) {
+      resolved = await quoteRPC.call(async (rpc) => {
+        return await rpc.resolveName(name);
+      });
+    }
+    if (seq !== _receiverResolveSeq) return;
+    if (resolved && resolved !== ZERO_ADDRESS) {
+      _resolvedReceiver = { input: name, address: resolved };
+      el.style.color = "var(--fg-muted)";
+      el.textContent = resolved;
+    } else {
+      _resolvedReceiver = null;
+      el.style.color = "#c0392b";
+      el.textContent = "Name not found";
+    }
+  } catch (e) {
+    if (seq !== _receiverResolveSeq) return;
+    _resolvedReceiver = null;
+    el.style.color = "#c0392b";
+    el.textContent = "Failed to resolve " + name;
+  }
+}
+
+// Wire up receiver input listener after DOM ready
+document.addEventListener("DOMContentLoaded", () => {
+  const ri = $("receiverAddress");
+  if (ri) ri.addEventListener("input", onReceiverInput);
+});
 
 // Cache contract instances per provider to avoid repeated construction
 const _contractCache = new WeakMap();
@@ -2743,6 +3048,9 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     // Fire all calls in parallel (V4 hooked only for PNKSTR swaps)
     const isPNKSTR = fromData.address.toLowerCase() === PNKSTR_ADDRESS.toLowerCase()
       || toData.address.toLowerCase() === PNKSTR_ADDRESS.toLowerCase();
+    // Split/multi-hop routes need wider per-leg slippage to avoid intermittent reverts
+    // (each leg has its own amountLimit; first leg moves price affecting the second)
+    const splitSlip = BigInt(Math.min(Math.max(slippageBps * 3, 150), 500));
     const allCalls = [
       quoter.buildBestSwapViaETHMulticall(
         receiver, connectedAddress, false,
@@ -2751,27 +3059,57 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       ),
       quoter.buildSplitSwap(
         receiver, fromData.address, toData.address,
-        amountIn, BigInt(slippageBps), deadline, callOpts
+        amountIn, splitSlip, deadline, callOpts
       ),
       quoter.getQuotes(false, fromData.address, toData.address, amountIn, callOpts),
       quoter.quoteCurve(false, fromData.address, toData.address, amountIn, 8, callOpts),
       quoter.build3HopMulticall(
         receiver, fromData.address, toData.address,
-        amountIn, BigInt(slippageBps), deadline, callOpts
+        amountIn, splitSlip, deadline, callOpts
       ),
       quoter.buildHybridSplit(
         receiver, fromData.address, toData.address,
-        amountIn, BigInt(slippageBps), deadline, callOpts
+        amountIn, splitSlip, deadline, callOpts
       ),
     ];
     if (isPNKSTR) {
       allCalls.push(quoter.buildSplitSwapHooked(
         receiver, fromData.address, toData.address,
-        amountIn, BigInt(slippageBps), deadline,
+        amountIn, splitSlip, deadline,
         0, 60, PNKSTR_HOOK_ADDRESS, callOpts
       ));
+      allCalls.push(quoter.quoteV4(
+        false, fromData.address, toData.address,
+        0, 60, PNKSTR_HOOK_ADDRESS, amountIn, callOpts
+      ));
     }
-    const [bestResult, splitResult, quotesResult, curveResult, threeHopResult, hybridSplitResult, v4SplitResult] = await Promise.allSettled(allCalls);
+    // ETH→USDC→PNKSTR via V4 USDC/PNKSTR pool (compound 2-hop, runs in parallel)
+    const isPnkstrViaUsdc = isPNKSTR && fromData.address === ZERO_ADDRESS
+      && toData.address.toLowerCase() === PNKSTR_ADDRESS.toLowerCase();
+    let usdcRouteIdx = -1;
+    if (isPnkstrViaUsdc) {
+      usdcRouteIdx = allCalls.length;
+      allCalls.push((async () => {
+        const hop1 = await quoter.buildBestSwapViaETHMulticall(
+          ZROUTER_ADDRESS, connectedAddress, false,
+          ZERO_ADDRESS, USDC_ADDRESS,
+          amountIn, BigInt(slippageBps), deadline, callOpts
+        );
+        const usdcOut = hop1.b.amountOut > 0n ? hop1.b.amountOut : hop1.a.amountOut;
+        if (usdcOut === 0n) return null;
+        const hop2 = await quoter.quoteV4(
+          false, USDC_ADDRESS, toData.address,
+          PNKSTR_USDC_V4_FEE, PNKSTR_USDC_V4_TICK, ZERO_ADDRESS,
+          usdcOut, callOpts
+        );
+        return { hop1, hop2, usdcOut };
+      })());
+    }
+    const settled = await Promise.allSettled(allCalls);
+    const [bestResult, splitResult, quotesResult, curveResult, threeHopResult, hybridSplitResult] = settled;
+    const v4SplitResult = isPNKSTR ? settled[6] : undefined;
+    const v4SingleResult = isPNKSTR ? settled[7] : undefined;
+    const usdcRouteResult = usdcRouteIdx >= 0 ? settled[usdcRouteIdx] : undefined;
 
     // bestResult is required
     if (bestResult.status === 'rejected') throw bestResult.reason;
@@ -2886,9 +3224,12 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       const isTrueSplit = hs.legs[0].amountOut > 0n && hs.legs[1].amountOut > 0n;
       const activeLeg = hs.legs[0].amountOut > 0n ? hs.legs[0] : hs.legs[1];
 
-      // Add V4 hooked quote to allQuotes if a hooked leg exists
-      if (result.allQuotes && hsTotal > 0n && Number(activeLeg.source) === 8) {
-        result.allQuotes.push({ source: "V4 Hooked", sourceId: 8, feeBps: activeLeg.feeBps, amountIn, amountOut: hsTotal });
+      // Add V4 hooked split option to allQuotes if a hooked leg exists
+      if (result.allQuotes && isTrueSplit && hsTotal > 0n) {
+        const hookedLeg = Number(hs.legs[0].source) === 8 ? hs.legs[0] : (Number(hs.legs[1].source) === 8 ? hs.legs[1] : null);
+        if (hookedLeg) {
+          result.allQuotes.push({ source: "V4 Hooked (split)", sourceId: 8, feeBps: hookedLeg.feeBps, amountIn, amountOut: hsTotal });
+        }
       }
 
       if (hsTotal > result.expectedOutput && hsTotal > 0n) {
@@ -2911,6 +3252,73 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
           result.sourceA = AMM_NAMES[activeLeg.source] || "V4 Hooked";
           result.sourceB = null;
           result.splitLegs = null;
+        }
+      }
+    }
+
+    // Add standalone V4 hooked single-hop quote to allQuotes
+    if (v4SingleResult?.status === 'fulfilled' && v4SingleResult.value) {
+      const v4q = v4SingleResult.value;
+      if (v4q.amountOut > 0n && result.allQuotes) {
+        result.allQuotes.push({ source: "V4 Hooked", sourceId: 8, feeBps: 0n, amountIn: v4q.amountIn, amountOut: v4q.amountOut });
+      }
+    }
+
+    // ETH→USDC→PNKSTR via V4 USDC/PNKSTR hookless pool (dapp-built 2-hop multicall)
+    if (usdcRouteResult?.status === 'fulfilled' && usdcRouteResult.value) {
+      const { hop1, hop2 } = usdcRouteResult.value;
+      const hop1Src = hop1.b.amountOut > 0n
+        ? `${AMM_NAMES[hop1.a.source] || "?"} → ${AMM_NAMES[hop1.b.source] || "?"}`
+        : (AMM_NAMES[hop1.a.source] || "?");
+      // Add to allQuotes for display
+      if (hop2.amountOut > 0n && result.allQuotes) {
+        result.allQuotes.push({
+          source: `${hop1Src} → V4 USDC`,
+          sourceId: 4,
+          feeBps: 0n,
+          amountIn,
+          amountOut: hop2.amountOut,
+        });
+      }
+      // If this route beats current best, build custom multicall
+      if (hop2.amountOut > result.expectedOutput) {
+        const hop2Min = hop2.amountOut * (10000n - BigInt(slippageBps)) / 10000n;
+        const hop2Call = ROUTER_IFACE.encodeFunctionData('swapV4', [
+          receiver, false, PNKSTR_USDC_V4_FEE, PNKSTR_USDC_V4_TICK,
+          USDC_ADDRESS, toData.address, 0n, hop2Min, deadline
+        ]);
+        const sweepTo = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
+        const sweepUsdc = ROUTER_IFACE.encodeFunctionData('sweep', [USDC_ADDRESS, 0, 0, connectedAddress]);
+        const sweepEth = ROUTER_IFACE.encodeFunctionData('sweep', [ZERO_ADDRESS, 0, 0, connectedAddress]);
+        const customCalls = [...hop1.calls, hop2Call, sweepTo, sweepUsdc, sweepEth];
+        const customMulticall = ROUTER_IFACE.encodeFunctionData('multicall', [customCalls]);
+
+        result.expectedOutput = hop2.amountOut;
+        result.multicall = customMulticall;
+        result.calls = customCalls;
+        result.msgValue = hop1.msgValue ?? amountIn;
+        result.isTwoHop = true;
+        result.isSplit = false;
+        result.splitLegs = null;
+        result.sourceA = hop1Src;
+        result.sourceB = "V4 USDC";
+      }
+    }
+
+    // Relabel V4 → V4 Hooked for PNKSTR swaps (contract reports source=4 for hooked pools)
+    // Skip sourceA/B relabel when USDC route won (hop1 may use hookless V4 for ETH→USDC)
+    if (isPNKSTR) {
+      const relabel = s => s === "Uniswap V4" ? "V4 Hooked" : s;
+      if (!result.isTwoHop) {
+        if (result.sourceA) result.sourceA = relabel(result.sourceA);
+        if (result.sourceB) result.sourceB = relabel(result.sourceB);
+      }
+      if (result.splitLegs) {
+        for (const leg of result.splitLegs) leg.source = relabel(leg.source);
+      }
+      if (result.allQuotes) {
+        for (const q of result.allQuotes) {
+          if (q.source === "Uniswap V4") { q.source = "V4 Hooked"; q.sourceId = 8; }
         }
       }
     }
@@ -3037,16 +3445,22 @@ async function displayPriceImpact(amtStr, fromSym, toSym, quote) {
     const displayImpact = Math.max(0, impact);
     el.textContent = displayImpact < 0.01 ? '<0.01%' : displayImpact.toFixed(2) + '%';
 
+    const qBox = $('quoteInfo');
     if (displayImpact > 5) {
       el.className = 'impact-danger';
+      if (qBox) qBox.classList.add('impact-high');
     } else if (displayImpact > 2) {
       el.className = 'impact-warn';
+      if (qBox) qBox.classList.remove('impact-high');
     } else {
       el.className = '';
+      if (qBox) qBox.classList.remove('impact-high');
     }
   } catch (e) {
     el.textContent = '--';
     el.className = '';
+    const qBox = $('quoteInfo');
+    if (qBox) qBox.classList.remove('impact-high');
   }
 }
 
@@ -3110,12 +3524,19 @@ async function executeSwap() {
     }
     const receiverRaw = ($("receiverAddress")?.value || "").trim();
     if (receiverRaw && !ethers.isAddress(receiverRaw)) {
-      showStatus("Invalid receiver address", "error");
-      return;
+      if (isReceiverPending()) {
+        showStatus("Receiver name still resolving...", "error");
+        return;
+      }
+      if (!_resolvedReceiver || _resolvedReceiver.input !== receiverRaw || !_resolvedReceiver.address) {
+        showStatus("Could not resolve receiver name", "error");
+        return;
+      }
     }
 
     // ETH ↔ WETH wrap/unwrap: direct contract call, no DEX (only when sending to self)
-    const hasCustomReceiver = receiverRaw && ethers.isAddress(receiverRaw) && ethers.getAddress(receiverRaw) !== connectedAddress;
+    const resolvedAddr = getReceiver();
+    const hasCustomReceiver = receiverRaw && (isReceiverPending() || (resolvedAddr && resolvedAddr !== connectedAddress));
     const wrapDir = !hasCustomReceiver ? isWrapUnwrap(fromToken, toToken) : null;
     if (wrapDir) {
       const fromData = tokens[fromToken];
@@ -3364,10 +3785,7 @@ async function executeSwap() {
     else if (/Too many decimals|Invalid number/i.test(s)) msg = s;
 
     swapBtn.textContent = msg;
-    setTimeout(() => {
-      swapBtn.textContent = "Swap";
-      swapBtn.disabled = false;
-    }, 2000);
+    setTimeout(() => { handleAmountChange(); }, 2000);
   } finally {
     _swapBusy = false;
   }
@@ -3434,6 +3852,33 @@ function updateChartLink(quote) {
   link.style.display = "inline-flex";
 }
 
+// ---- Quick-pick popular tokens ----
+const QUICK_TOKENS = ["USDC", "USDT", "DAI", "WBTC", "wstETH"];
+
+function renderQuickTokens() {
+  const el = $('quickTokens');
+  if (!el) return;
+  el.innerHTML = '';
+  for (const sym of QUICK_TOKENS) {
+    if (!tokens[sym] || sym === toToken || sym === fromToken) continue;
+    const btn = document.createElement('button');
+    btn.className = 'quick-token';
+    btn.setAttribute('aria-label', sym);
+    btn.innerHTML = `<span class="qi">${iconForSymbol(sym)}</span>`;
+    // Make inner icon fill the container
+    const svgOrImg = btn.querySelector('.qi > *');
+    if (svgOrImg) { svgOrImg.style.width = '100%'; svgOrImg.style.height = '100%'; }
+    btn.onclick = () => {
+      toToken = sym;
+      updateTokenDisplay();
+      updateBalances();
+      const amt = $("fromAmount");
+      if (amt && amt.value) reQuoteDebounced();
+    };
+    el.appendChild(btn);
+  }
+}
+
 // ---- Token display ----
 function updateTokenDisplay() {
   const fSym = fromToken, tSym = toToken;
@@ -3441,6 +3886,7 @@ function updateTokenDisplay() {
   setText("fromTokenSymbol", tokens[fSym].symbol);
   setHTML("toTokenIcon", iconForSymbol(tSym));
   setText("toTokenSymbol", tokens[tSym].symbol);
+  renderQuickTokens();
 }
 
 // ---- Token modal ----
