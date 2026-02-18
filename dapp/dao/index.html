@@ -3390,12 +3390,17 @@ body.modal-open { overflow: hidden; }
         const network = getNetwork();
         const tokenMeta = network.tokenMeta;
         const result = [];
+        const seen = new Set();
 
         if (!treasury || !treasury.balances) return result;
 
         for (const tb of treasury.balances) {
           const tokenAddr = tb.token;
-          const meta = tokenMeta[tokenAddr] || tokenMeta[tokenAddr.toLowerCase()] || { symbol: '???', decimals: 18 };
+          const key = tokenAddr.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          const meta = tokenMeta[tokenAddr] || tokenMeta[key] || { symbol: '???', decimals: 18 };
 
           result.push({
             address: tokenAddr,
@@ -5479,9 +5484,11 @@ body.modal-open { overflow: hidden; }
         const treasury = currentDAO.dao.treasury;
         const tokens = parseTreasuryBalances(treasury);
 
-        // Add custom sale tokens if any
+        // Add custom sale tokens if any (skip tokens already in treasury)
         if (customSaleTokens.length > 0) {
+          const existingAddrs = new Set(tokens.map(t => t.address.toLowerCase()));
           for (const customToken of customSaleTokens) {
+            if (existingAddrs.has(customToken.address.toLowerCase())) continue;
             try {
               const tokenContract = new ethers.Contract(customToken.address, ERC20_ABI, provider);
               const balance = await tokenContract.balanceOf(currentDAO.dao.dao);
@@ -6056,9 +6063,11 @@ body.modal-open { overflow: hidden; }
           dropdown.appendChild(option);
         }
 
-        // Add custom sale tokens
+        // Add custom sale tokens (skip tokens already listed)
         if (customSaleTokens.length > 0) {
+          const existingAddrs = new Set(depositAssets.map(a => a.address.toLowerCase()));
           for (const customToken of customSaleTokens) {
+            if (existingAddrs.has(customToken.address.toLowerCase())) continue;
             depositAssets.push({
               symbol: customToken.symbol,
               address: customToken.address,
@@ -7900,9 +7909,11 @@ body.modal-open { overflow: hidden; }
         const treasury = currentDAO.dao.treasury;
         const assets = parseTreasuryBalances(treasury);
 
-        // Add custom sale tokens if any
+        // Add custom sale tokens if any (skip tokens already in treasury)
         if (customSaleTokens.length > 0) {
+          const existingAddrs = new Set(assets.map(a => a.address.toLowerCase()));
           for (const customToken of customSaleTokens) {
+            if (existingAddrs.has(customToken.address.toLowerCase())) continue;
             try {
               const tokenContract = new ethers.Contract(customToken.address, ERC20_ABI, provider);
               const balance = await tokenContract.balanceOf(currentDAO.dao.dao);

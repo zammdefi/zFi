@@ -98,34 +98,23 @@ contract zQuoter {
         (best,) = getQuotes(exactOut, tokenIn, tokenOut, amount);
         if (best.source == AMM.WETH_WRAP) best = Quote(AMM.UNI_V2, 0, 0, 0);
 
-        // 2. Curve (skip unbuildable exactOut stable-underlying pairs)
+        // 2. Curve (unbuildable cases already filtered inside quoteCurve)
         {
-            (uint256 cin, uint256 cout, address pool, bool useUnd, bool isStab, uint8 iIdx, uint8 jIdx) =
-                quoteCurve(exactOut, tokenIn, tokenOut, amount, 8);
-            if (pool != address(0) && !(exactOut && isStab && useUnd && iIdx > 0 && jIdx > 0)) {
+            (uint256 cin, uint256 cout, address pool,,,,) = quoteCurve(exactOut, tokenIn, tokenOut, amount, 8);
+            if (pool != address(0)) {
                 if (_isBetter(exactOut, cin, cout, best.amountIn, best.amountOut)) {
                     best = _asQuote(AMM.CURVE, cin, cout);
                 }
             }
         }
 
-        // 3. Lido (preferred for ETH→stETH/wstETH: guaranteed execution, no pool risk)
+        // 3. Lido (ETH→stETH/wstETH direct stake — competes on rate like any other AMM)
         if (tokenIn == address(0) && (tokenOut == STETH || tokenOut == WSTETH)) {
             (uint256 lin, uint256 lout) = quoteLido(exactOut, tokenOut, amount);
             if (lin != 0 || lout != 0) {
-                // Prefer Lido unless another source beats it by >0.5% (Lido is guaranteed to work;
-                // Curve ETH-native pools can't execute via the router's WETH-based swapCurve path)
-                bool lidoWins;
-                if (best.amountOut == 0) {
-                    lidoWins = true;
-                } else if (!exactOut) {
-                    // Lido wins if its output * 10050 >= best output * 10000 (i.e. within 0.5%)
-                    lidoWins = lout * 10050 >= best.amountOut * 10000;
-                } else {
-                    // exactOut: Lido wins if its input * 10000 <= best input * 10050
-                    lidoWins = lin * 10000 <= best.amountIn * 10050;
+                if (_isBetter(exactOut, lin, lout, best.amountIn, best.amountOut)) {
+                    best = _asQuote(AMM.LIDO, lin, lout);
                 }
-                if (lidoWins) best = _asQuote(AMM.LIDO, lin, lout);
             }
         }
     }
@@ -265,14 +254,21 @@ contract zQuoter {
 
             (bool idxOk, int128 i, int128 j, bool underlying) = _tryCoinIndices(pool, qa, qb);
             // If the primary representation failed and this is an ETH pair, try the other
-            if (!idxOk && !fromSet2 && (ethIn || ethOut)) {
-                (idxOk, i, j, underlying) = _tryCoinIndices(pool, aWeth, bWeth);
+            if (!idxOk && (ethIn || ethOut)) {
+                address altA = fromSet2 ? aEth : aWeth;
+                address altB = fromSet2 ? bEth : bWeth;
+                (idxOk, i, j, underlying) = _tryCoinIndices(pool, altA, altB);
             }
             if (!idxOk) continue;
 
             (bool ok, uint256 qIn, uint256 qOut, bool isStable) =
                 _curveTryQuoteOne(pool, exactOut, i, j, underlying, swapAmount);
             if (!ok) continue;
+
+            // Skip unbuildable exactOut stable-underlying when both indices are base coins
+            uint8 ci_ = uint8(uint256(int256(i)));
+            uint8 cj_ = uint8(uint256(int256(j)));
+            if (exactOut && isStable && (underlying && isStable) && ci_ > 0 && cj_ > 0) continue;
 
             if (exactOut) {
                 if (qIn < acc.bestIn) {

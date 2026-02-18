@@ -435,10 +435,10 @@ button.secondary:hover { background: var(--surface-hover); }
 body.modal-open { overflow: hidden; }
 .modal {
   background: var(--modal-bg);
-  border: 2px solid var(--modal-border);
-  padding: 20px;
+  border: 1px solid var(--modal-border);
+  padding: 16px;
   width: 100%;
-  max-width: 360px;
+  max-width: 380px;
   max-height: calc(100vh - 40px);
   max-height: calc(100dvh - 40px);
   overflow-y: auto;
@@ -459,13 +459,15 @@ body.modal-open { overflow: hidden; }
   background: none;
   border: none;
   color: var(--fg);
-  font-size: 24px;
+  font-size: 20px;
   cursor: pointer;
   line-height: 1;
-  padding: 0;
-  margin: 0;
+  padding: 4px;
+  margin: -4px;
+  opacity: 0.4;
+  transition: opacity 0.15s;
 }
-.modal-close:hover { opacity: 0.5; }
+.modal-close:hover { opacity: 1; }
 
 /* Wallet modal options */
 .wallet-option {
@@ -494,10 +496,12 @@ body.modal-open { overflow: hidden; }
 .token-list-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px 12px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.12s;
+  border-radius: 4px;
+  margin: 0 4px;
 }
 .token-list-item:hover { background: var(--list-hover); }
 .token-list-item.highlight {
@@ -505,12 +509,12 @@ body.modal-open { overflow: hidden; }
   outline: 1px solid var(--border);
   outline-offset: -1px;
 }
-.token-balance { margin-left: auto; font-size: 12px; color: var(--token-bal); font-variant-numeric: tabular-nums; }
+.token-balance { margin-left: auto; font-size: 11px; color: var(--token-bal); font-variant-numeric: tabular-nums; opacity: 0.7; }
 
 /* Custom token input */
 .custom-token-input, .token-search {
   width: 100%;
-  padding: 8px 0;
+  padding: 10px 0;
   border: none;
   border-bottom: 1px solid var(--border);
   font-size: 14px;
@@ -519,25 +523,27 @@ body.modal-open { overflow: hidden; }
   background: transparent;
   color: var(--fg);
 }
-.custom-token-input { margin-top: 8px; }
-.custom-token-input:focus, .token-search:focus { border-bottom-width: 2px; }
+.custom-token-input { margin-top: 8px; font-size: 12px; padding: 8px 0; }
+.custom-token-input:focus, .token-search:focus { border-bottom-color: var(--fg); }
 .token-search-status {
   font-size: 11px;
   color: var(--fg-dim);
-  margin: 4px 0 8px;
+  margin: 4px 0 6px;
   min-height: 14px;
 }
 .token-search-status.error { color: #e74c3c; }
 .token-group-label {
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   color: var(--fg-dim);
-  padding: 8px 12px 4px;
+  padding: 10px 16px 4px;
+  margin-top: 4px;
   border-top: 1px solid var(--group-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  opacity: 0.6;
 }
 .wei-list-remove {
   background: none;
@@ -550,6 +556,10 @@ body.modal-open { overflow: hidden; }
   line-height: 1;
 }
 .wei-list-remove:hover { color: #e74c3c; }
+#tokenList { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+#tokenList::-webkit-scrollbar { width: 4px; }
+#tokenList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+#tokenList::-webkit-scrollbar-track { background: transparent; }
 
 /* Status */
 .status {
@@ -620,18 +630,13 @@ body.modal-open { overflow: hidden; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 1px solid var(--info-border);
-  font-size: 11px;
-  font-style: italic;
-  font-family: Georgia, serif;
+  width: 16px;
+  height: 16px;
   color: var(--info-border);
   cursor: help;
-  line-height: 1;
-  padding-right: 1px;
+  opacity: 0.4;
 }
+.info-icon:hover { opacity: 0.8; }
 .info-icon:hover { border-color: var(--info-hover); color: var(--info-hover); }
 .info-tooltip {
   display: none;
@@ -660,22 +665,17 @@ body.modal-open { overflow: hidden; }
   left: max(20px, env(safe-area-inset-left, 0px));
   border: none;
   cursor: pointer;
-  font-size: 14px;
-  padding: 0 0 1px 0;
+  padding: 0;
   margin: 0;
-  opacity: 0.7;
+  opacity: 0.5;
   transition: opacity 0.2s;
   z-index: 100;
-  line-height: 1;
-  color: var(--toggle-fg);
-  background: var(--toggle-bg);
+  background: #000;
   border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  width: 14px;
+  height: 14px;
 }
+:root.dark .dark-toggle { background: #fff; }
 .dark-toggle:hover { opacity: 1; }
 
 /* Swap card container */
@@ -706,14 +706,14 @@ body.modal-open { overflow: hidden; }
 </head>
 <body>
 
-<button class="dark-toggle" onclick="toggleDark()" title="Toggle dark mode">&#9789;</button>
+<button class="dark-toggle" onclick="toggleDark()" title="Toggle dark mode"></button>
 
 <!-- Wallet button (fixed top-right) -->
 <div class="wallet">
   <button id="walletBtn" onclick="toggleWallet()">connect</button>
 </div>
 
-<h1 style="display:flex;align-items:center;gap:8px">Swap <span class="info-tip"><span class="info-icon" onclick="this.parentElement.classList.toggle('open');event.stopPropagation()">i</span><span class="info-tooltip"><a href="https://github.com/zammdefi/zrouter" target="_blank" rel="noopener" style="color:inherit;font-weight:600">zRouter</a> is a fully on-chain DEX aggregator. Routes are discovered and optimized by zQuoter directly on the blockchain — no off-chain APIs, no solvers, no servers.<br><br>Aggregates Uniswap V2/V3/V4, SushiSwap, Curve, zAMM, and Lido with atomic multi-hop execution, split routing, and per-leg slippage protection.<br><br>Zero protocol fees. No intermediaries. Your trade goes directly from your wallet to the liquidity pools.</span></span></h1>
+<h1 style="display:flex;align-items:center;gap:8px">Swap <span class="info-tip"><span class="info-icon" onclick="this.parentElement.classList.toggle('open');event.stopPropagation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span><span class="info-tooltip"><a href="https://github.com/zammdefi/zrouter" target="_blank" rel="noopener" style="color:inherit;font-weight:600">zRouter</a> is a fully on-chain DEX aggregator. Routes are discovered and optimized by zQuoter directly on the blockchain — no off-chain APIs, no solvers, no servers.<br><br>Aggregates Uniswap V2/V3/V4, SushiSwap, Curve, zAMM, and Lido with atomic multi-hop execution, split routing, and per-leg slippage protection.<br><br>Zero protocol fees. No intermediaries. Your trade goes directly from your wallet to the liquidity pools.</span></span></h1>
 
 <!-- Swap card -->
 <div class="swap-card">
@@ -836,11 +836,13 @@ body.modal-open { overflow: hidden; }
       <div class="modal-title">Select Token</div>
       <button class="modal-close" onclick="closeTokenModal()">&times;</button>
     </div>
-    <input type="text" id="tokenSearchInput" class="token-search" placeholder="Search or enter name.wei" autocomplete="off">
+    <input type="text" id="tokenSearchInput" class="token-search" placeholder="Search or enter list.wei" autocomplete="off">
     <div id="weiListStatus" class="token-search-status"></div>
-    <div id="tokenList" style="max-height:280px;overflow-y:auto"></div>
-    <input type="text" id="customTokenAddress" class="custom-token-input" placeholder="Enter token address">
-    <button style="margin-top:12px;width:100%" onclick="addCustomToken()">Add Custom Token</button>
+    <div id="tokenList" style="max-height:320px;overflow-y:auto"></div>
+    <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:8px;display:flex;gap:8px;align-items:center">
+      <input type="text" id="customTokenAddress" class="custom-token-input" placeholder="Paste token address" style="margin:0;flex:1">
+      <button style="white-space:nowrap;font-size:12px;padding:6px 12px" onclick="addCustomToken()">Add</button>
+    </div>
   </div>
 </div>
 
@@ -848,6 +850,7 @@ body.modal-open { overflow: hidden; }
 <div class="site-footer">
   <a href="./domains/">Domains</a> &middot; <a href="./dao/">DAO</a> &middot; <a href="./ico/">ICO</a> &middot; built by <a href="https://opensea.io/collection/zorgz" target="_blank" rel="noopener"><svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin:0 2px;image-rendering:pixelated"><rect width="16" height="16" fill="#0a0a0a"/><rect x="3" y="1" width="1" height="1" fill="#e8e8e0"/><rect x="5" y="2" width="1" height="1" fill="#e8e8e0"/><rect x="10" y="2" width="1" height="1" fill="#e8e8e0"/><rect x="12" y="1" width="1" height="1" fill="#e8e8e0"/><rect x="4" y="4" width="8" height="1" fill="#e8e8e0"/><rect x="3" y="5" width="10" height="1" fill="#e8e8e0"/><rect x="2" y="6" width="12" height="3" fill="#e8e8e0"/><rect x="3" y="9" width="10" height="1" fill="#e8e8e0"/><rect x="4" y="10" width="8" height="1" fill="#e8e8e0"/><rect x="3" y="6" width="3" height="2" fill="#0a0a0a"/><rect x="10" y="6" width="3" height="2" fill="#0a0a0a"/><rect x="5" y="11" width="2" height="1" fill="#e8e8e0"/><rect x="9" y="11" width="2" height="1" fill="#e8e8e0"/><rect x="2" y="12" width="3" height="1" fill="#e8e8e0"/><rect x="7" y="12" width="2" height="1" fill="#e8e8e0"/><rect x="11" y="12" width="3" height="1" fill="#e8e8e0"/><rect x="1" y="13" width="2" height="1" fill="#e8e8e0"/><rect x="13" y="13" width="2" height="1" fill="#e8e8e0"/></svg></a><a href="./dao/#/dao/1/0x5E58BA0e06ED0F5558f83bE732a4b899a674053E">zOrg</a> &middot; <a href="https://x.com/z_fi_" target="_blank" rel="noopener" title="X"><svg width="14" height="14" viewBox="0 0 300 300.251" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;fill:currentColor"><path d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"/></svg></a>
   <div style="margin-top:8px;letter-spacing:1px"><a href="https://github.com/z-fi/zFi" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">zfi.wei</a></div>
+  <div style="margin-top:4px;font-size:11px;opacity:0.5;letter-spacing:0.5px">the most secure-by-default exchange that does everything onchain</div>
 </div>
 
 <script src="./ethers.min.js"></script>
@@ -856,20 +859,13 @@ body.modal-open { overflow: hidden; }
 // ---- Dark mode ----
 function toggleDark() {
   const on = document.documentElement.classList.toggle('dark');
-  document.querySelector('.dark-toggle').textContent = on ? '\u2600' : '\u263D';
   localStorage.setItem('dark', on ? '1' : '0');
 }
-(function() {
-  // Class already applied in <head> for FOUC prevention; just sync the toggle icon
-  if (document.documentElement.classList.contains('dark')) {
-    document.querySelector('.dark-toggle').textContent = '\u2600';
-  }
-})();
 document.addEventListener('click', () => document.querySelectorAll('.info-tip.open').forEach(t => t.classList.remove('open')));
 
 // ---- Constants ----
 const CHAIN_ID = 1;
-const ZQUOTER_ADDRESS = "0x305e175e80d7edaed2498e8b2d6526619feb16e7";
+const ZQUOTER_ADDRESS = "0x806f7b66e31b6f61bfda9d1431d07865c3164ba5";
 const ZROUTER_ADDRESS = "0x000000000000FB114709235f1ccBFfb925F600e4";
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
@@ -879,6 +875,8 @@ const STETH_ADDRESS = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84";
 const WSTETH_ADDRESS = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0";
 const RETH_ADDRESS = "0xae78736Cd615f374D3085123A210448E74Fc6393";
 const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
+const BOLD_ADDRESS = "0x6440f144b7e50D6a8439336510312d2F54beB01D";
+const LUSD_ADDRESS = "0x5f98805A4E8be255a32880FDeC7F6728C6568bA0";
 const PNKSTR_ADDRESS = "0xc50673EDb3A7b94E8CAD8a7d4E0cD68864E33eDF";
 const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -897,7 +895,7 @@ const ZORG_DAO = "0x5E58BA0e06ED0F5558f83bE732a4b899a674053E";
 const ZORG_DAO_TOKEN = "0x00a6bA94BBb5474725515De88fE04F854f2dCb12";
 const WEINS_ABI = ["function computeId(string) pure returns (uint256)", "function text(uint256,string) view returns (string)", "function contenthash(uint256) view returns (bytes)", "function reverseResolve(address) view returns (string)", "function ownerOf(uint256) view returns (address)"];
 const IPFS_GATEWAYS = ["https://content.wrappr.wtf/ipfs/", "https://dweb.link/ipfs/"];
-const BUILTIN_ADDRS = new Set([ZERO_ADDRESS, WETH_ADDRESS, USDC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS, RETH_ADDRESS, DAI_ADDRESS, PNKSTR_ADDRESS, ZORG_DAO_TOKEN, ZORG_PAY_TOKEN].map(a => a.toLowerCase()));
+const BUILTIN_ADDRS = new Set([ZERO_ADDRESS, WETH_ADDRESS, ZORG_DAO_TOKEN, ZORG_PAY_TOKEN, BOLD_ADDRESS, LUSD_ADDRESS, DAI_ADDRESS, USDC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS, RETH_ADDRESS, PNKSTR_ADDRESS].map(a => a.toLowerCase()));
 
 // ---- DOM helpers ----
 const $ = id => document.getElementById(id);
@@ -1419,9 +1417,11 @@ const tokens = {
   WETH: { address: WETH_ADDRESS, symbol: "WETH", decimals: 18 },
   zOrg: { address: ZORG_DAO_TOKEN, symbol: "zOrg", decimals: 18, _isZOrg: true },
   ZAMM: { address: ZORG_PAY_TOKEN, symbol: "ZAMM", decimals: 18, _isZammStake: true },
+  BOLD: { address: BOLD_ADDRESS, symbol: "BOLD", decimals: 18 },
+  LUSD: { address: LUSD_ADDRESS, symbol: "LUSD", decimals: 18 },
+  DAI: { address: DAI_ADDRESS, symbol: "DAI", decimals: 18 },
   USDC: { address: USDC_ADDRESS, symbol: "USDC", decimals: 6 },
   USDT: { address: USDT_ADDRESS, symbol: "USDT", decimals: 6 },
-  DAI: { address: DAI_ADDRESS, symbol: "DAI", decimals: 18 },
   WBTC: { address: WBTC_ADDRESS, symbol: "WBTC", decimals: 8 },
   stETH: { address: STETH_ADDRESS, symbol: "stETH", decimals: 18 },
   wstETH: { address: WSTETH_ADDRESS, symbol: "wstETH", decimals: 18 },
@@ -1847,8 +1847,10 @@ const USDT_ICON = `<svg width="24" height="24" viewBox="0 0 32 32" xmlns="http:/
 const WBTC_ICON = `<svg width="24" height="24" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><g fill="none" fill-rule="evenodd"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#FFF" fill-rule="nonzero" d="M23.189 14.02c.314-2.096-1.283-3.223-3.465-3.975l.708-2.84-1.728-.43-.69 2.765c-.454-.114-.92-.22-1.385-.326l.695-2.783L15.596 6l-.708 2.839c-.376-.086-.746-.17-1.104-.26l.002-.009-2.384-.595-.46 1.846s1.283.294 1.256.312c.7.175.826.638.805 1.006l-.806 3.235c.048.012.11.03.18.057l-.183-.045-1.13 4.532c-.086.212-.303.531-.793.41.018.025-1.256-.313-1.256-.313l-.858 1.978 2.25.561c.418.105.828.215 1.231.318l-.715 2.872 1.727.43.708-2.84c.472.127.93.245 1.378.357l-.706 2.828 1.728.43.715-2.866c2.948.558 5.164.333 6.097-2.333.752-2.146-.037-3.385-1.588-4.192 1.13-.26 1.98-1.003 2.207-2.538zm-3.95 5.538c-.533 2.147-4.148.986-5.32.695l.95-3.805c1.172.293 4.929.872 4.37 3.11zm.535-5.569c-.487 1.953-3.495.96-4.47.717l.86-3.45c.975.243 4.118.696 3.61 2.733z"/></g></svg>`;
 const STETH_ICON = `<svg width="24" height="24" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><g fill="none"><circle fill="#00A3FF" cx="16" cy="16" r="16"/><path d="M16.005 4.805l-5.655 8.668 5.655-3.233V4.805z" fill="#FFF"/><path opacity=".6" d="M16.004 10.238l5.658 3.23-5.658-8.674v5.444z" fill="#FFF"/><path opacity=".6" d="M16.005 10.239l-5.655 3.229 5.655 3.23v-6.46z" fill="#FFF"/><path opacity=".2" d="M16.004 10.239v6.459l5.654-3.23-5.654-3.229z" fill="#FFF"/><path d="M10.35 14.864c-2.048 3.097-1.603 7.253 1.034 9.824 1.561 1.521 3.622 2.353 5.683 2.353 2.061 0 4.122-.832 5.683-2.353 2.637-2.571 3.082-6.727 1.034-9.824L16.067 18.611 10.35 14.864z" fill="#FFF" opacity=".6"/></g></svg>`;
 const WSTETH_ICON = `<svg width="24" height="24" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><g fill="none"><circle fill="#00A3FF" cx="16" cy="16" r="16"/><path d="M9.437 14.864l-.181.275c-2.048 3.097-1.603 7.253 1.034 9.824 1.561 1.521 3.622 2.353 5.683 2.353 0 0 0 0-6.536-12.452z" fill="#FFF"/><path opacity=".6" d="M15.997 18.611l-6.56-3.747c6.56 12.452 6.56 12.452 6.56 12.452 0-2.683 0-5.623 0-8.705z" fill="#FFF"/><path opacity=".6" d="M22.563 14.864l.181.275c2.048 3.097 1.603 7.253-1.034 9.824-1.561 1.521-3.622 2.353-5.683 2.353 0 0 0 0 6.536-12.452z" fill="#FFF"/><path opacity=".2" d="M16.003 18.611l6.56-3.747c-6.56 12.452-6.56 12.452-6.56 12.452 0-2.683 0-5.623 0-8.705z" fill="#FFF"/><path opacity=".2" d="M16.004 10.239v6.459l5.654-3.23-5.654-3.229z" fill="#FFF"/><path opacity=".6" d="M16.005 10.239l-5.655 3.229 5.655 3.23v-6.46z" fill="#FFF"/><path d="M16.005 4.805l-5.655 8.668 5.655-3.233V4.805z" fill="#FFF"/><path opacity=".6" d="M16.004 10.238l5.658 3.23-5.658-8.674v5.444z" fill="#FFF"/></g></svg>`;
-const RETH_ICON = `<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#FFAA6B;stop-opacity:1"/><stop offset="100%" style="stop-color:#FF8A5B;stop-opacity:1"/></linearGradient></defs><circle cx="100" cy="100" r="95" fill="#FFC93D"/><circle cx="100" cy="100" r="88" fill="#FF6B6B"/><circle cx="100" cy="100" r="82" fill="url(#bgGradient)"/><g transform="translate(100, 100) rotate(45)"><path d="M -8 -25 C -8 -30, -5 -35, 0 -35 C 5 -35, 8 -30, 8 -25 L 8 -5 L 18 5 L 18 15 L 8 10 L 8 20 L 0 25 L -8 20 L -8 10 L -18 15 L -18 5 L -8 -5 Z" fill="white"/><circle cx="0" cy="-20" r="4" fill="#FF8A5B"/><path d="M -6 20 L -9 35 L -3 30 L 0 38 L 3 30 L 9 35 L 6 20 Z" fill="white"/></g></svg>`;
+const RETH_ICON = `<svg width="24" height="24" viewBox="0 0 33 32" fill="none" xmlns="http://www.w3.org/2000/svg"><g clip-path="url(#reth_clip)"><mask id="reth_m0" style="mask-type:luminance" maskUnits="userSpaceOnUse" x="0" y="0" width="33" height="32"><path d="M32.5 0H0.5V32H32.5V0Z" fill="white"/></mask><g mask="url(#reth_m0)"><path d="M16.5 32C25.3365 32 32.5 24.8365 32.5 16C32.5 7.16347 25.3365 0 16.5 0C7.66347 0 0.5 7.16347 0.5 16C0.5 24.8365 7.66347 32 16.5 32Z" fill="url(#reth_rg0)"/><mask id="reth_m1" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="33" height="32"><path d="M16.5 32C25.3365 32 32.5 24.8365 32.5 16C32.5 7.16347 25.3365 0 16.5 0C7.66347 0 0.5 7.16347 0.5 16C0.5 24.8365 7.66347 32 16.5 32Z" fill="url(#reth_rg1)"/></mask><g mask="url(#reth_m1)"><path opacity="0.2" d="M-0.0333252 8.80003C-0.0333252 8.44659 0.253212 8.16003 0.606675 8.16003H9.35334C9.70678 8.16003 9.99334 8.44659 9.99334 8.80003V23.68C9.99334 24.0335 9.70678 24.32 9.35334 24.32H0.606675C0.253212 24.32-0.0333252 24.0335-0.0333252 23.68V8.80003Z" fill="url(#reth_lg0)"/><path opacity="0.2" d="M19.8068 21.7067C19.8068 21.3532 20.0933 21.0667 20.4468 21.0667H31.8601C32.2135 21.0667 32.5001 21.3532 32.5001 21.7067V27.2533C32.5001 27.6068 32.2135 27.8933 31.8601 27.8933H20.4468C20.0933 27.8933 19.8068 27.6068 19.8068 27.2533V21.7067Z" fill="#E74310"/><path opacity="0.2" d="M27.22 23.4133C27.5735 23.4133 27.86 23.6999 27.86 24.0533V34.8267C27.86 35.1801 27.5735 35.4667 27.22 35.4667H23.0067C22.6533 35.4667 22.3667 35.1801 22.3667 34.8267V24.0533C22.3667 23.6999 22.6533 23.4133 23.0067 23.4133H27.22Z" fill="#DF3600"/><path opacity="0.1" d="M13.46 10.4C13.8135 10.4 14.1 10.6866 14.1 11.04V19.6267C14.1 19.9801 13.8135 20.2667 13.46 20.2667H8.71336C8.35992 20.2667 8.07336 19.9801 8.07336 19.6267V11.04C8.07336 10.6866 8.35992 10.4 8.71336 10.4H13.46Z" fill="url(#reth_lg1)"/><path opacity="0.1" d="M3.54004 12.9601C3.54004 12.6066 3.82658 12.3201 4.18004 12.3201H11.9667C12.3201 12.3201 12.6067 12.6066 12.6067 12.9601V21.1201C12.6067 21.4735 12.3201 21.7601 11.9667 21.7601H4.18004C3.82658 21.7601 3.54004 21.4735 3.54004 21.1201V12.9601Z" fill="url(#reth_lg2)"/><path opacity="0.2" d="M32.5001 4.37341C32.8535 4.37341 33.1401 4.65995 33.1401 5.01341V15.7867C33.1401 16.1402 32.8535 16.4267 32.5001 16.4267H22.5801C22.2266 16.4267 21.9401 16.1402 21.9401 15.7867V5.01341C21.9401 4.65995 22.2266 4.37341 22.5801 4.37341H32.5001Z" fill="#FF9776"/><path opacity="0.2" d="M26.4734-2.77332C26.8268-2.77332 27.1134-2.48678 27.1134-2.13332V9.70668C27.1134 10.0601 26.8268 10.3467 26.4734 10.3467H20.9267C20.5733 10.3467 20.2867 10.0601 20.2867 9.70668V-2.13332C20.2867-2.48678 20.5733-2.77332 20.9267-2.77332H26.4734Z" fill="#FFCA8C"/><path opacity="0.2" d="M29.3534-0.640015C29.7068-0.640015 29.9934-0.353477 29.9934-1.41182e-05V13.1733C29.9934 13.5268 29.7068 13.8133 29.3534 13.8133H17.3C16.9466 13.8133 16.66 13.5268 16.66 13.1733V-1.43216e-05C16.66-0.353477 16.9466-0.640015 17.3-0.640015H29.3534Z" fill="url(#reth_lg3)"/><path opacity="0.1" d="M21.7267 18.8267C22.0802 18.8267 22.3667 19.1132 22.3667 19.4667V31.36C22.3667 31.7134 22.0802 32 21.7267 32H9.46007C9.10663 32 8.82007 31.7134 8.82007 31.36V19.4667C8.82007 19.1132 9.10663 18.8267 9.46007 18.8267H21.7267Z" fill="#FFD494"/></g><path d="M16.4763 19.4523L10.3889 15.8513L16.4763 5.75293L22.5583 15.8513L16.4763 19.4523Z" fill="white"/><path d="M16.4763 25.5835L10.3889 17.0098L16.4763 20.6054L22.5638 17.0098L16.4763 25.5835Z" fill="white"/></g></g><defs><radialGradient id="reth_rg0" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(10.9533 7.65333) rotate(54.1675) scale(26.511)"><stop stop-color="#FFD794"/><stop offset="1" stop-color="#ED5A37"/></radialGradient><radialGradient id="reth_rg1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(10.9533 7.65333) rotate(54.1675) scale(26.511)"><stop stop-color="#FFD794"/><stop offset="1" stop-color="#ED5A37"/></radialGradient><linearGradient id="reth_lg0" x1="4.98001" y1="8.16003" x2="4.98001" y2="24.32" gradientUnits="userSpaceOnUse"><stop stop-color="#FFE090"/><stop offset="1" stop-color="#FFE090" stop-opacity="0"/></linearGradient><linearGradient id="reth_lg1" x1="11.06" y1="10.4" x2="11.06" y2="19.52" gradientUnits="userSpaceOnUse"><stop stop-color="#DF3600"/><stop offset="1" stop-color="#DF3600" stop-opacity="0"/></linearGradient><linearGradient id="reth_lg2" x1="3.54004" y1="17.0818" x2="11.9206" y2="17.0818" gradientUnits="userSpaceOnUse"><stop stop-color="#DF3600"/><stop offset="1" stop-color="#DF3600" stop-opacity="0"/></linearGradient><linearGradient id="reth_lg3" x1="23.3267" y1="-0.640015" x2="23.3267" y2="13.8133" gradientUnits="userSpaceOnUse"><stop stop-color="#DF3600"/><stop offset="1" stop-color="#DF3600" stop-opacity="0"/></linearGradient><clipPath id="reth_clip"><rect width="32" height="32" fill="white" transform="translate(0.5)"/></clipPath></defs></svg>`;
 const DAI_ICON = `<svg width="24" height="24" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><g fill="none" fill-rule="evenodd"><circle fill="#F4B731" fill-rule="nonzero" cx="16" cy="16" r="16"/><path d="M9.277 8h6.552c3.985 0 7.006 2.116 8.13 5.194H26v1.861h-1.611c.031.294.047.594.047.898v.046c0 .342-.02.68-.06 1.01H26v1.86h-2.08C22.767 21.905 19.77 24 15.83 24H9.277v-5.131H7v-1.86h2.277v-1.954H7v-1.86h2.277V8zm1.831 10.869v3.462h4.72c2.914 0 5.078-1.387 6.085-3.462H11.108zm11.366-1.86H11.108v-1.954h11.37c.041.307.063.622.063.944v.045c0 .329-.023.65-.067.964zM15.83 9.665c2.926 0 5.097 1.424 6.098 3.528h-10.82V9.666h4.72z" fill="#FFF"/></g></svg>`;
+const BOLD_ICON = `<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><g clip-path="url(#clip0_1_6)"><path d="M32 16C32 7.16406 24.8359 0 16 0C7.16406 0 0 7.16406 0 16C0 24.8359 7.16406 32 16 32C24.8359 32 32 24.8359 32 16Z" fill="#63D77D"/><path fill-rule="evenodd" clip-rule="evenodd" d="M12.1719 4.56641H8.58203V26.1016H15.7617V25.2422C16.8398 25.793 18.0586 26.1055 19.3555 26.1055C23.7148 26.1055 27.25 22.5703 27.25 18.207C27.25 13.8438 23.7148 10.3086 19.3555 10.3086C18.0586 10.3086 16.8398 10.6211 15.7617 11.1719V4.56641H12.1719ZM15.7617 11.1719C13.207 12.4805 11.457 15.1406 11.457 18.207C11.457 21.2734 13.207 23.9336 15.7617 25.2422V11.1719Z" fill="#1C1D4F"/></g><defs><clipPath id="clip0_1_6"><rect width="32" height="32" fill="white"/></clipPath></defs></svg>`;
+const LUSD_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="24" height="24"><circle cx="128" cy="132" r="102" fill="#29C9EB"/><rect x="110" y="4" width="36" height="32" rx="9" fill="#29C9EB"/><rect x="110" y="228" width="36" height="24" rx="9" fill="#29C9EB"/><path d="M 128 30 A 102 102 0 0 1 128 234 Z" fill="#7B6AD6"/><path d="M 128 4 L 137 4 Q 146 4 146 13 L 146 36 L 128 36 Z" fill="#7B6AD6"/><path d="M 128 228 L 146 228 L 146 243 Q 146 252 137 252 L 128 252 Z" fill="#7B6AD6"/><g fill="none" stroke="white" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"><path d="M 154 90 C 146 78, 134 72, 120 74 C 98 78, 82 94, 82 112 C 82 132, 98 142, 128 150 C 158 158, 174 168, 174 186 C 174 206, 158 218, 136 220 C 120 222, 106 216, 98 204"/><line x1="128" y1="74" x2="128" y2="15"/><line x1="128" y1="220" x2="128" y2="241"/></g></svg>`;
 // PNKSTR animated SVG is large (~4KB); lazy-loaded on first use
 let _pnkstrIcon = null;
 function getPNKSTRIcon() {
@@ -1862,7 +1864,7 @@ const DEFAULT_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none
 
 const ICONS = {
   ETH: ETH_ICON, WETH: WETH_ICON, USDC: USDC_ICON, USDT: USDT_ICON, WBTC: WBTC_ICON,
-  stETH: STETH_ICON, wstETH: WSTETH_ICON, rETH: RETH_ICON, DAI: DAI_ICON, zOrg: ZORG_ICON, ZAMM: ZAMM_ICON,
+  stETH: STETH_ICON, wstETH: WSTETH_ICON, rETH: RETH_ICON, DAI: DAI_ICON, BOLD: BOLD_ICON, LUSD: LUSD_ICON, zOrg: ZORG_ICON, ZAMM: ZAMM_ICON,
 };
 
 const _letterIconCache = new Map();
@@ -2411,6 +2413,10 @@ const AMM_NAMES = {
   3: "Uniswap V3", 4: "Uniswap V4", 5: "Curve",
   6: "Lido", 7: "WETH Wrap", 8: "V4 Hooked",
 };
+// Rocket Pool direct deposit (dapp-side quoting via rETH contract)
+const ROCKET_DEPOSIT_POOL = "0xCE15294273CFb9D9b628F4D61636623decDF4fdC";
+const ROCKET_DEPOSIT_ABI = ["function getMaximumDepositAmount() view returns (uint256)"];
+const RETH_RATE_ABI = ["function getRethValue(uint256) view returns (uint256)", "function getEthValue(uint256) view returns (uint256)"];
 
 // ---- Hoisted ABIs / Interfaces (avoid re-parsing per call) ----
 const QUOTER_IFACE = new ethers.Interface([
@@ -2595,18 +2601,20 @@ async function handleAmountChange() {
 
     // Route display
     const isLidoRoute = quote.sourceA === "Lido" && !quote.isSplit && !quote.isTwoHop;
+    const isRocketRoute = quote.sourceA === "Rocket Pool" && !quote.isSplit && !quote.isTwoHop;
+    const isStakeRoute = isLidoRoute || isRocketRoute;
     const route = quote.isSplit
       ? formatSplitRoute(quote.splitLegs)
       : quote.isTwoHop
         ? `${quote.sourceA} + ${quote.sourceB}`
-        : isLidoRoute ? "Lido Stake" : `${quote.sourceA}`;
+        : isStakeRoute ? `${quote.sourceA} Stake` : `${quote.sourceA}`;
     fitRouteText(route);
     updateChartLink(quote);
-    // Show "Direct stake" note for Lido routes
+    // Show "Direct stake" note for Lido/Rocket Pool routes
     const routeEl = $("routeInfo");
     if (routeEl) {
       let noteEl = routeEl.parentNode.querySelector('.lido-note');
-      if (isLidoRoute) {
+      if (isStakeRoute) {
         if (!noteEl) {
           noteEl = document.createElement('span');
           noteEl.className = 'lido-note';
@@ -2644,10 +2652,10 @@ async function handleAmountChange() {
     const isDirectStake = isDirectZOrgStake(fromSnap, toSnap);
     const isRagequit = isRagequitPath(fromSnap, toSnap);
     const isDirectPath = isDirectStake || isRagequit;
-    const isLidoStake = isLidoRoute;
+    const isLidoStake = isStakeRoute;
     const hideSlippage = isDirectPath || isLidoStake;
 
-    // Hide slippage & refresh for 1:1 / Lido / ragequit operations
+    // Hide slippage & refresh for 1:1 / Lido / Rocket Pool / ragequit operations
     setShown('slippageRow', !hideSlippage);
     setShown('impactRow', !isLidoStake && !isRagequit);
     setShown('refreshRow', !isDirectPath);
@@ -3343,10 +3351,28 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       lidoQuoteIdx = allCalls.length;
       allCalls.push(quoter.quoteLido(false, toData.address, amountIn, callOpts));
     }
+    // Rocket Pool quote for ETH → rETH (dapp-side via direct contract calls)
+    const isRocketEligible = fromData.address === ZERO_ADDRESS
+      && toData.address.toLowerCase() === RETH_ADDRESS.toLowerCase();
+    let rocketQuoteIdx = -1;
+    if (isRocketEligible) {
+      rocketQuoteIdx = allCalls.length;
+      const reth = new ethers.Contract(RETH_ADDRESS, RETH_RATE_ABI, rpc);
+      const rocketPool = new ethers.Contract(ROCKET_DEPOSIT_POOL, ROCKET_DEPOSIT_ABI, rpc);
+      allCalls.push((async () => {
+        const [rethOut, maxDeposit] = await Promise.all([
+          reth.getRethValue(amountIn, callOpts),
+          rocketPool.getMaximumDepositAmount(callOpts),
+        ]);
+        if (amountIn > maxDeposit || rethOut === 0n) return { amountIn: 0n, amountOut: 0n };
+        return { amountIn, amountOut: rethOut };
+      })());
+    }
     const settled = await Promise.allSettled(allCalls);
     const [bestResult, splitResult, quotesResult, curveResult, threeHopResult, hybridSplitResult] = settled;
     const v4SplitResult = isPNKSTR ? settled[6] : undefined;
     const lidoQuoteResult = lidoQuoteIdx >= 0 ? settled[lidoQuoteIdx] : undefined;
+    const rocketQuoteResult = rocketQuoteIdx >= 0 ? settled[rocketQuoteIdx] : undefined;
 
     // bestResult is required
     if (bestResult.status === 'rejected') throw bestResult.reason;
@@ -3409,6 +3435,13 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
         const l = lidoQuoteResult.value;
         if (l.amountOut > 0n) {
           result.allQuotes.push({ source: "Lido", sourceId: 6, feeBps: 0n, amountIn: l.amountIn, amountOut: l.amountOut });
+        }
+      }
+      // Merge Rocket Pool quote if available
+      if (rocketQuoteResult?.status === 'fulfilled') {
+        const rp = rocketQuoteResult.value;
+        if (rp.amountOut > 0n) {
+          result.allQuotes.push({ source: "Rocket Pool", sourceId: -1, feeBps: 0n, amountIn: rp.amountIn, amountOut: rp.amountOut });
         }
       }
     }
@@ -3500,13 +3533,11 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       }
     }
 
-    // Prefer Lido for ETH→stETH/wstETH when competitive (guaranteed execution, no pool risk)
+    // Use Lido for ETH→stETH/wstETH only when it gives the best rate
     if (isLidoEligible && lidoQuoteResult?.status === 'fulfilled') {
       const l = lidoQuoteResult.value;
       if (l.amountOut > 0n) {
-        // Use Lido if within 0.5% of best, or if Lido actually beats best
-        const threshold = result.expectedOutput * 9950n / 10000n;
-        if (l.amountOut >= threshold) {
+        if (l.amountOut >= result.expectedOutput) {
           const isStETH = toData.address.toLowerCase() === STETH_ADDRESS.toLowerCase();
           const lidoCall = isStETH
             ? ROUTER_IFACE.encodeFunctionData('exactETHToSTETH', [receiver])
@@ -3523,6 +3554,65 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
           result.splitLegs = null;
           result.sourceA = "Lido";
           result.sourceB = null;
+        }
+      }
+    }
+
+    // Use Rocket Pool for ETH→rETH when direct deposit beats DEX rates
+    if (isRocketEligible && rocketQuoteResult?.status === 'fulfilled') {
+      const rp = rocketQuoteResult.value;
+      if (rp.amountOut > 0n && rp.amountOut >= result.expectedOutput) {
+        // Build: execute(depositPool.deposit{value: amountIn}) → sweep(rETH, to)
+        const depositCalldata = "0xd0e30db0"; // deposit() selector
+        const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [ROCKET_DEPOSIT_POOL, amountIn, depositCalldata]);
+        const sweepReth = ROUTER_IFACE.encodeFunctionData('sweep', [RETH_ADDRESS, 0, 0, receiver]);
+        const calls = [executeCall, sweepReth];
+        const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
+        result.expectedOutput = rp.amountOut;
+        result.multicall = multicall;
+        result.calls = calls;
+        result.msgValue = amountIn;
+        result.isTwoHop = false;
+        result.isSplit = false;
+        result.splitLegs = null;
+        result.sourceA = "Rocket Pool";
+        result.sourceB = null;
+      }
+    }
+
+    // Curve native-ETH pools: router's swapCurve wraps to WETH but legacy pools
+    // need msg.value. Detect and rebuild via execute+sweep, also promote Curve
+    // when it beats the current best (like Lido/Rocket Pool overrides).
+    if (fromData.address === ZERO_ADDRESS && curveResult?.status === 'fulfilled') {
+      const c = curveResult.value;
+      if (c.bestPool !== ZERO_ADDRESS && c.amountOut > 0n && !c.usedUnderlying) {
+        const curveIsWinner = result.sourceA === "Curve" && !result.isSplit && !result.isTwoHop;
+        const curveBeatsBest = c.amountOut > result.expectedOutput;
+        if (curveIsWinner || curveBeatsBest) {
+          try {
+            const poolContract = new ethers.Contract(c.bestPool, ["function coins(uint256) view returns (address)"], rpc);
+            const inputCoin = await poolContract.coins(c.iIndex, callOpts);
+            if (inputCoin.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+              const exchangeIface = c.usedStable
+                ? new ethers.Interface(["function exchange(int128,int128,uint256,uint256) payable"])
+                : new ethers.Interface(["function exchange(uint256,uint256,uint256,uint256) payable"]);
+              const minOut = c.amountOut * (10000n - BigInt(slippageBps)) / 10000n;
+              const exchangeData = exchangeIface.encodeFunctionData('exchange', [c.iIndex, c.jIndex, amountIn, minOut]);
+              const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [c.bestPool, amountIn, exchangeData]);
+              const sweepOut = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
+              const calls = [executeCall, sweepOut];
+              const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
+              result.expectedOutput = c.amountOut;
+              result.multicall = multicall;
+              result.calls = calls;
+              result.msgValue = amountIn;
+              result.isTwoHop = false;
+              result.isSplit = false;
+              result.splitLegs = null;
+              result.sourceA = "Curve";
+              result.sourceB = null;
+            }
+          } catch (_) {}
         }
       }
     }
@@ -3637,10 +3727,21 @@ async function getSpotRate(fromSym, toSym) {
     const spotRate = await quoteRPC.call(async (rpc) => {
       const quoter = getQuoterContract(rpc);
       const callOpts = { blockTag: "latest" };
-      const [baseResult, curveResult] = await Promise.allSettled([
+      const spotCalls = [
         quoter.getQuotes(false, fromData.address, toData.address, refAmount, callOpts),
         quoter.quoteCurve(false, fromData.address, toData.address, refAmount, 8, callOpts),
-      ]);
+      ];
+      // Rocket Pool spot rate for ETH→rETH
+      const isRocketSpot = fromData.address === ZERO_ADDRESS
+        && toData.address.toLowerCase() === RETH_ADDRESS.toLowerCase();
+      if (isRocketSpot) {
+        spotCalls.push((async () => {
+          const reth = new ethers.Contract(RETH_ADDRESS, RETH_RATE_ABI, rpc);
+          const rethOut = await reth.getRethValue(refAmount);
+          return { amountIn: refAmount, amountOut: rethOut };
+        })());
+      }
+      const [baseResult, curveResult, rocketSpotResult] = await Promise.allSettled(spotCalls);
       let bestOut = 0n, bestIn = 0n;
       if (baseResult.status === 'fulfilled') {
         const q = baseResult.value;
@@ -3649,6 +3750,10 @@ async function getSpotRate(fromSym, toSym) {
       if (curveResult.status === 'fulfilled') {
         const c = curveResult.value;
         if (c.amountOut > bestOut) { bestOut = c.amountOut; bestIn = c.amountIn; }
+      }
+      if (rocketSpotResult?.status === 'fulfilled') {
+        const rp = rocketSpotResult.value;
+        if (rp.amountOut > bestOut) { bestOut = rp.amountOut; bestIn = rp.amountIn; }
       }
       if (bestOut === 0n || bestIn === 0n) return null;
       // Store raw BigInts to avoid precision loss in Number conversion
@@ -3798,7 +3903,7 @@ async function executeSwap() {
           wethContract.deposit({ value: amountIn }),
           'Confirm wrap in your wallet'
         );
-        swapBtn.innerHTML = `Confirming wrap... <a href="https://etherscan.io/tx/${escAttr(tx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+        swapBtn.innerHTML = `Confirming wrap... <a href="https://etherscan.io/tx/${escAttr(tx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
         const receipt = await waitForTx(tx);
         if (receipt.status === 0) throw new Error("Wrap transaction failed");
       } else {
@@ -3808,7 +3913,7 @@ async function executeSwap() {
           wethContract.withdraw(amountIn),
           'Confirm unwrap in your wallet'
         );
-        swapBtn.innerHTML = `Confirming unwrap... <a href="https://etherscan.io/tx/${escAttr(tx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+        swapBtn.innerHTML = `Confirming unwrap... <a href="https://etherscan.io/tx/${escAttr(tx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
         const receipt = await waitForTx(tx);
         if (receipt.status === 0) throw new Error("Unwrap transaction failed");
       }
@@ -3860,7 +3965,7 @@ async function executeSwap() {
           erc20W.approve(ZORG_DAO, ethers.MaxUint256),
           'Approve ZAMM spending for zOrg DAO in your wallet'
         );
-        swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+        swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
         const rc = await waitForTx(approveTx);
         if (rc.status === 0) throw new Error("Approval transaction failed");
       }
@@ -3875,7 +3980,7 @@ async function executeSwap() {
         }),
         'Confirm stake in your wallet'
       );
-      swapBtn.innerHTML = `Confirming stake... <a href="https://etherscan.io/tx/${escAttr(stakeTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+      swapBtn.innerHTML = `Confirming stake... <a href="https://etherscan.io/tx/${escAttr(stakeTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
 
       const receipt = await waitForTx(stakeTx);
       if (receipt.status === 0) throw new Error("Stake transaction failed");
@@ -3912,7 +4017,7 @@ async function executeSwap() {
         }),
         'Confirm ragequit in your wallet'
       );
-      swapBtn.innerHTML = `Confirming ragequit... <a href="https://etherscan.io/tx/${escAttr(rqTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+      swapBtn.innerHTML = `Confirming ragequit... <a href="https://etherscan.io/tx/${escAttr(rqTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
 
       const receipt = await waitForTx(rqTx);
       if (receipt.status === 0) throw new Error("Ragequit transaction failed");
@@ -3950,7 +4055,7 @@ async function executeSwap() {
         }),
         'Step 1/2: Confirm ragequit in your wallet'
       );
-      swapBtn.innerHTML = `Confirming ragequit... <a href="https://etherscan.io/tx/${escAttr(rqTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+      swapBtn.innerHTML = `Confirming ragequit... <a href="https://etherscan.io/tx/${escAttr(rqTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
       const rqReceipt = await waitForTx(rqTx);
       if (rqReceipt.status === 0) throw new Error("Ragequit transaction failed");
 
@@ -3997,7 +4102,7 @@ async function executeSwap() {
               await waitForTx(resetTx);
             }
             const approveTx = await wcTransaction(erc20W.approve(ZROUTER_ADDRESS, ethers.MaxUint256), 'Approve ZAMM for swap');
-            swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+            swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
             const rc = await waitForTx(approveTx);
             if (rc.status === 0) throw new Error("Approval failed");
             cacheSetAllowance(zammAddr, connectedAddress, ZROUTER_ADDRESS, ethers.MaxUint256);
@@ -4013,7 +4118,7 @@ async function executeSwap() {
           }),
           'Step 2/2: Confirm swap in your wallet'
         );
-        swapBtn.innerHTML = `Confirming swap... <a href="https://etherscan.io/tx/${escAttr(swapTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+        swapBtn.innerHTML = `Confirming swap... <a href="https://etherscan.io/tx/${escAttr(swapTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
         const swapReceipt = await waitForTx(swapTx);
         if (swapReceipt.status === 0) throw new Error("Swap transaction failed");
       } catch (step2Err) {
@@ -4144,7 +4249,7 @@ async function executeSwap() {
             erc20W.approve(ZROUTER_ADDRESS, ethers.MaxUint256),
             'Approve token spending in your wallet'
           );
-          swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+          swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
           const rc = await waitForTx(approveTx);
           if (rc.status === 0) throw new Error("Approval transaction failed");
           const fresh = await getQuote(amtStr, fromSnap, toSnap);
@@ -4155,7 +4260,7 @@ async function executeSwap() {
       }
     }
 
-    const isLidoExec = quote.sourceA === "Lido" && !quote.isSplit && !quote.isTwoHop;
+    const isLidoExec = (quote.sourceA === "Lido" || quote.sourceA === "Rocket Pool") && !quote.isSplit && !quote.isTwoHop;
     const actionLabel = isLidoExec ? "Staking" : isZOrgSwap(toSnap) ? "Swapping & Staking" : "Swapping";
     swapBtn.textContent = actionLabel + "...";
     const txValue = quote.msgValue ?? 0n;
@@ -4168,7 +4273,7 @@ async function executeSwap() {
       }),
       isLidoExec ? 'Confirm stake in your wallet' : 'Confirm swap in your wallet'
     );
-    swapBtn.innerHTML = `Confirming ${actionLabel.toLowerCase()}... <a href="https://etherscan.io/tx/${escAttr(swapTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+    swapBtn.innerHTML = `Confirming ${actionLabel.toLowerCase()}... <a href="https://etherscan.io/tx/${escAttr(swapTx.hash)}" target="_blank" style="color:var(--btn-fg);text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
 
     const receipt = await waitForTx(swapTx);
     if (receipt.status === 0) throw new Error(isLidoExec ? "Stake transaction failed" : "Swap transaction failed");
@@ -4260,7 +4365,7 @@ function updateChartLink(quote) {
 }
 
 // ---- Quick-pick popular tokens ----
-const QUICK_TOKENS = ["USDC", "USDT", "DAI", "WBTC", "wstETH"];
+const QUICK_TOKENS = ["BOLD", "DAI", "stETH", "rETH"];
 
 function renderQuickTokens() {
   const el = $('quickTokens');
