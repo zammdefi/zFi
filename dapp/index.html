@@ -630,6 +630,7 @@ body.modal-open { overflow: hidden; }
   color: var(--info-border);
   cursor: help;
   line-height: 1;
+  padding-right: 1px;
 }
 .info-icon:hover { border-color: var(--info-hover); color: var(--info-hover); }
 .info-tooltip {
@@ -660,7 +661,7 @@ body.modal-open { overflow: hidden; }
   border: none;
   cursor: pointer;
   font-size: 14px;
-  padding: 6px;
+  padding: 0 0 1px 0;
   margin: 0;
   opacity: 0.7;
   transition: opacity 0.2s;
@@ -807,9 +808,11 @@ body.modal-open { overflow: hidden; }
 
 </div><!-- end swap-card -->
 
-<!-- Direct ZAMM stake link -->
+<!-- Direct ZAMM stake / ragequit links -->
 <div id="directStakeLink" style="text-align:center;margin-top:10px;font-size:13px;opacity:0.7">
   <a href="#" onclick="setupDirectZammStake();return false" style="color:var(--link-fg);text-decoration:underline;cursor:pointer">Stake ZAMM directly to zOrg</a>
+  <span style="color:var(--fg-dim)">&middot;</span>
+  <a href="#" onclick="setupRagequit();return false" style="color:var(--link-fg);text-decoration:underline;cursor:pointer">Ragequit zOrg to ZAMM</a>
 </div>
 
 <!-- Status -->
@@ -894,7 +897,7 @@ const ZORG_DAO = "0x5E58BA0e06ED0F5558f83bE732a4b899a674053E";
 const ZORG_DAO_TOKEN = "0x00a6bA94BBb5474725515De88fE04F854f2dCb12";
 const WEINS_ABI = ["function computeId(string) pure returns (uint256)", "function text(uint256,string) view returns (string)", "function contenthash(uint256) view returns (bytes)", "function reverseResolve(address) view returns (string)", "function ownerOf(uint256) view returns (address)"];
 const IPFS_GATEWAYS = ["https://content.wrappr.wtf/ipfs/", "https://dweb.link/ipfs/"];
-const BUILTIN_ADDRS = new Set([ZERO_ADDRESS, WETH_ADDRESS, USDC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS, RETH_ADDRESS, DAI_ADDRESS, PNKSTR_ADDRESS, ZORG_DAO_TOKEN].map(a => a.toLowerCase()));
+const BUILTIN_ADDRS = new Set([ZERO_ADDRESS, WETH_ADDRESS, USDC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS, RETH_ADDRESS, DAI_ADDRESS, PNKSTR_ADDRESS, ZORG_DAO_TOKEN, ZORG_PAY_TOKEN].map(a => a.toLowerCase()));
 
 // ---- DOM helpers ----
 const $ = id => document.getElementById(id);
@@ -1415,6 +1418,7 @@ const tokens = {
   ETH: { address: ZERO_ADDRESS, symbol: "ETH", decimals: 18 },
   WETH: { address: WETH_ADDRESS, symbol: "WETH", decimals: 18 },
   zOrg: { address: ZORG_DAO_TOKEN, symbol: "zOrg", decimals: 18, _isZOrg: true },
+  ZAMM: { address: ZORG_PAY_TOKEN, symbol: "ZAMM", decimals: 18, _isZammStake: true },
   USDC: { address: USDC_ADDRESS, symbol: "USDC", decimals: 6 },
   USDT: { address: USDT_ADDRESS, symbol: "USDT", decimals: 6 },
   DAI: { address: DAI_ADDRESS, symbol: "DAI", decimals: 18 },
@@ -1424,8 +1428,6 @@ const tokens = {
   rETH: { address: RETH_ADDRESS, symbol: "rETH", decimals: 18 },
   PNKSTR: { address: PNKSTR_ADDRESS, symbol: "PNKSTR", decimals: 18 },
 };
-// ZAMM token is not shown in the selector but registered for direct staking
-tokens["ZAMM"] = { address: ZORG_PAY_TOKEN, symbol: "ZAMM", decimals: 18, _isZammStake: true };
 
 // Load custom tokens from localStorage
 try {
@@ -1589,7 +1591,7 @@ async function resolveWeiList(nameInput) {
       return { ch, txt };
     });
 
-    if (seq !== _weiResolveSeq) return;
+    if (seq !== _weiResolveSeq) { _weiResolving = false; return; }
 
     let raw = null;
 
@@ -1599,7 +1601,7 @@ async function resolveWeiList(nameInput) {
       if (cid) {
         statusEl.textContent = 'Fetching from IPFS...';
         raw = await fetchIPFS(cid);
-        if (seq !== _weiResolveSeq) return;
+        if (seq !== _weiResolveSeq) { _weiResolving = false; return; }
       }
     }
 
@@ -1611,6 +1613,7 @@ async function resolveWeiList(nameInput) {
     if (!raw || !raw.trim()) {
       statusEl.className = 'token-search-status error';
       statusEl.textContent = 'No token list found on ' + fullName;
+      _weiResolving = false;
       return;
     }
 
@@ -1618,6 +1621,7 @@ async function resolveWeiList(nameInput) {
     try { parsed = JSON.parse(raw); } catch (e) {
       statusEl.className = 'token-search-status error';
       statusEl.textContent = 'Invalid JSON from ' + fullName;
+      _weiResolving = false;
       return;
     }
 
@@ -1625,6 +1629,7 @@ async function resolveWeiList(nameInput) {
     if (validated.length === 0) {
       statusEl.className = 'token-search-status error';
       statusEl.textContent = 'No valid tokens in ' + fullName;
+      _weiResolving = false;
       return;
     }
 
@@ -1743,7 +1748,7 @@ function renderTokenList(filter) {
   // Custom tokens (not built-in, not from .wei lists)
   const customTokens = [];
   for (const sym of Object.keys(tokens)) {
-    if (tokens[sym]._isZammStake) continue; // hidden from selector
+    if (tokens[sym]._isZammStake) continue; // ZAMM is in built-in section, skip here
     if (builtInAddrs.has(tokens[sym].address.toLowerCase())) continue;
     if (weiListTokenSource.has(sym)) continue;
     if (!matchesFilter(sym, tokens[sym].address)) continue;
@@ -2438,6 +2443,9 @@ const ZORG_BUYSHARES_IFACE = new ethers.Interface([
   "function buyShares(address payToken, uint256 shareAmount, uint256 maxPay)",
   "function approve(address spender, uint256 amount) returns (bool)",
 ]);
+const ZORG_RAGEQUIT_IFACE = new ethers.Interface([
+  "function ragequit(address[] tokens, uint256 sharesToBurn, uint256 lootToBurn)",
+]);
 
 // ---- Quote refresh timer ----
 let _refreshTimer = null;
@@ -2505,20 +2513,12 @@ async function handleAmountChange() {
     return;
   }
 
-  if (isZOrgSwap(fromToken)) {
+  // ZAMM cannot be purchased directly — use the zOrg stake path instead
+  if (tokens[toToken]?._isZammStake && !isDirectZOrgStake(fromToken, toToken) && !isRagequitPath(fromToken, toToken)) {
     toAmountEl.value = "";
     setShown(quoteInfoEl, false);
     stopQuoteRefresh();
-    setText(swapBtn, "zOrg shares cannot be sold here");
-    setDisabled(swapBtn, true);
-    return;
-  }
-
-  if (tokens[fromToken]?._isZammStake && !isZOrgSwap(toToken)) {
-    toAmountEl.value = "";
-    setShown(quoteInfoEl, false);
-    stopQuoteRefresh();
-    setText(swapBtn, "ZAMM can only be staked to zOrg");
+    setText(swapBtn, "Swap to zOrg instead (includes ZAMM)");
     setDisabled(swapBtn, true);
     return;
   }
@@ -2582,9 +2582,11 @@ async function handleAmountChange() {
     if (rateEl) {
       const inNum = Number(amtStr);
       const outNum = Number(outRaw);
-      if (inNum > 0 && Number.isFinite(outNum)) {
+      if (inNum > 0 && Number.isFinite(outNum) && outNum > 0) {
         const rate = outNum / inNum;
-        rateEl.textContent = `1 ${tokens[fromSnap].symbol} \u2248 ${fmt(rate.toString(), 2)} ${toData.symbol}`;
+        // Adaptive precision: use more decimals for tiny rates (e.g. ZAMM → ETH)
+        const rateDec = rate >= 1 ? 2 : rate >= 0.01 ? 4 : rate >= 0.0001 ? 6 : 8;
+        rateEl.textContent = `1 ${tokens[fromSnap].symbol} \u2248 ${fmt(rate.toString(), rateDec)} ${toData.symbol}`;
         rateEl.style.display = '';
       } else {
         rateEl.style.display = 'none';
@@ -2640,18 +2642,24 @@ async function handleAmountChange() {
     // Allowance check
     const fromData = tokens[fromSnap];
     const isDirectStake = isDirectZOrgStake(fromSnap, toSnap);
+    const isRagequit = isRagequitPath(fromSnap, toSnap);
+    const isDirectPath = isDirectStake || isRagequit;
     const isLidoStake = isLidoRoute;
-    const hideSlippage = isDirectStake || isLidoStake;
+    const hideSlippage = isDirectPath || isLidoStake;
 
-    // Hide slippage & refresh for 1:1 / Lido operations
+    // Hide slippage & refresh for 1:1 / Lido / ragequit operations
     setShown('slippageRow', !hideSlippage);
-    setShown('impactRow', !isLidoStake);
-    setShown('refreshRow', !isDirectStake);
+    setShown('impactRow', !isLidoStake && !isRagequit);
+    setShown('refreshRow', !isDirectPath);
     setShown(quoteInfoEl, true);
-    if (isDirectStake) stopQuoteRefresh(); else startQuoteRefresh();
-    let btnLabel = isDirectStake ? "Stake"
+    if (isDirectPath) stopQuoteRefresh(); else startQuoteRefresh();
+    const isZOrgSell = isZOrgSellPath(fromSnap, toSnap);
+    const isZammSell = isZammSellPath(fromSnap, toSnap);
+    let btnLabel = isRagequit ? "Ragequit"
+      : isDirectStake ? "Stake"
       : isLidoStake ? "Stake"
       : isZOrgSwap(toSnap) ? "Swap & Stake"
+      : isZOrgSell ? "Ragequit & Sell"
       : "Swap";
     if (fromData.address !== ZERO_ADDRESS) {
       const amountIn = safeParseUnits(amtStr, fromData.decimals);
@@ -2660,6 +2668,18 @@ async function handleAmountChange() {
         const r = erc20Read(fromData.address);
         const allowance = await r.allowance(connectedAddress, ZORG_DAO);
         if (allowance < amountIn) btnLabel = "Approve & " + btnLabel;
+      } else if (isRagequit) {
+        // No approval needed for ragequit — DAO burns msg.sender's shares directly
+      } else if (isZOrgSell) {
+        // Ragequit doesn't need approval, but second step (ZAMM sell) might
+        // Check ZAMM allowance against router for the sell leg
+        let allowance = cacheGetAllowance(ZORG_PAY_TOKEN, connectedAddress, ZROUTER_ADDRESS);
+        if (allowance == null) {
+          const r = erc20Read(ZORG_PAY_TOKEN);
+          allowance = await r.allowance(connectedAddress, ZROUTER_ADDRESS);
+          cacheSetAllowance(ZORG_PAY_TOKEN, connectedAddress, ZROUTER_ADDRESS, allowance);
+        }
+        // Don't add "Approve &" prefix — handled in-flow during two-step execution
       } else {
         let allowance = cacheGetAllowance(fromData.address, connectedAddress, ZROUTER_ADDRESS);
         if (allowance == null) {
@@ -2697,8 +2717,6 @@ async function handleAmountChange() {
     }, 1500);
   }
 }
-
-async function setMaxFromBalance() { setPercentBalance(100); }
 
 async function setPercentBalance(pct) {
   try {
@@ -2756,6 +2774,7 @@ function readSlippage(finalize = false) {
     const stepDigits = (String(el.step || "0.1").split(".")[1] || "").length;
     el.value = clamp(slippageBps / 100, 0, 20).toFixed(stepDigits);
   }
+  return slippageBps;
 }
 
 function initSimpleSlippage() {
@@ -2898,6 +2917,54 @@ function isZOrgSwap(toSym) {
 function isDirectZOrgStake(fromSym, toSym) {
   return isZOrgSwap(toSym) && tokens[fromSym]?.address?.toLowerCase() === ZORG_PAY_TOKEN.toLowerCase();
 }
+function isRagequitPath(fromSym, toSym) {
+  return tokens[fromSym]?._isZOrg === true && tokens[toSym]?._isZammStake === true;
+}
+// ZAMM → any non-zOrg token (sell via zAMM pool)
+function isZammSellPath(fromSym, toSym) {
+  return tokens[fromSym]?._isZammStake === true && !isZOrgSwap(toSym) && !isRagequitPath(fromSym, toSym);
+}
+// zOrg → any token except ZAMM (ragequit 1:1 to ZAMM, then sell ZAMM)
+function isZOrgSellPath(fromSym, toSym) {
+  return fromSym !== toSym && tokens[fromSym]?._isZOrg === true && !tokens[toSym]?._isZammStake && tokens[toSym] != null;
+}
+
+// ---- zAMM reverse quote: ZAMM → ETH (client-side AMM math) ----
+function getZammAmountOut(amtIn, resIn, resOut, feeBps) {
+  if (amtIn === 0n || resIn === 0n || resOut === 0n) return 0n;
+  const amtFee = amtIn * (10000n - feeBps);
+  return (amtFee * resOut) / (resIn * 10000n + amtFee);
+}
+
+function computeZammPoolKey() {
+  return ethers.AbiCoder.defaultAbiCoder().encode(
+    ["uint256","uint256","address","address","uint256"],
+    [0, ZORG_ID, ZERO_ADDRESS, ZORG_TOKEN, 100]
+  );
+}
+
+async function getZammPoolReserves(rpc) {
+  const poolId = BigInt(ethers.keccak256(computeZammPoolKey()));
+  const zammHooked = new ethers.Contract(ZAMM_HOOKED, ZAMM_POOLS_ABI, rpc);
+  const zammHookless = new ethers.Contract(ZAMM_HOOKLESS, ZAMM_POOLS_ABI, rpc);
+  const callOpts = { blockTag: "latest" };
+  const [hookedRes, hooklessRes] = await Promise.all([
+    zammHooked.pools(poolId, callOpts).catch(() => [0n, 0n]),
+    zammHookless.pools(poolId, callOpts).catch(() => [0n, 0n]),
+  ]);
+  return {
+    hooked: { reserve0: BigInt(hookedRes[0]), reserve1: BigInt(hookedRes[1]) },
+    hookless: { reserve0: BigInt(hooklessRes[0]), reserve1: BigInt(hooklessRes[1]) },
+  };
+}
+
+// ZAMM → ETH: sell ERC6909 ZORG for ETH (zeroForOne=false, reserveIn=reserve1, reserveOut=reserve0)
+function getZammToEthQuote(amountIn, reserves) {
+  const hookedOut = getZammAmountOut(amountIn, reserves.hooked.reserve1, reserves.hooked.reserve0, 100n);
+  const hooklessOut = getZammAmountOut(amountIn, reserves.hookless.reserve1, reserves.hookless.reserve0, 100n);
+  const useHookless = hooklessOut >= hookedOut;
+  return { ethOut: useHookless ? hooklessOut : hookedOut, useHookless };
+}
 
 // ---- ETH ↔ WETH wrap/unwrap detection ----
 const WETH_ABI = ["function deposit() payable", "function withdraw(uint256 wad)"];
@@ -2935,6 +3002,144 @@ function getDirectZOrgStakeQuote(fromAmountStr, fromSym) {
     sourceA: "Direct Stake",
     sourceB: null,
     allQuotes: [{ source: "Direct DAO Stake", sourceId: 2, feeBps: 0n, amountIn, amountOut: amountIn }],
+  };
+}
+
+// Ragequit zOrg → ZAMM: 1:1 redemption, direct call to DAO
+function getRagequitQuote(fromAmountStr, fromSym) {
+  const fromData = tokens[fromSym];
+  const amountIn = safeParseUnits(fromAmountStr, fromData.decimals);
+
+  const ragequitData = ZORG_RAGEQUIT_IFACE.encodeFunctionData('ragequit', [
+    [ZORG_PAY_TOKEN], amountIn, 0
+  ]);
+
+  return {
+    expectedOutput: amountIn,
+    directDAO: true,
+    isRagequit: true,
+    daoCalldata: ragequitData,
+    multicall: null,
+    calls: null,
+    msgValue: 0n,
+    isTwoHop: false,
+    isSplit: false,
+    splitLegs: null,
+    sourceA: "Ragequit",
+    sourceB: null,
+    allQuotes: [{ source: "DAO Ragequit", sourceId: 2, feeBps: 0n, amountIn, amountOut: amountIn }],
+  };
+}
+
+// ZAMM → any token: sell ZAMM via zAMM pool (ZAMM→ETH), then optionally ETH→target via quoter
+async function getZammSellQuote(fromAmountStr, fromSym, toSym) {
+  const fromData = tokens[fromSym], toData = tokens[toSym];
+  const amountIn = safeParseUnits(fromAmountStr, fromData.decimals);
+  readSlippage(true);
+  const deadline = BigInt(Math.trunc(Date.now() / 1000) + 300);
+  const receiver = getReceiver();
+  const toIsEth = toData.address === ZERO_ADDRESS;
+
+  return await quoteRPC.call(async (rpc) => {
+    const callOpts = { blockTag: "latest" };
+    const reserves = await getZammPoolReserves(rpc);
+    const { ethOut, useHookless } = getZammToEthQuote(amountIn, reserves);
+    const zammDeadline = useHookless ? ethers.MaxUint256 : deadline;
+    const zammSource = useHookless ? "zAMM₀" : "zAMM";
+
+    if (toIsEth) {
+      // ZAMM → ETH: single zAMM swap via router
+      // Router needs ERC6909 input. User holds ERC20 ZAMM.
+      // Router deposit() converts ERC20 → ERC6909 for the pool.
+      const slipOut = ethOut * (10000n - BigInt(slippageBps)) / 10000n;
+      const calls = [];
+      // deposit: convert ERC20 ZAMM to ERC6909 inside the router
+      calls.push(ROUTER_IFACE.encodeFunctionData('deposit', [ZORG_TOKEN, ZORG_ID, amountIn]));
+      // swapVZ: sell ZORG ERC6909 for ETH (zeroForOne=false)
+      calls.push(ROUTER_IFACE.encodeFunctionData('swapVZ', [
+        receiver, false, 100,
+        ZORG_TOKEN, ZERO_ADDRESS, ZORG_ID, 0,
+        amountIn, slipOut, zammDeadline
+      ]));
+      // Sweep ETH to receiver
+      calls.push(ROUTER_IFACE.encodeFunctionData('sweep', [ZERO_ADDRESS, 0, 0, receiver]));
+      // Safety sweep: remaining ERC20 ZAMM back to user
+      calls.push(ROUTER_IFACE.encodeFunctionData('sweep', [ZORG_PAY_TOKEN, 0, 0, receiver]));
+      const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
+
+      return {
+        expectedOutput: ethOut,
+        multicall, calls, msgValue: 0n,
+        isTwoHop: false, isSplit: false, splitLegs: null,
+        sourceA: zammSource, sourceB: null,
+        allQuotes: [{ source: zammSource, sourceId: 2, feeBps: 100n, amountIn, amountOut: ethOut }],
+      };
+    }
+
+    // ZAMM → non-ETH: zAMM (ZAMM→ETH) + quoter (ETH→target)
+    const quoter = getQuoterContract(rpc);
+    const splitSlip = BigInt(Math.min(Math.max(slippageBps * 3, 150), 500));
+    const r = await quoter.buildBestSwapViaETHMulticall(
+      receiver, connectedAddress, false,
+      ZERO_ADDRESS, toData.address,
+      ethOut, splitSlip, deadline, 0, 0, ZERO_ADDRESS, callOpts
+    );
+    const isTwoHop = r.b.amountOut > 0n;
+    const finalOut = isTwoHop ? r.b.amountOut : r.a.amountOut;
+    const secondLegSource = AMM_NAMES[r.a.source] || "Unknown";
+
+    // Build multicall: deposit + swapVZ (ZAMM→ETH) + second-leg calls (ETH→target) + sweeps
+    const slipZamm = ethOut * (10000n - splitSlip) / 10000n;
+    const calls = [];
+    calls.push(ROUTER_IFACE.encodeFunctionData('deposit', [ZORG_TOKEN, ZORG_ID, amountIn]));
+    calls.push(ROUTER_IFACE.encodeFunctionData('swapVZ', [
+      ZROUTER_ADDRESS, false, 100,
+      ZORG_TOKEN, ZERO_ADDRESS, ZORG_ID, 0,
+      amountIn, slipZamm, zammDeadline
+    ]));
+    // Second leg: ETH → target (calls from quoter operate on transient ETH in router)
+    for (const c of Array.from(r.calls)) calls.push(c);
+    // Sweep target token and ETH remainder
+    calls.push(ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]));
+    calls.push(ROUTER_IFACE.encodeFunctionData('sweep', [ZERO_ADDRESS, 0, 0, receiver]));
+    calls.push(ROUTER_IFACE.encodeFunctionData('sweep', [ZORG_PAY_TOKEN, 0, 0, receiver]));
+    const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
+
+    return {
+      expectedOutput: finalOut,
+      multicall, calls, msgValue: 0n,
+      isTwoHop: true, isSplit: false, splitLegs: null,
+      sourceA: zammSource, sourceB: secondLegSource,
+      allQuotes: [{ source: `${zammSource} + ${secondLegSource}`, sourceId: 2, feeBps: 100n, amountIn, amountOut: finalOut }],
+    };
+  });
+}
+
+// zOrg → any token (except ZAMM, which is ragequit): ragequit (1:1) then sell ZAMM
+// This is a two-step flow: ragequit tx first, then ZAMM sell tx
+async function getZOrgSellQuote(fromAmountStr, fromSym, toSym) {
+  const fromData = tokens[fromSym];
+  const amountIn = safeParseUnits(fromAmountStr, fromData.decimals);
+  // After ragequit, user gets amountIn ZAMM (1:1, both 18 decimals)
+  // Then sell that ZAMM to the target
+  const zammQuote = await getZammSellQuote(fromAmountStr, "ZAMM", toSym);
+
+  // Encode ragequit calldata for the first tx
+  const ragequitData = ZORG_RAGEQUIT_IFACE.encodeFunctionData('ragequit', [
+    [ZORG_PAY_TOKEN], amountIn, 0
+  ]);
+
+  return {
+    expectedOutput: zammQuote.expectedOutput,
+    isZOrgSell: true, // signals two-step execution
+    ragequitData,
+    zammSellQuote: zammQuote, // second step quote
+    multicall: zammQuote.multicall,
+    calls: zammQuote.calls,
+    msgValue: 0n,
+    isTwoHop: true, isSplit: false, splitLegs: null,
+    sourceA: "Ragequit", sourceB: zammQuote.sourceA + (zammQuote.sourceB ? " + " + zammQuote.sourceB : ""),
+    allQuotes: [{ source: `Ragequit + ${zammQuote.sourceA}`, sourceId: 2, feeBps: 100n, amountIn, amountOut: zammQuote.expectedOutput }],
   };
 }
 
@@ -3062,9 +3267,24 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     return getDirectZOrgStakeQuote(fromAmountStr, fromSym);
   }
 
+  // zOrg → ZAMM ragequit (burn shares, claim ZAMM)
+  if (isRagequitPath(fromSym, toSym)) {
+    return getRagequitQuote(fromAmountStr, fromSym);
+  }
+
   // zOrg special path: swap + stake
   if (isZOrgSwap(toSym)) {
     return await getZOrgQuote(fromAmountStr, fromSym);
+  }
+
+  // ZAMM sell path: ZAMM → any token via zAMM pool
+  if (isZammSellPath(fromSym, toSym)) {
+    return await getZammSellQuote(fromAmountStr, fromSym, toSym);
+  }
+
+  // zOrg sell path: ragequit (1:1 → ZAMM) then sell ZAMM
+  if (isZOrgSellPath(fromSym, toSym)) {
+    return await getZOrgSellQuote(fromAmountStr, fromSym, toSym);
   }
 
   const receiver = getReceiver();
@@ -3365,6 +3585,50 @@ async function getSpotRate(fromSym, toSym) {
   const cached = _spotCache.get(key);
   if (cached && Date.now() - cached.t < _spotTTL) return cached.rate;
 
+  // zAMM/zOrg special paths: use reserve math (quoter doesn't know these tokens)
+  const isFromZamm = fromData._isZammStake || fromData._isZOrg;
+  const isToZamm = toData._isZammStake || toData._isZOrg;
+  if (isFromZamm || isToZamm) {
+    try {
+      const spotRate = await quoteRPC.call(async (rpc) => {
+        const reserves = await getZammPoolReserves(rpc);
+        // Pick best pool
+        const h = reserves.hooked, hl = reserves.hookless;
+        // Use the pool with more liquidity (higher product)
+        const useHookless = hl.reserve0 * hl.reserve1 >= h.reserve0 * h.reserve1;
+        const r0 = useHookless ? hl.reserve0 : h.reserve0; // ETH
+        const r1 = useHookless ? hl.reserve1 : h.reserve1; // ZAMM/ERC6909
+        if (r0 === 0n || r1 === 0n) return null;
+        // zOrg ↔ ZAMM is 1:1, so zOrg rate = ZAMM rate
+        // ZAMM/zOrg → ETH: num=r0 (ETH per unit), den=r1
+        // ETH → ZAMM/zOrg: num=r1, den=r0
+        if (isFromZamm && !isToZamm) {
+          // Selling ZAMM/zOrg → ETH (or via ETH to target)
+          if (toData.address === ZERO_ADDRESS) return { num: r0, den: r1 };
+          // For non-ETH target, rate = (r0/r1) * ethToTargetRate — fall through to generic
+          return null;
+        }
+        if (isToZamm && !isFromZamm) {
+          // Buying ZAMM/zOrg: ETH → ZAMM
+          if (fromData.address === ZERO_ADDRESS) return { num: r1, den: r0 };
+          return null;
+        }
+        // Both are ZAMM/zOrg: 1:1
+        return { num: 1n, den: 1n };
+      });
+      if (spotRate != null) {
+        if (_spotCache.size >= _spotMaxSize) {
+          const oldest = _spotCache.keys().next().value;
+          _spotCache.delete(oldest);
+        }
+        _spotCache.set(key, { rate: spotRate, t: Date.now() });
+        return spotRate;
+      }
+    } catch (e) {
+      console.warn("zAMM spot rate failed:", e);
+    }
+  }
+
   // Use a small reference amount: 10^(decimals-2) or at least 1 unit
   const refExp = Math.max(0, fromData.decimals - 2);
   const refAmount = 10n ** BigInt(refExp);
@@ -3629,6 +3893,163 @@ async function executeSwap() {
       return;
     }
 
+    // ---- zOrg → ZAMM ragequit: burn shares, claim ZAMM directly ----
+    if (isRagequitPath(fromToken, toToken)) {
+      swapBtn.innerHTML = `<span class="loading"></span> Preparing ragequit...`;
+      swapBtn.disabled = true;
+
+      const fromData = tokens[fromToken];
+      const amountIn = safeParseUnits(amtStr, fromData.decimals);
+      const quote = getRagequitQuote(amtStr, fromToken);
+
+      // No approval needed — ragequit burns msg.sender's shares directly
+      swapBtn.textContent = "Ragequitting...";
+      const rqTx = await wcTransaction(
+        signer.sendTransaction({
+          to: ZORG_DAO,
+          data: quote.daoCalldata,
+          value: 0n,
+        }),
+        'Confirm ragequit in your wallet'
+      );
+      swapBtn.innerHTML = `Confirming ragequit... <a href="https://etherscan.io/tx/${escAttr(rqTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+
+      const receipt = await waitForTx(rqTx);
+      if (receipt.status === 0) throw new Error("Ragequit transaction failed");
+
+      swapBtn.textContent = "Ragequit Complete!";
+      $("fromAmount").value = "";
+      $("toAmount").value = "";
+      $("quoteInfo").style.display = "none";
+      stopQuoteRefresh();
+      setTimeout(() => {
+        updateBalances();
+        swapBtn.textContent = "Enter an amount";
+        swapBtn.disabled = true;
+      }, 1500);
+      return;
+    }
+
+    // ---- zOrg → token sell: two-step (ragequit then ZAMM swap) ----
+    if (isZOrgSellPath(fromToken, toToken)) {
+      swapBtn.innerHTML = `<span class="loading"></span> Preparing sell...`;
+      swapBtn.disabled = true;
+
+      const fromSnap = fromToken, toSnap = toToken;
+      const fromData = tokens[fromSnap];
+      const amountIn = safeParseUnits(amtStr, fromData.decimals);
+      const quote = await withRetry(() => getZOrgSellQuote(amtStr, fromSnap, toSnap));
+
+      // Step 1: Ragequit (burns zOrg shares, receive ZAMM 1:1)
+      swapBtn.textContent = "Step 1/2: Ragequitting...";
+      const rqTx = await wcTransaction(
+        signer.sendTransaction({
+          to: ZORG_DAO,
+          data: quote.ragequitData,
+          value: 0n,
+        }),
+        'Step 1/2: Confirm ragequit in your wallet'
+      );
+      swapBtn.innerHTML = `Confirming ragequit... <a href="https://etherscan.io/tx/${escAttr(rqTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+      const rqReceipt = await waitForTx(rqTx);
+      if (rqReceipt.status === 0) throw new Error("Ragequit transaction failed");
+
+      // Step 2: Sell ZAMM via router (re-quote to get fresh reserves)
+      // If step 2 fails, user now holds ZAMM (ragequit already succeeded)
+      try {
+        swapBtn.textContent = "Step 2/2: Preparing swap...";
+        const zammAmtStr = ethers.formatUnits(amountIn, 18);
+        const freshQuote = await withRetry(() => getZammSellQuote(zammAmtStr, "ZAMM", toSnap));
+
+        // Handle ERC20 approval for ZAMM → router
+        let txData = freshQuote.multicall;
+        const zammAddr = ZORG_PAY_TOKEN;
+        const r = erc20Read(zammAddr);
+        let allowance = await r.allowance(connectedAddress, ZROUTER_ADDRESS);
+        cacheSetAllowance(zammAddr, connectedAddress, ZROUTER_ADDRESS, allowance);
+
+        if (allowance < amountIn) {
+          let approved = false;
+          // Try Permit2
+          let p2Allowance = cacheGetAllowance(zammAddr, connectedAddress, PERMIT2_ADDRESS);
+          if (p2Allowance == null) {
+            p2Allowance = await r.allowance(connectedAddress, PERMIT2_ADDRESS);
+            cacheSetAllowance(zammAddr, connectedAddress, PERMIT2_ADDRESS, p2Allowance);
+          }
+          if (p2Allowance >= amountIn) {
+            try {
+              swapBtn.textContent = "Sign Permit2...";
+              const permit2Data = await signPermit2(zammAddr, amountIn);
+              const innerCalls = freshQuote.calls || decodeMulticallCalls(freshQuote.multicall);
+              txData = buildPermit2Multicall(innerCalls, permit2Data);
+              approved = true;
+            } catch (p2Err) {
+              const msg = String(p2Err?.message || '');
+              if (/user rejected|user denied|user cancelled/i.test(msg)) throw p2Err;
+              txData = freshQuote.multicall;
+            }
+          }
+          if (!approved) {
+            swapBtn.textContent = "Approving ZAMM...";
+            const erc20W = new ethers.Contract(zammAddr, ["function approve(address,uint256) returns (bool)"], signer);
+            if (allowance > 0n) {
+              const resetTx = await wcTransaction(erc20W.approve(ZROUTER_ADDRESS, 0), 'Reset allowance');
+              await waitForTx(resetTx);
+            }
+            const approveTx = await wcTransaction(erc20W.approve(ZROUTER_ADDRESS, ethers.MaxUint256), 'Approve ZAMM for swap');
+            swapBtn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${escAttr(approveTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+            const rc = await waitForTx(approveTx);
+            if (rc.status === 0) throw new Error("Approval failed");
+            cacheSetAllowance(zammAddr, connectedAddress, ZROUTER_ADDRESS, ethers.MaxUint256);
+          }
+        }
+
+        swapBtn.textContent = "Step 2/2: Swapping...";
+        const swapTx = await wcTransaction(
+          signer.sendTransaction({
+            to: ZROUTER_ADDRESS,
+            data: txData,
+            value: 0n,
+          }),
+          'Step 2/2: Confirm swap in your wallet'
+        );
+        swapBtn.innerHTML = `Confirming swap... <a href="https://etherscan.io/tx/${escAttr(swapTx.hash)}" target="_blank" style="color:white;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+        const swapReceipt = await waitForTx(swapTx);
+        if (swapReceipt.status === 0) throw new Error("Swap transaction failed");
+      } catch (step2Err) {
+        // Ragequit already succeeded — user now holds ZAMM tokens
+        const s = String(step2Err?.message || '');
+        if (/user rejected|user denied|user cancelled/i.test(s)) {
+          showStatus("Ragequit succeeded. You now hold ZAMM. Swap cancelled.", "error");
+        } else {
+          showStatus("Ragequit succeeded but swap failed. You now hold ZAMM — sell it separately.", "error");
+        }
+        swapBtn.textContent = "Ragequit done, swap failed";
+        $("fromAmount").value = "";
+        $("toAmount").value = "";
+        $("quoteInfo").style.display = "none";
+        stopQuoteRefresh();
+        setTimeout(() => {
+          updateBalances();
+          swapBtn.textContent = "Enter an amount";
+          swapBtn.disabled = true;
+        }, 3000);
+        return;
+      }
+
+      swapBtn.textContent = "Sell Complete!";
+      $("fromAmount").value = "";
+      $("toAmount").value = "";
+      $("quoteInfo").style.display = "none";
+      stopQuoteRefresh();
+      setTimeout(() => {
+        updateBalances();
+        swapBtn.textContent = "Enter an amount";
+        swapBtn.disabled = true;
+      }, 1500);
+      return;
+    }
+
     swapBtn.innerHTML = `<span class="loading"></span> Getting quote...`;
     swapBtn.disabled = true;
 
@@ -3826,7 +4247,7 @@ function updateChartLink(quote) {
   // Determine pool ID: for zOrg route use ZORG_ID; otherwise standard ERC20 pool
   const fromAddr = tokens[fromToken].address;
   const toAddr = tokens[toToken].address;
-  const isZorg = !!(tokens[fromToken]._isZOrg || tokens[toToken]._isZOrg);
+  const isZorg = !!(tokens[fromToken]._isZOrg || tokens[toToken]._isZOrg || tokens[fromToken]._isZammStake || tokens[toToken]._isZammStake);
   let poolId;
   if (isZorg) {
     poolId = computeZammPoolId(ZERO_ADDRESS, ZORG_TOKEN, 0n, ZORG_ID, 100n);
@@ -3944,6 +4365,16 @@ function selectToken(symbol) {
 function setupDirectZammStake() {
   fromToken = "ZAMM";
   toToken = "zOrg";
+  updateTokenDisplay();
+  updateBalances();
+  const amt = $("fromAmount");
+  if (amt) amt.focus();
+  if (amt && amt.value) reQuoteDebounced();
+}
+
+function setupRagequit() {
+  fromToken = "zOrg";
+  toToken = "ZAMM";
   updateTokenDisplay();
   updateBalances();
   const amt = $("fromAmount");
