@@ -843,7 +843,6 @@ body.modal-open { overflow: hidden; }
   </div>
 </div>
 
-<!-- Privacy Pool Deposit toggle -->
 <div>
   <div class="receiver-toggle" onclick="togglePPSwap()">
     <span class="chevron" id="ppSwapChevron" style="font-size:9px;color:var(--fg-muted)">&#9654;</span>
@@ -932,7 +931,6 @@ body.modal-open { overflow: hidden; }
   </details>
 </div>
 
-<!-- Withdraw from Privacy Pool -->
 <div class="swap-card" style="margin-top:16px">
   <h2 style="font-size:14px;font-weight:400;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:12px">Withdraw from Privacy Pool</h2>
   <p style="font-size:12px;color:var(--fg-muted);margin-bottom:16px;line-height:1.5">Paste or upload your deposit note to withdraw. You can also manually fill in values from Etherscan logs. Check <a href="https://wenwithdraw.xyz/" target="_blank" rel="noopener">wenwithdraw.xyz</a> for optimal withdrawal timing.</p>
@@ -4581,7 +4579,6 @@ async function executeSwap() {
       }
     }
 
-    // ---- Privacy Pool deposit path ----
     if (_ppSwapEnabled && (toSnap === 'ETH' || toSnap === 'BOLD')) {
       const ppAsset = toSnap; // 'ETH' or 'BOLD'
       const ppIsBOLD = ppAsset === 'BOLD';
@@ -5084,7 +5081,6 @@ window.addEventListener("load", () => {
   }, 100);
 });
 
-// ---- Privacy Pools (0xbow) ----
 const PP_ENTRYPOINT = "0x6818809eefce719e480a7526d76bd3e561526b46";
 const PP_ENTRYPOINT_ABI = [
   "function deposit(uint256) payable returns (uint256)",
@@ -5098,7 +5094,6 @@ const PP_POOL_EVENTS = new ethers.Interface([
 ]);
 const SNARK_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-// Wallet-derived key derivation (privacypools.com compatible)
 let _ppMasterKeys = null; // { masterNullifier, masterSecret, address }
 
 async function ppDeriveWalletSeed(signer, address) {
@@ -5131,8 +5126,6 @@ async function ppDeriveWalletSeed(signer, address) {
 function ppDeriveMasterKeys(mnemonic) {
   const key1 = ethers.HDNodeWallet.fromMnemonic(mnemonic, "m/44'/60'/0'/0/0").privateKey;
   const key2 = ethers.HDNodeWallet.fromMnemonic(mnemonic, "m/44'/60'/1'/0/0").privateKey;
-  // Match SDK's bytesToNumber truncation: viem converts 32-byte key to JS Number (53-bit precision loss)
-  // then to BigInt. We must replicate this for cross-compatibility with privacypools.com.
   const masterNullifier = poseidon1([BigInt(Number(BigInt(key1)))]);
   const masterSecret = poseidon1([BigInt(Number(BigInt(key2)))]);
   return { masterNullifier, masterSecret };
@@ -5207,7 +5200,6 @@ const PP_DEPOSIT_IFACE = new ethers.Interface([
   "function deposit(address,uint256,uint256) returns (uint256)"
 ]);
 
-// Parse Privacy Pool deposit events from a tx receipt to get value, label, leafIndex, commitment
 function parsePPDepositReceipt(receipt) {
   let value, label, commitment, leafIndex, root;
   for (const log of receipt.logs) {
@@ -5619,7 +5611,6 @@ document.addEventListener("DOMContentLoaded", () => {
   renderPPNotes();
 });
 
-// ---- Privacy Pool Withdrawal ----
 const PP_POOL_ABI = [
   "function withdraw(tuple(address,bytes),tuple(uint256[2],uint256[2][2],uint256[2],uint256[8]))",
   "function SCOPE() view returns (uint256)",
@@ -6083,7 +6074,6 @@ async function ppwWithdraw() {
 
   } catch (e) {
     console.error('ppwWithdraw error:', e);
-    // L-11: Decode known Privacy Pool protocol errors for user guidance
     const errStr = String(e?.data || e?.message || e?.reason || e || '');
     const ppErrors = {
       'PrecommitmentAlreadyUsed': 'This deposit has already been used. The precommitment was already spent.',
