@@ -609,6 +609,10 @@ body.modal-open { overflow: hidden; }
   .dark-toggle { top: 18px; left: 16px; }
   .swap-card { padding: 20px 16px; }
   .quick-token { min-width: 26px; min-height: 26px; padding: 4px; }
+  /* Privacy tab mobile */
+  .pp-note-area { font-size: 10px; }
+  .pp-asset-btn { padding: 8px 6px; font-size: 12px; min-height: 40px; }
+  .pp-withdraw-input { font-size: 14px; }
 }
 @media (max-width: 380px) {
   body { padding: 70px 12px 20px; }
@@ -624,6 +628,9 @@ body.modal-open { overflow: hidden; }
   .quote-info { padding: 10px 8px; font-size: 12px; }
   .balance { font-size: 11px; gap: 4px; flex-wrap: wrap; }
   .max-btn { font-size: 9px; padding: 2px 3px; }
+  /* Privacy tab tight mobile */
+  .pp-asset-btn { padding: 6px 4px; font-size: 11px; }
+  .pp-note-area { font-size: 9px; }
 }
 
 /* Info tooltip */
@@ -869,7 +876,7 @@ body.modal-open { overflow: hidden; }
 <!-- Privacy note display (swap tab) -->
 <div id="ppSwapNoteBox" style="display:none;margin-top:16px" class="quote-info">
   <div style="font-weight:600;color:#c0392b;margin-bottom:8px">Warning: Save this note! You need it to withdraw.</div>
-  <textarea id="ppSwapNoteText" readonly rows="3" style="width:100%;font-family:monospace;font-size:11px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
+  <textarea id="ppSwapNoteText" readonly rows="3" class="pp-note-area" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
   <div style="display:flex;gap:8px;margin-top:8px">
     <button onclick="navigator.clipboard.writeText($('ppSwapNoteText').value)" class="swap-btn" style="flex:1;padding:6px">Copy</button>
     <button onclick="ppSwapDownloadNote()" class="swap-btn" style="flex:1;padding:6px">Download</button>
@@ -895,8 +902,8 @@ body.modal-open { overflow: hidden; }
   <p style="font-size:12px;color:var(--fg-muted);margin-bottom:16px;line-height:1.5">Deposit ETH or BOLD into <a href="https://privacypools.com" target="_blank">Privacy Pools</a> (0xbow). You'll receive a note &mdash; save it to withdraw privately later.</p>
 
   <div style="display:flex;gap:8px;margin-bottom:12px">
-    <button id="ppAssetETH" class="swap-btn active" style="flex:1;padding:6px;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;border:2px solid var(--btn-bg);background:var(--btn-bg);color:var(--btn-fg)" onclick="ppSelectAsset('ETH')"><span class="pp-icon-18" data-icon="ETH"></span>ETH</button>
-    <button id="ppAssetBOLD" class="swap-btn" style="flex:1;padding:6px;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;border:2px solid transparent;background:var(--surface);color:var(--fg-muted)" onclick="ppSelectAsset('BOLD')"><span class="pp-icon-18" data-icon="BOLD"></span>BOLD</button>
+    <button id="ppAssetETH" class="swap-btn pp-asset-btn active" style="flex:1;padding:6px;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;border:2px solid var(--btn-bg);background:var(--btn-bg);color:var(--btn-fg)" onclick="ppSelectAsset('ETH')"><span class="pp-icon-18" data-icon="ETH"></span>ETH</button>
+    <button id="ppAssetBOLD" class="swap-btn pp-asset-btn" style="flex:1;padding:6px;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;border:2px solid transparent;background:var(--surface);color:var(--fg-muted)" onclick="ppSelectAsset('BOLD')"><span class="pp-icon-18" data-icon="BOLD"></span>BOLD</button>
   </div>
 
   <div class="section token-section">
@@ -915,7 +922,7 @@ body.modal-open { overflow: hidden; }
 
   <div id="ppNoteBox" style="display:none;margin-top:16px" class="quote-info">
     <div style="font-weight:600;color:#c0392b;margin-bottom:8px">Warning: Save this note! You need it to withdraw.</div>
-    <textarea id="ppNote" readonly rows="3" style="width:100%;font-family:monospace;font-size:11px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
+    <textarea id="ppNote" readonly rows="3" class="pp-note-area" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
     <div style="display:flex;gap:8px;margin-top:8px">
       <button onclick="navigator.clipboard.writeText($('ppNote').value)" class="swap-btn" style="flex:1;padding:6px">Copy</button>
       <button onclick="downloadNote()" class="swap-btn" style="flex:1;padding:6px">Download</button>
@@ -937,7 +944,7 @@ body.modal-open { overflow: hidden; }
 
   <div class="section" style="margin-bottom:12px">
     <label style="margin:0;font-size:12px">Note JSON</label>
-    <textarea id="ppwNote" rows="3" placeholder='{"nullifier":"0x...","secret":"0x...",...}' style="width:100%;font-family:monospace;font-size:11px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical;margin-top:4px"></textarea>
+    <textarea id="ppwNote" rows="3" placeholder='{"nullifier":"0x...","secret":"0x...",...}' class="pp-note-area" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical;margin-top:4px"></textarea>
     <div style="display:flex;gap:8px;margin-top:6px">
       <button onclick="ppwParseNote()" class="swap-btn" style="flex:1;padding:6px;font-size:11px;margin:0">Parse Note</button>
       <button class="swap-btn" style="flex:1;padding:6px;font-size:11px;margin:0" onclick="this.querySelector('input').click()">Upload JSON<input type="file" accept=".json" onchange="ppwUploadNote(event)" style="display:none"></button>
@@ -961,7 +968,7 @@ body.modal-open { overflow: hidden; }
         </div>
         <div class="section" style="margin:0">
           <label style="margin:0;font-size:11px">Value (wei)</label>
-          <input type="text" id="ppwValue" class="amount-input" placeholder="e.g. 13108144559799548" style="font-size:12px">
+          <input type="text" id="ppwValue" class="amount-input" placeholder="Value in wei" style="font-size:12px">
         </div>
         <div class="section" style="margin:0">
           <label style="margin:0;font-size:11px">Label</label>
@@ -980,24 +987,24 @@ body.modal-open { overflow: hidden; }
 
     <div class="section" style="margin-bottom:12px">
       <label style="margin:0;font-size:11px">Withdraw Amount (wei) <span style="opacity:0.5">— leave blank for full withdrawal</span></label>
-      <input type="text" id="ppwWithdrawAmt" class="amount-input" placeholder="Full deposit amount (leave blank)" style="font-size:12px">
+      <input type="text" id="ppwWithdrawAmt" class="amount-input" placeholder="Leave blank for full withdrawal" style="font-size:12px">
     </div>
 
     <div class="section" style="margin-bottom:12px">
       <label style="margin:0;font-size:11px">Recipient Address</label>
-      <input type="text" id="ppwRecipient" class="amount-input" placeholder="0x... (defaults to connected wallet)" style="font-size:12px">
+      <input type="text" id="ppwRecipient" class="amount-input" placeholder="0x... (default: connected wallet)" style="font-size:12px">
     </div>
 
     <details style="margin-bottom:12px;font-size:12px">
       <summary style="cursor:pointer;opacity:0.6">Etherscan API Key (for fetching tree data)</summary>
       <div style="margin-top:6px">
-        <input type="text" id="ppwEtherscanKey" class="amount-input" placeholder="Paste your free key from etherscan.io/myapikey" style="font-size:11px"
+        <input type="text" id="ppwEtherscanKey" class="amount-input" placeholder="Your etherscan.io API key" style="font-size:11px"
           oninput="localStorage.setItem('pp_etherscan_key',this.value.trim())">
         <div style="font-size:10px;color:var(--fg-muted);margin-top:4px">Free to create. Stored in your browser only.</div>
       </div>
     </details>
 
-    <div id="ppwVerify" style="display:none;margin-bottom:12px;font-size:11px;padding:8px;border:1px solid var(--border-muted);background:var(--surface)">
+    <div id="ppwVerify" style="display:none;margin-bottom:12px;font-size:11px;padding:8px;border:1px solid var(--border-muted);background:var(--surface);overflow-x:auto;word-break:break-word">
       <div id="ppwVerifyStatus"></div>
     </div>
 
@@ -1005,7 +1012,7 @@ body.modal-open { overflow: hidden; }
 
     <div id="ppwResult" style="display:none;margin-top:12px" class="quote-info">
       <div style="font-size:11px;font-weight:600;margin-bottom:6px">Withdrawal Data</div>
-      <textarea id="ppwResultText" readonly rows="6" style="width:100%;font-family:monospace;font-size:10px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
+      <textarea id="ppwResultText" readonly rows="6" class="pp-note-area" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:10px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
     </div>
   </div>
 </div>
@@ -4621,7 +4628,7 @@ async function executeSwap() {
       swapBtn.textContent = "Deriving keys...";
       const { masterNullifier, masterSecret } = await ppEnsureMasterKeys();
       const _ppScope = ppComputeScope(ppAsset);
-      const _ppDepositIdx = ppGetDepositIndex(connectedAddress, _ppScope);
+      const _ppDepositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, _ppScope, ppGetDepositIndex(connectedAddress, _ppScope));
       const { nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, _ppScope, _ppDepositIdx);
 
       // Build multicall: [permit?] + swap calls + execute(PP deposit) + sweep excess
@@ -4962,6 +4969,13 @@ function selectToken(symbol) {
   if (currentModal === "from") {
     if (symbol === toToken) toToken = fromToken;
     fromToken = symbol;
+    // If PP swap is on and new from matches PP deposit asset, flip to the other
+    if (_ppSwapEnabled && (fromToken === 'ETH' || fromToken === 'BOLD') && fromToken === _ppSelectedAsset) {
+      const alt = fromToken === 'ETH' ? 'BOLD' : 'ETH';
+      _ppSelectedAsset = alt;
+      toToken = alt;
+      ppSyncAssetUI(alt);
+    }
   } else {
     if (_ppSwapEnabled) { closeTokenModal(); showStatus(`Output locked to ${_ppSelectedAsset} for Privacy Pool deposit`, "error"); return; }
     if (symbol === fromToken) fromToken = toToken;
@@ -5105,7 +5119,8 @@ const PP_ENTRYPOINT_ABI = [
   "function deposit(uint256) payable returns (uint256)",
   "function deposit(address,uint256,uint256) returns (uint256)",
   "function assetConfig(address) view returns (address pool, uint256 minimumDepositAmount, uint256 vettingFeeBPS, uint256 maxRelayFeeBPS)",
-  "function latestRoot() view returns (uint256)"
+  "function latestRoot() view returns (uint256)",
+  "function precommitments(uint256) view returns (bool)"
 ];
 const PP_POOL_EVENTS = new ethers.Interface([
   "event Deposited(address indexed _depositor, uint256 _commitment, uint256 _label, uint256 _value, uint256 _precommitmentHash)",
@@ -5155,6 +5170,19 @@ function ppDeriveDepositKeys(masterNullifier, masterSecret, scope, index) {
   const secret = poseidon3([masterSecret, scope, BigInt(index)]);
   const precommitment = poseidon2([nullifier, secret]);
   return { nullifier, secret, precommitment };
+}
+
+async function ppFindUnusedDepositIndex(masterNullifier, masterSecret, scope, startIndex) {
+  const rpc = await quoteRPC.call(r => r);
+  const ep = new ethers.Contract(PP_ENTRYPOINT, PP_ENTRYPOINT_ABI, rpc);
+  let idx = startIndex;
+  for (let i = 0; i < 20; i++) {
+    const keys = ppDeriveDepositKeys(masterNullifier, masterSecret, scope, idx);
+    const used = await ep.precommitments(keys.precommitment);
+    if (!used) return idx;
+    idx++;
+  }
+  throw new Error('Could not find unused deposit index after 20 attempts');
 }
 
 // H-4: Label-based withdrawal key derivation (SDK-compatible for change commitments)
@@ -5259,10 +5287,26 @@ function ppSyncAssetUI(asset) {
   const ethBtn = $('ppAssetETH'), boldBtn = $('ppAssetBOLD');
   if (ethBtn) { ethBtn.style.background = asset === 'ETH' ? 'var(--btn-bg)' : 'var(--surface)'; ethBtn.style.color = asset === 'ETH' ? 'var(--btn-fg)' : 'var(--fg-muted)'; ethBtn.style.borderColor = asset === 'ETH' ? 'var(--btn-bg)' : 'transparent'; }
   if (boldBtn) { boldBtn.style.background = asset === 'BOLD' ? 'var(--btn-bg)' : 'var(--surface)'; boldBtn.style.color = asset === 'BOLD' ? 'var(--btn-fg)' : 'var(--fg-muted)'; boldBtn.style.borderColor = asset === 'BOLD' ? 'var(--btn-bg)' : 'transparent'; }
-  // Swap tab buttons
+  // Swap tab buttons — disable the one matching fromToken (same-token swap+deposit is just a direct deposit)
   const sEth = $('ppSwapAssetETH'), sBold = $('ppSwapAssetBOLD');
-  if (sEth) { sEth.style.background = asset === 'ETH' ? 'var(--btn-bg)' : 'var(--surface)'; sEth.style.color = asset === 'ETH' ? 'var(--btn-fg)' : 'var(--fg-muted)'; sEth.style.borderColor = asset === 'ETH' ? 'var(--btn-bg)' : 'transparent'; }
-  if (sBold) { sBold.style.background = asset === 'BOLD' ? 'var(--btn-bg)' : 'var(--surface)'; sBold.style.color = asset === 'BOLD' ? 'var(--btn-fg)' : 'var(--fg-muted)'; sBold.style.borderColor = asset === 'BOLD' ? 'var(--btn-bg)' : 'transparent'; }
+  const ethDisabled = fromToken === 'ETH';
+  const boldDisabled = fromToken === 'BOLD';
+  if (sEth) {
+    sEth.disabled = ethDisabled;
+    sEth.style.background = asset === 'ETH' ? 'var(--btn-bg)' : 'var(--surface)';
+    sEth.style.color = ethDisabled ? 'var(--fg-dim)' : (asset === 'ETH' ? 'var(--btn-fg)' : 'var(--fg-muted)');
+    sEth.style.borderColor = asset === 'ETH' ? 'var(--btn-bg)' : 'transparent';
+    sEth.style.opacity = ethDisabled ? '0.4' : '1';
+    sEth.style.cursor = ethDisabled ? 'not-allowed' : 'pointer';
+  }
+  if (sBold) {
+    sBold.disabled = boldDisabled;
+    sBold.style.background = asset === 'BOLD' ? 'var(--btn-bg)' : 'var(--surface)';
+    sBold.style.color = boldDisabled ? 'var(--fg-dim)' : (asset === 'BOLD' ? 'var(--btn-fg)' : 'var(--fg-muted)');
+    sBold.style.borderColor = asset === 'BOLD' ? 'var(--btn-bg)' : 'transparent';
+    sBold.style.opacity = boldDisabled ? '0.4' : '1';
+    sBold.style.cursor = boldDisabled ? 'not-allowed' : 'pointer';
+  }
   setText('ppAmountLabel', `Amount (${asset})`);
   setText('ppMinUnit', asset);
 }
@@ -5280,6 +5324,7 @@ function ppSelectAsset(asset) {
 }
 
 function ppSwapSelectAsset(asset) {
+  if (asset === fromToken) return;
   _ppSelectedAsset = asset;
   ppSyncAssetUI(asset);
   if (toToken !== asset) { toToken = asset; updateTokenDisplay(); }
@@ -5299,13 +5344,14 @@ function onPPSwapToggle() {
   _ppSwapEnabled = $('ppSwapToggle').checked;
   setShown('ppSwapAssetWrap', _ppSwapEnabled);
   if (_ppSwapEnabled) {
-    // If output is already a supported PP asset, keep it; otherwise use current selection
+    // Pick a PP deposit asset that differs from fromToken
     let target;
     if (toToken === 'ETH' || toToken === 'BOLD') {
       target = toToken;
     } else {
       target = _ppSelectedAsset;
     }
+    if (target === fromToken) target = (fromToken === 'ETH') ? 'BOLD' : 'ETH';
     _ppSelectedAsset = target;
     ppSyncAssetUI(target);
     if (toToken !== target) { _ppSavedToToken = toToken; toToken = target; updateTokenDisplay(); }
@@ -5452,7 +5498,7 @@ async function ppDeposit() {
 
     const { masterNullifier, masterSecret } = await ppEnsureMasterKeys();
     const scope = ppComputeScope(_ppSelectedAsset);
-    const depositIdx = ppGetDepositIndex(connectedAddress, scope);
+    const depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, scope, ppGetDepositIndex(connectedAddress, scope));
     const { nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, scope, depositIdx);
 
     let tx;
