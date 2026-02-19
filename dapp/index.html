@@ -4597,10 +4597,12 @@ async function executeSwap() {
         );
       }));
 
-      // minOut already includes slippage from buildBestSwapViaETHMulticall — use directly
-      const depositAmount = ppQuote.a.amountOut > 0n
+      // R-1: Use slippage-safe minimum, not raw quoted output.
+      // On-chain swap enforces SlippageLib.limit() independently; actual output may be lower than quoted.
+      const _rawOut = ppQuote.a.amountOut > 0n
         ? (ppQuote.b.amountOut > 0n ? ppQuote.b.amountOut : ppQuote.a.amountOut)
         : quote.expectedOutput;
+      const depositAmount = _rawOut * (10000n - BigInt(slippageBps)) / 10000n;
 
       if (ppCfg && depositAmount < ppCfg.minimumDepositAmount) {
         showStatus(`Output below PP minimum deposit of ${ethers.formatEther(ppCfg.minimumDepositAmount)} ${ppAsset}`, "error");
@@ -4617,6 +4619,14 @@ async function executeSwap() {
       const swapCalls = ppQuote.calls ? Array.from(ppQuote.calls) : decodeMulticallCalls(ppQuote.multicall);
       let depositCalldata, executeCall, sweepCalls;
       if (ppIsBOLD) {
+        // R-3: Preflight check — router must have BOLD allowance to PP entrypoint
+        const rpcPF = await quoteRPC.call(r => r);
+        const boldPF = new ethers.Contract(BOLD_ADDRESS, ['function allowance(address,address) view returns (uint256)'], rpcPF);
+        const routerToEPAllow = await boldPF.allowance(ZROUTER_ADDRESS, PP_ENTRYPOINT);
+        if (routerToEPAllow < depositAmount) {
+          showStatus('Router lacks BOLD allowance to Privacy Pool entrypoint. Contact the zFi team to configure router approval.', 'error');
+          return;
+        }
         // ERC20 deposit: deposit(address asset, uint256 value, uint256 precommitment), value=0 (no ETH)
         depositCalldata = PP_DEPOSIT_IFACE.encodeFunctionData('deposit(address,uint256,uint256)', [BOLD_ADDRESS, depositAmount, precommitment]);
         executeCall = ROUTER_IFACE.encodeFunctionData('execute', [PP_ENTRYPOINT, 0, depositCalldata]);
@@ -5527,7 +5537,18 @@ async function ppDeposit() {
     }
     updatePPBalance();
   } catch (e) {
-    handleError(e);
+    console.error('ppDeposit error:', e);
+    const errStr = String(e?.data || e?.message || e?.reason || e || '');
+    const ppDepositErrors = {
+      'PrecommitmentAlreadyUsed': 'This precommitment has already been used. Try a new deposit.',
+      'InsufficientAllowance': 'Insufficient token allowance. Please approve spending first.',
+      'InsufficientBalance': 'Insufficient balance for this deposit amount.',
+    };
+    let decoded = false;
+    for (const [key, msg] of Object.entries(ppDepositErrors)) {
+      if (errStr.includes(key)) { showStatus(msg, 'error'); decoded = true; break; }
+    }
+    if (!decoded) handleError(e);
   } finally {
     updatePPButton();
   }
@@ -5665,7 +5686,12 @@ function ppwParseNote() {
   const secret = BigInt(note.secret);
   const precommitment = poseidon2([nullifier, secret]);
 
-  const noteAsset = (note.asset && note.asset !== 'ETH') ? note.asset : 'ETH';
+  // R-6: Normalize and validate asset to canonical ETH/BOLD
+  const rawAsset = (note.asset || 'ETH').toUpperCase().trim();
+  const noteAsset = (rawAsset === 'BOLD') ? 'BOLD' : 'ETH';
+  if (note.asset && rawAsset !== 'ETH' && rawAsset !== 'BOLD') {
+    showStatus('Unrecognized note asset "' + escText(note.asset) + '", defaulting to ETH.', 'error');
+  }
   _ppwNote = { nullifier, secret, precommitment, asset: noteAsset };
 
   setText('ppwNullifier', note.nullifier);
@@ -5872,12 +5898,16 @@ async function ppwWithdraw() {
       const poolRO = new ethers.Contract(poolAddress, PP_POOL_ABI, rpc);
       const onChainStateRoot = await poolRO.currentRoot();
       if (stateTree.root !== onChainStateRoot) {
-        showStatus('State tree root mismatch: local 0x' + stateTree.root.toString(16).slice(0, 16) + '... vs on-chain 0x' + onChainStateRoot.toString(16).slice(0, 16) + '... — leaf data may be stale or incomplete. Retry in a few minutes.', 'error');
-        return;
+        // R-4: Protocol accepts a window of recent roots, not only currentRoot().
+        // Warn but allow proceed — the on-chain verifier will reject if truly invalid.
+        log('<b>Warning:</b> State tree root differs from on-chain currentRoot (local 0x' + stateTree.root.toString(16).slice(0, 16) + '... vs on-chain 0x' + onChainStateRoot.toString(16).slice(0, 16) + '...). This may still be accepted if within the recent root window.');
+        showStatus('State root differs from latest on-chain root. Proceeding — withdrawal may still succeed if root is within accepted window. If it fails, retry in a few minutes.', 'error');
+      } else {
+        log('State root verified against on-chain pool.currentRoot().');
       }
-      log('State root verified against on-chain pool.currentRoot().');
     } catch (stateRootErr) {
       log('<b>Warning:</b> Could not verify state root on-chain (' + escText(stateRootErr.message) + '). Proceeding — tx may revert if state is stale.');
+      showStatus('Could not verify state root on-chain (RPC issue). Withdrawal will proceed but may revert. Consider retrying if it fails.', 'error');
     }
 
     // Find our label in ASP leaves
@@ -5906,6 +5936,7 @@ async function ppwWithdraw() {
       log('ASP root verified against on-chain.');
     } catch (aspRootErr) {
       log('<b>Warning:</b> Could not verify ASP root on-chain (' + escText(aspRootErr.message) + '). Proceeding — tx may revert if root is stale.');
+      showStatus('Could not verify ASP root on-chain (RPC issue). Withdrawal will proceed but may revert. Consider retrying if it fails.', 'error');
     }
 
     // Prepare circuit inputs
