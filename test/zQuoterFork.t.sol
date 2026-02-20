@@ -205,7 +205,9 @@ contract zQuoterForkTest is Test {
 
     function test_quoteLido_exactOut_stETH() public {
         (uint256 amountIn, uint256 amountOut) = quoter.quoteLido(true, STETH, 1e18);
-        assertEq(amountIn, 1e18, "stETH exact-out should be 1:1");
+        // stETH submit may return 1 wei more due to share rounding
+        assertGe(amountIn, 1e18, "stETH exact-out: amountIn >= 1e18");
+        assertLe(amountIn, 1e18 + 2, "stETH exact-out: amountIn ~= 1e18");
         assertEq(amountOut, 1e18);
     }
 
