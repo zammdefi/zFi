@@ -95,8 +95,33 @@ contract zQuoter {
         returns (Quote memory best)
     {
         // 1. Base quoter: V2/Sushi/ZAMM/V3/V4
-        (best,) = getQuotes(exactOut, tokenIn, tokenOut, amount);
+        Quote[] memory allQ;
+        (best, allQ) = getQuotes(exactOut, tokenIn, tokenOut, amount);
         if (best.source == AMM.WETH_WRAP) best = Quote(AMM.UNI_V2, 0, 0, 0);
+
+        // Sanity: reject exact-out quotes that are >5x cheaper than the next-best.
+        // Catches bogus results from low-liquidity V3/V4 pools whose on-chain math
+        // doesn't revert but returns garbage (e.g. DAI/WETH 1bp pool).
+        if (exactOut && best.amountIn > 0 && allQ.length >= 2) {
+            uint256 secondBest = type(uint256).max;
+            for (uint256 i; i < allQ.length; ++i) {
+                uint256 ai = allQ[i].amountIn;
+                if (ai > 0 && ai > best.amountIn && ai < secondBest) secondBest = ai;
+            }
+            if (secondBest != type(uint256).max && best.amountIn * 5 < secondBest) {
+                // Best is an outlier — pick the cheapest non-outlier from the array
+                best = Quote(AMM.UNI_V2, 0, 0, 0);
+                for (uint256 i; i < allQ.length; ++i) {
+                    uint256 ai = allQ[i].amountIn;
+                    if (
+                        ai >= secondBest / 2
+                            && _isBetter(exactOut, ai, allQ[i].amountOut, best.amountIn, best.amountOut)
+                    ) {
+                        best = allQ[i];
+                    }
+                }
+            }
+        }
 
         // 2. Curve (unbuildable cases already filtered inside quoteCurve)
         {
@@ -134,6 +159,14 @@ contract zQuoter {
 
     function _sweepTo(address token, address to) internal pure returns (bytes memory) {
         return abi.encodeWithSelector(IRouterExt.sweep.selector, token, uint256(0), uint256(0), to);
+    }
+
+    function _mc(bytes[] memory c) internal pure returns (bytes memory) {
+        return _mc(c);
+    }
+
+    function _i8(int128 x) internal pure returns (uint8) {
+        return uint8(uint256(int256(x)));
     }
 
     function _isBetter(bool exactOut, uint256 newIn, uint256 newOut, uint256 bestIn, uint256 bestOut)
@@ -266,8 +299,8 @@ contract zQuoter {
             if (!ok) continue;
 
             // Skip unbuildable exactOut stable-underlying when both indices are base coins
-            uint8 ci_ = uint8(uint256(int256(i)));
-            uint8 cj_ = uint8(uint256(int256(j)));
+            uint8 ci_ = _i8(i);
+            uint8 cj_ = _i8(j);
             if (exactOut && isStable && (underlying && isStable) && ci_ > 0 && cj_ > 0) continue;
 
             if (exactOut) {
@@ -277,8 +310,8 @@ contract zQuoter {
                     acc.bestPool = pool;
                     acc.usedUnderlying = (underlying && isStable);
                     acc.usedStable = isStable;
-                    acc.iIdx = uint8(uint256(int256(i)));
-                    acc.jIdx = uint8(uint256(int256(j)));
+                    acc.iIdx = ci_;
+                    acc.jIdx = cj_;
                 }
             } else {
                 if (qOut > acc.bestOut) {
@@ -287,8 +320,8 @@ contract zQuoter {
                     acc.bestPool = pool;
                     acc.usedUnderlying = (underlying && isStable);
                     acc.usedStable = isStable;
-                    acc.iIdx = uint8(uint256(int256(i)));
-                    acc.jIdx = uint8(uint256(int256(j)));
+                    acc.iIdx = ci_;
+                    acc.jIdx = cj_;
                 }
             }
         }
@@ -492,7 +525,7 @@ contract zQuoter {
                     bytes[] memory c = new bytes[](2);
                     c[0] = abi.encodeWithSelector(IRouterExt.wrap.selector, swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, uint256(0), swapAmount, to);
-                    callData = abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+                    callData = _mc(c);
                 }
             } else {
                 // WETH -> ETH
@@ -501,13 +534,13 @@ contract zQuoter {
                     bytes[] memory c = new bytes[](2);
                     c[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
-                    callData = abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+                    callData = _mc(c);
                 } else {
                     bytes[] memory c = new bytes[](3);
                     c[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
                     c[2] = abi.encodeWithSelector(IRouterExt.sweep.selector, address(0), uint256(0), swapAmount, to);
-                    callData = abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+                    callData = _mc(c);
                 }
             }
             return (best, callData, amountLimit, msgValue);
@@ -617,7 +650,7 @@ contract zQuoter {
                     msgValue = 0;
                 }
 
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+                multicall = _mc(calls);
                 return (a, b, calls, multicall, msgValue);
             }
 
@@ -654,7 +687,7 @@ contract zQuoter {
                     a = best;
                     b = Quote(AMM.UNI_V2, 0, 0, 0);
                     msgValue = val;
-                    multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+                    multicall = _mc(calls);
                     return (a, b, calls, multicall, msgValue);
                 }
             }
@@ -793,7 +826,7 @@ contract zQuoter {
                 msgValue = ethInput ? SlippageLib.limit(true, plan.a.amountIn, slippageBps) : 0;
             }
 
-            multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+            multicall = _mc(calls);
             return (a, b, calls, multicall, msgValue);
         }
     }
@@ -970,7 +1003,7 @@ contract zQuoter {
 
             b = r.b;
             c = r.c;
-            multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+            multicall = _mc(calls);
         }
     }
 
@@ -1129,7 +1162,7 @@ contract zQuoter {
                     buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
                 bytes[] memory calls_ = new bytes[](1);
                 calls_[0] = cd;
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+                multicall = _mc(calls_);
                 msgValue = mv;
             } else if (bestSplitIdx == 7) {
                 // 100% 2-hop wins
@@ -1153,7 +1186,7 @@ contract zQuoter {
                 bytes[] memory calls_ = new bytes[](2);
                 calls_[0] = cd1;
                 calls_[1] = cd2;
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+                multicall = _mc(calls_);
                 msgValue = mv;
             } else {
                 // True hybrid split
@@ -1216,7 +1249,7 @@ contract zQuoter {
                     calls_[ci++] = _sweepTo(address(0), to);
                 }
 
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+                multicall = _mc(calls_);
                 msgValue = ethIn ? swapAmount : 0;
             }
         }
@@ -1501,7 +1534,7 @@ contract zQuoter {
                 calls_[ci++] = _sweepTo(address(0), to);
             }
 
-            multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+            multicall = _mc(calls_);
             msgValue = ethIn ? swapAmount : 0;
         }
     }

@@ -1075,7 +1075,7 @@ document.addEventListener('click', () => document.querySelectorAll('.info-tip.op
 
 // ---- Constants ----
 const CHAIN_ID = 1;
-const ZQUOTER_ADDRESS = "0x806f7b66e31b6f61bfda9d1431d07865c3164ba5";
+const ZQUOTER_ADDRESS = "0x54035D3f99A3CEB1DE1d6FcF308d9D38F8b598A1";
 const ZROUTER_ADDRESS = "0x000000000000FB114709235f1ccBFfb925F600e4";
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
@@ -1523,7 +1523,7 @@ async function connectWithWallet(walletKey) {
     updateBalances();
     updateWcBanner();
 
-    const preAmt = $('fromAmount')?.value?.trim();
+    const preAmt = _inputMode === 'exactOut' ? $('toAmount')?.value?.trim() : $('fromAmount')?.value?.trim();
     if (preAmt) handleAmountChange();
 
     // Update Privacy tab if visible
@@ -5211,7 +5211,7 @@ function computeZammPoolId(addr0, addr1, id0, id1, fee) {
 }
 
 const COINGECKO_SLUGS = {
-  ETH: "ethereum", WETH: "weth", BOLD: "bold-stablecoin", LUSD: "liquity-usd",
+  ETH: "ethereum", WETH: "weth", BOLD: "liquity-bold", LUSD: "liquity-usd",
   DAI: "dai", USDC: "usdc", USDT: "tether", WBTC: "wrapped-bitcoin",
   stETH: "lido-staked-ether", wstETH: "wrapped-steth", rETH: "rocket-pool-eth",
   PNKSTR: "kleros",
@@ -5267,7 +5267,7 @@ function renderQuickTokens() {
       toToken = sym;
       updateTokenDisplay();
       updateBalances();
-      const amt = $("fromAmount");
+      const amt = _inputMode === 'exactOut' ? $("toAmount") : $("fromAmount");
       if (amt && amt.value) reQuoteDebounced();
     };
     el.appendChild(btn);
