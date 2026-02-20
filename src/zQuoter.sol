@@ -35,7 +35,23 @@ contract zQuoter {
         view
         returns (Quote memory best, Quote[] memory quotes)
     {
-        return ZQUOTER_BASE.getQuotes(exactOut, tokenIn, tokenOut, swapAmount);
+        (best, quotes) = ZQUOTER_BASE.getQuotes(exactOut, tokenIn, tokenOut, swapAmount);
+        // Sanity: reject exact-out best that is >5x cheaper than V2.
+        // Catches bogus results from low-liquidity pools (e.g. DAI/WETH V3 1bp).
+        if (exactOut && best.amountIn > 0) {
+            (uint256 v2In,) = quoteV2(true, tokenIn, tokenOut, swapAmount, false);
+            if (v2In > 0 && best.amountIn * 5 < v2In) {
+                // Also neuter bogus entries in the quotes array so split routing
+                // doesn't pick them up as candidates.
+                for (uint256 i; i < quotes.length; ++i) {
+                    if (quotes[i].amountIn > 0 && quotes[i].amountIn * 5 < v2In) {
+                        quotes[i].amountIn = 0;
+                        quotes[i].amountOut = 0;
+                    }
+                }
+                best = Quote(AMM.UNI_V2, 30, v2In, swapAmount);
+            }
+        }
     }
 
     function quoteV2(bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, bool sushi)
@@ -94,7 +110,7 @@ contract zQuoter {
         view
         returns (Quote memory best)
     {
-        // 1. Base quoter: V2/Sushi/ZAMM/V3/V4
+        // 1. Base quoter: V2/Sushi/ZAMM/V3/V4 (getQuotes already filters exact-out outliers)
         (best,) = getQuotes(exactOut, tokenIn, tokenOut, amount);
         if (best.source == AMM.WETH_WRAP) best = Quote(AMM.UNI_V2, 0, 0, 0);
 
@@ -136,12 +152,20 @@ contract zQuoter {
         return abi.encodeWithSelector(IRouterExt.sweep.selector, token, uint256(0), uint256(0), to);
     }
 
+    function _mc(bytes[] memory c) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+    }
+
+    function _i8(int128 x) internal pure returns (uint8) {
+        return uint8(uint256(int256(x)));
+    }
+
     function _isBetter(bool exactOut, uint256 newIn, uint256 newOut, uint256 bestIn, uint256 bestOut)
         internal
         pure
         returns (bool)
     {
-        return exactOut ? (newIn < bestIn || bestIn == 0) : (newOut > bestOut);
+        return exactOut ? (newIn > 0 && (newIn < bestIn || bestIn == 0)) : (newOut > bestOut);
     }
 
     // ** CURVE
@@ -266,9 +290,9 @@ contract zQuoter {
             if (!ok) continue;
 
             // Skip unbuildable exactOut stable-underlying when both indices are base coins
-            uint8 ci_ = uint8(uint256(int256(i)));
-            uint8 cj_ = uint8(uint256(int256(j)));
-            if (exactOut && isStable && (underlying && isStable) && ci_ > 0 && cj_ > 0) continue;
+            uint8 ci_ = _i8(i);
+            uint8 cj_ = _i8(j);
+            if (exactOut && underlying && isStable && ci_ > 0 && cj_ > 0) continue;
 
             if (exactOut) {
                 if (qIn < acc.bestIn) {
@@ -277,8 +301,8 @@ contract zQuoter {
                     acc.bestPool = pool;
                     acc.usedUnderlying = (underlying && isStable);
                     acc.usedStable = isStable;
-                    acc.iIdx = uint8(uint256(int256(i)));
-                    acc.jIdx = uint8(uint256(int256(j)));
+                    acc.iIdx = ci_;
+                    acc.jIdx = cj_;
                 }
             } else {
                 if (qOut > acc.bestOut) {
@@ -287,8 +311,8 @@ contract zQuoter {
                     acc.bestPool = pool;
                     acc.usedUnderlying = (underlying && isStable);
                     acc.usedStable = isStable;
-                    acc.iIdx = uint8(uint256(int256(i)));
-                    acc.jIdx = uint8(uint256(int256(j)));
+                    acc.iIdx = ci_;
+                    acc.jIdx = cj_;
                 }
             }
         }
@@ -423,8 +447,18 @@ contract zQuoter {
         if (totalShares == 0 || totalPooled == 0) return (0, 0);
 
         if (tokenOut == STETH) {
-            // ETH → stETH is 1:1
-            return (swapAmount, swapAmount);
+            if (!exactOut) {
+                // ETH → stETH is 1:1
+                return (swapAmount, swapAmount);
+            } else {
+                // Match router's ethToExactSTETH double-ceil math:
+                // sharesNeeded = ceil(exactOut * totalShares / totalPooled)
+                // ethIn        = ceil(sharesNeeded * totalPooled / totalShares)
+                uint256 sharesNeeded = (swapAmount * totalShares + totalPooled - 1) / totalPooled;
+                uint256 ethIn = (sharesNeeded * totalPooled + totalShares - 1) / totalShares;
+                if (ethIn == 0) return (0, 0);
+                return (ethIn, swapAmount);
+            }
         } else if (tokenOut == WSTETH) {
             if (!exactOut) {
                 // exactIn: swapAmount ETH → stETH (1:1) → wstETH
@@ -492,7 +526,7 @@ contract zQuoter {
                     bytes[] memory c = new bytes[](2);
                     c[0] = abi.encodeWithSelector(IRouterExt.wrap.selector, swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, uint256(0), swapAmount, to);
-                    callData = abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+                    callData = _mc(c);
                 }
             } else {
                 // WETH -> ETH
@@ -501,13 +535,13 @@ contract zQuoter {
                     bytes[] memory c = new bytes[](2);
                     c[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
-                    callData = abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+                    callData = _mc(c);
                 } else {
                     bytes[] memory c = new bytes[](3);
                     c[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
                     c[2] = abi.encodeWithSelector(IRouterExt.sweep.selector, address(0), uint256(0), swapAmount, to);
-                    callData = abi.encodeWithSelector(IRouterExt.multicall.selector, c);
+                    callData = _mc(c);
                 }
             }
             return (best, callData, amountLimit, msgValue);
@@ -516,7 +550,7 @@ contract zQuoter {
         // ---------- Normal path ----------
         // Single unified quote across all sources (V2/Sushi/V3/V4/ZAMM/Curve/Lido)
         best = _quoteBestSingleHop(exactOut, tokenIn, tokenOut, swapAmount);
-        if (best.amountIn == 0 && best.amountOut == 0) revert NoRoute();
+        if (exactOut ? best.amountIn == 0 : best.amountOut == 0) revert NoRoute();
 
         uint256 quoted = exactOut ? best.amountIn : best.amountOut;
         amountLimit = SlippageLib.limit(exactOut, quoted, slippageBps);
@@ -617,7 +651,7 @@ contract zQuoter {
                     msgValue = 0;
                 }
 
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+                multicall = _mc(calls);
                 return (a, b, calls, multicall, msgValue);
             }
 
@@ -654,7 +688,7 @@ contract zQuoter {
                     a = best;
                     b = Quote(AMM.UNI_V2, 0, 0, 0);
                     msgValue = val;
-                    multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+                    multicall = _mc(calls);
                     return (a, b, calls, multicall, msgValue);
                 }
             }
@@ -793,7 +827,7 @@ contract zQuoter {
                 msgValue = ethInput ? SlippageLib.limit(true, plan.a.amountIn, slippageBps) : 0;
             }
 
-            multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+            multicall = _mc(calls);
             return (a, b, calls, multicall, msgValue);
         }
     }
@@ -970,7 +1004,7 @@ contract zQuoter {
 
             b = r.b;
             c = r.c;
-            multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls);
+            multicall = _mc(calls);
         }
     }
 
@@ -1129,7 +1163,7 @@ contract zQuoter {
                     buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
                 bytes[] memory calls_ = new bytes[](1);
                 calls_[0] = cd;
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+                multicall = _mc(calls_);
                 msgValue = mv;
             } else if (bestSplitIdx == 7) {
                 // 100% 2-hop wins
@@ -1153,7 +1187,7 @@ contract zQuoter {
                 bytes[] memory calls_ = new bytes[](2);
                 calls_[0] = cd1;
                 calls_[1] = cd2;
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+                multicall = _mc(calls_);
                 msgValue = mv;
             } else {
                 // True hybrid split
@@ -1216,7 +1250,7 @@ contract zQuoter {
                     calls_[ci++] = _sweepTo(address(0), to);
                 }
 
-                multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+                multicall = _mc(calls_);
                 msgValue = ethIn ? swapAmount : 0;
             }
         }
@@ -1501,7 +1535,7 @@ contract zQuoter {
                 calls_[ci++] = _sweepTo(address(0), to);
             }
 
-            multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, calls_);
+            multicall = _mc(calls_);
             msgValue = ethIn ? swapAmount : 0;
         }
     }
