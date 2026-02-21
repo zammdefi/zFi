@@ -740,13 +740,22 @@ async function renderGallery() {
       return;
     }
 
+    // Exclude test coins
+    const EXCLUDED_COINS = new Set([
+      '0xd77F85a19D242391CeEf95e2D7fe35E251593f28',
+      '0x816f6f801a525eef715BF015704C2672A0abf018',
+      '0x729B47e8e4fBE54268E70a169398E7a5DCA579d1',
+      '0xC455Dc876E1cF371cFf6ef5af85dA7675E3d2281'
+    ].map(a => a.toLowerCase()));
+    const filtered = daicos.filter(d => !EXCLUDED_COINS.has(d.dao.toLowerCase()));
+
     // Fetch metadata for all coins in parallel
-    const metadataPromises = daicos.map(d => fetchMetadata(d.meta.contractURI));
+    const metadataPromises = filtered.map(d => fetchMetadata(d.meta.contractURI));
     const allMetadata = await Promise.all(metadataPromises);
 
     let grid = '';
-    for (let i = 0; i < daicos.length; i++) {
-      const d = daicos[i];
+    for (let i = 0; i < filtered.length; i++) {
+      const d = filtered[i];
       const md = allMetadata[i];
       const sale = d.sales && d.sales.length > 0 ? d.sales[0] : null;
 
@@ -783,7 +792,7 @@ async function renderGallery() {
 
     app.innerHTML = `
       <div class="header">
-        <h1>Coins <span style="font-weight:400;color:var(--fg-muted)">(${daicos.length})</span></h1>
+        <h1>Coins <span style="font-weight:400;color:var(--fg-muted)">(${filtered.length})</span></h1>
         <div><a href="../#coin" class="nav-link">Launch</a><span class="nav-sep">&middot;</span><a href="../" class="nav-link">Swap</a><span class="nav-sep">&middot;</span><a href="../dao/" class="nav-link">DAO</a></div>
       </div>
       <input type="text" class="coin-search" id="coinSearch" placeholder="Search by name, symbol, or address..." oninput="filterCoins()">
