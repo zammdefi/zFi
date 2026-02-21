@@ -7132,9 +7132,11 @@ function switchTab(tab) {
   $('sendTab').style.display = tab === 'send' ? '' : 'none';
   // Update hash for deeplink persistence (strip unrelated query params)
   if (tab === 'swap') {
+    document.title = 'SWAP';
     if (window.location.hash === '#privacy' || window.location.hash === '#coin' || window.location.hash === '#send') history.replaceState(null, '', window.location.pathname + window.location.search);
     syncSwapURL();
   } else if (tab === 'privacy') {
+    document.title = 'PRIVACY';
     history.replaceState(null, '', window.location.pathname + '#privacy');
     syncPrivacyURL();
     loadPPConfig();
@@ -7143,8 +7145,10 @@ function switchTab(tab) {
     updatePPButton();
   } else if (tab === 'coin') {
     history.replaceState(null, '', window.location.pathname + '#coin');
+    document.title = 'COIN';
     coinUpdatePreview();
   } else if (tab === 'send') {
+    document.title = 'SEND';
     sendUpdateTokenDisplay();
     sendUpdateBalance();
     sendLoadTimelocks();
