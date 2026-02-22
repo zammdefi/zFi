@@ -9569,10 +9569,10 @@ body.modal-open { overflow: hidden; }
           </div>
           <div style="margin-bottom: 0.75rem;">
             <label style="display: block; font-size: 0.75rem; color: var(--fg-dim); margin-bottom: 0.35rem;">New Proposal TTL</label>
-            <div style="display: flex; gap: 0.5rem;">
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
               <input type="number" id="ttlValue" placeholder="${defaultValue}" value="${defaultValue}"
-                     style="flex: 1; padding: 0.6rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.95rem;" />
-              <select id="ttlUnit" style="padding: 0.6rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.95rem;">
+                     style="flex: 1; min-width: 0; padding: 0.5rem 0.6rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.95rem; box-sizing: border-box;" />
+              <select id="ttlUnit" style="flex-shrink: 0; width: 100px; padding: 0.5rem 0.4rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.85rem; box-sizing: border-box;">
                 <option value="86400" ${defaultUnit === '86400' ? 'selected' : ''}>Days</option>
                 <option value="3600" ${defaultUnit === '3600' ? 'selected' : ''}>Hours</option>
                 <option value="60" ${defaultUnit === '60' ? 'selected' : ''}>Minutes</option>
@@ -9703,10 +9703,10 @@ body.modal-open { overflow: hidden; }
           </div>
           <div style="margin-bottom: 0.75rem;">
             <label style="display: block; font-size: 0.75rem; color: var(--fg-dim); margin-bottom: 0.35rem;">New Timelock Delay</label>
-            <div style="display: flex; gap: 0.5rem;">
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
               <input type="number" id="proposalTimelockDelayValue" placeholder="${defaultValue}" value="${defaultValue}"
-                     style="flex: 1; padding: 0.6rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.95rem;" />
-              <select id="proposalTimelockDelayUnit" style="padding: 0.6rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.95rem;">
+                     style="flex: 1; min-width: 0; padding: 0.5rem 0.6rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.95rem; box-sizing: border-box;" />
+              <select id="proposalTimelockDelayUnit" style="flex-shrink: 0; width: 100px; padding: 0.5rem 0.4rem; background: transparent; border: 1px solid var(--border-muted); color: var(--fg); font-size: 0.85rem; box-sizing: border-box;">
                 <option value="86400" ${defaultUnit === '86400' ? 'selected' : ''}>Days</option>
                 <option value="3600" ${defaultUnit === '3600' ? 'selected' : ''}>Hours</option>
                 <option value="60" ${defaultUnit === '60' ? 'selected' : ''}>Minutes</option>

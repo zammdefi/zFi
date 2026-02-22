@@ -821,13 +821,9 @@ async function renderGallery() {
 
       let salePct = 0, raisedETH = '0';
       if (sale && sale.totalSupply > 0n) {
-        const lp = sale.lpBps ? Number(sale.lpBps) : 0;
-        const soldShares = (sale.forAmt > 0n && sale.tribAmt > 0n && sale.treasuryBalance > 0n)
-          ? (sale.treasuryBalance * sale.forAmt * 10000n) / (sale.tribAmt * BigInt(10000 - lp))
-          : 0n;
-        const totalSale = soldShares + sale.remainingSupply;
-        if (totalSale > 0n) salePct = Number((soldShares * 10000n) / totalSale) / 100;
-        raisedETH = fmtETH((sale.forAmt > 0n && sale.treasuryBalance > 0n) ? (soldShares * sale.tribAmt / sale.forAmt) : 0n);
+        const soldShares = sale.totalSupply - sale.remainingSupply;
+        if (sale.totalSupply > 0n) salePct = Number((soldShares * 10000n) / sale.totalSupply) / 100;
+        raisedETH = fmtETH((sale.forAmt > 0n) ? (soldShares * sale.tribAmt / sale.forAmt) : 0n);
       }
 
       const now = BigInt(Math.floor(Date.now() / 1000));
@@ -938,14 +934,10 @@ async function renderCoinPage(daoAddr) {
     const lpBps = sale ? Number(sale.lpBps) : 0;
     let salePct = 0, sold = 0n, totalSale = 0n, totalRaised = 0n, treasuryETH = 0n, saleActive = false;
     if (sale) {
-      // Derive sold shares from treasury ETH (excludes team allocation)
-      const soldFromETH = (sale.forAmt > 0n && sale.tribAmt > 0n && sale.treasuryBalance > 0n)
-        ? (sale.treasuryBalance * sale.forAmt * 10000n) / (sale.tribAmt * BigInt(10000 - lpBps))
-        : 0n;
-      sold = soldFromETH;
-      totalSale = sold + sale.remainingSupply;
+      totalSale = sale.totalSupply;
+      sold = totalSale - sale.remainingSupply;
       if (totalSale > 0n) salePct = Number((sold * 10000n) / totalSale) / 100;
-      totalRaised = (sale.forAmt > 0n && sale.treasuryBalance > 0n) ? (sold * sale.tribAmt / sale.forAmt) : 0n;
+      totalRaised = (sale.forAmt > 0n) ? (sold * sale.tribAmt / sale.forAmt) : 0n;
       treasuryETH = sale.treasuryBalance;
       const now = BigInt(Math.floor(Date.now() / 1000));
       saleActive = sale.remainingSupply > 0n && sale.allowance > 0n && sale.forAmt > 0n && (sale.deadline === 0n || now <= BigInt(sale.deadline));
@@ -1042,17 +1034,33 @@ async function renderCoinPage(daoAddr) {
       `;
     }
 
-    // Sale section
-    html += `
-      <div class="section-card">
-        <div class="section-title">Sale ${saleActive ? '(Live)' : '(Ended)'}</div>
+    // Sale section (drawer if ended, full card if live)
+    const saleContent = `
         <div class="stat-row"><span class="stat-label">Sold</span><span class="stat-value">${fmtShares(sold)} / ${fmtShares(totalSale)}</span></div>
         ${pctBar(salePct, 'var(--green)')}
         <div class="stat-row"><span class="stat-label">Raised</span><span class="stat-value">${fmtETH(totalRaised)} ${ethIco}</span></div>
         ${priceDisplay ? `<div class="stat-row"><span class="stat-label">Price</span><span class="stat-value">${priceDisplay} ${ethIco}/share</span></div>` : ''}
-        ${lpBps > 0 ? `<div class="stat-row"><span class="stat-label">LP seeding</span><span class="stat-value">${lpBps / 100}% of buys &rarr; zAMM${feeOrHook <= 10000n ? ` (${Number(feeOrHook) / 100}% fee)` : ''}</span></div>` : ''}
-      </div>
-    `;
+        ${lpBps > 0 ? `<div class="stat-row"><span class="stat-label">LP seeding</span><span class="stat-value">${lpBps / 100}% of buys &rarr; zAMM${feeOrHook <= 10000n ? ` (${Number(feeOrHook) / 100}% fee)` : ''}</span></div>` : ''}`;
+    if (saleActive) {
+      html += `
+        <div class="section-card">
+          <div class="section-title">Sale (Live)</div>
+          ${saleContent}
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="drawer" id="saleDrawer">
+          <button class="drawer-toggle" onclick="this.parentElement.classList.toggle('open')">
+            <span>Sale (Ended)</span>
+            <span class="arrow">&#9660;</span>
+          </button>
+          <div class="drawer-body">
+            ${saleContent}
+          </div>
+        </div>
+      `;
+    }
 
     // Treasury + Pool reserves
     html += `
@@ -2298,6 +2306,7 @@ async function executeSwap() {
       });
     }
 
+    let tx;
     if (!_exactOut) {
       // Exact input: user specifies how much they pay
       const minOut = quote.amountOut * 95n / 100n; // 5% slippage
@@ -2314,7 +2323,7 @@ async function executeSwap() {
 
       btn.textContent = 'Confirm in wallet...';
       const pool = new ethers.Contract(ZAMM, ZAMM_ABI, s);
-      var tx = await pool.swapExactIn(
+      tx = await pool.swapExactIn(
         poolKey, amount, minOut, isBuy, address, deadline,
         { value: isBuy ? amount : 0n }
       );
@@ -2334,7 +2343,7 @@ async function executeSwap() {
 
       btn.textContent = 'Confirm in wallet...';
       const pool = new ethers.Contract(ZAMM, ZAMM_ABI, s);
-      var tx = await pool.swapExactOut(
+      tx = await pool.swapExactOut(
         poolKey, amount, maxIn, isBuy, address, deadline,
         { value: isBuy ? maxIn : 0n }
       );

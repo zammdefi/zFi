@@ -199,12 +199,12 @@ contract CoinLaunchTest is Test {
     function _launch(uint256 raiseETH, uint256 lockMonths) internal returns (LaunchResult memory r) {
         r.deployTime = block.timestamp;
 
-        uint256 saleSupply = (COIN_SUPPLY * SALE_BPS / 10000) * 1e18;
+        uint256 saleSupply = (COIN_SUPPLY * SALE_BPS / 10000 - 1) * 1e18;
         uint256 teamSupply = (COIN_SUPPLY * TEAM_BPS / 10000) * 1e18;
 
         // Sale rate: 1 ETH → (saleSupply / raiseETH) shares (same math as dapp JS)
         uint256 tribAmt = 1 ether;
-        uint256 forAmt = (COIN_SUPPLY * SALE_BPS / 10000 / raiseETH) * 1e18;
+        uint256 forAmt = ((COIN_SUPPLY * SALE_BPS / 10000 - 1) * 1e18) / raiseETH;
 
         // Tap: treasury portion over 3 months (matching fixed JS)
         uint256 treasuryBps = 10000 - LP_BPS;
@@ -226,7 +226,7 @@ contract CoinLaunchTest is Test {
         r.loot = _predictClone(LOOT_IMPL, childSalt, r.dao);
 
         // Build custom calls (same as JS coinLaunch)
-        uint256 unlockTime = block.timestamp + (lockMonths * 30 days);
+        uint256 unlockTime = block.timestamp + (lockMonths * SEC_PER_MONTH);
 
         Call[] memory customCalls = new Call[](5);
         customCalls[0] = Call(r.dao, 0, abi.encodeWithSignature("setProposalTTL(uint64)", VOTING_SECS));
@@ -304,7 +304,7 @@ contract CoinLaunchTest is Test {
         IMoloch dao = IMoloch(r.dao);
         IShares shares = IShares(r.shares);
 
-        uint256 saleSupply = (COIN_SUPPLY * SALE_BPS / 10000) * 1e18;
+        uint256 saleSupply = (COIN_SUPPLY * SALE_BPS / 10000 - 1) * 1e18;
         uint256 teamSupply = (COIN_SUPPLY * TEAM_BPS / 10000) * 1e18;
 
         // DAO metadata
@@ -335,7 +335,7 @@ contract CoinLaunchTest is Test {
         assertEq(shares.balanceOf(deployer), 1 ether, "deployer init shares");
 
         // ZAMM lockup registered
-        uint256 unlockTime = r.deployTime + (lockMonths * 30 days);
+        uint256 unlockTime = r.deployTime + (lockMonths * SEC_PER_MONTH);
         bytes32 lockHash = keccak256(abi.encode(r.shares, deployer, uint256(0), teamSupply, unlockTime));
         assertEq(zamm.lockups(lockHash), unlockTime, "lockup registered");
 
@@ -483,7 +483,7 @@ contract CoinLaunchTest is Test {
     function test_lockup_blocks_early_unlock() public {
         LaunchResult memory r = _launch(5, 6);
         uint256 teamSupply = (COIN_SUPPLY * TEAM_BPS / 10000) * 1e18;
-        uint256 unlockTime = r.deployTime + (6 * 30 days);
+        uint256 unlockTime = r.deployTime + (6 * SEC_PER_MONTH);
 
         vm.expectRevert();
         zamm.unlock(r.shares, deployer, 0, teamSupply, unlockTime);
@@ -493,7 +493,7 @@ contract CoinLaunchTest is Test {
         LaunchResult memory r = _launch(5, 6);
         IShares shares = IShares(r.shares);
         uint256 teamSupply = (COIN_SUPPLY * TEAM_BPS / 10000) * 1e18;
-        uint256 unlockTime = r.deployTime + (6 * 30 days);
+        uint256 unlockTime = r.deployTime + (6 * SEC_PER_MONTH);
 
         vm.warp(unlockTime + 1);
 
@@ -733,11 +733,11 @@ contract CoinLaunchTest is Test {
         r.deployTime = block.timestamp;
 
         uint256 saleBps = 10000 - cfg.teamBps;
-        uint256 saleSupply = (COIN_SUPPLY * saleBps / 10000) * 1e18;
+        uint256 saleSupply = (COIN_SUPPLY * saleBps / 10000 - 1) * 1e18;
         uint256 teamSupply = (COIN_SUPPLY * cfg.teamBps / 10000) * 1e18;
 
         uint256 tribAmt = 1 ether;
-        uint256 forAmt = (COIN_SUPPLY * saleBps / 10000 / cfg.raise) * 1e18;
+        uint256 forAmt = ((COIN_SUPPLY * saleBps / 10000 - 1) * 1e18) / cfg.raise;
 
         uint256 treasuryBps = 10000 - cfg.lpBps;
         uint256 expectedTreasury = (cfg.raise * 1e18 * treasuryBps) / 10000;
@@ -757,7 +757,7 @@ contract CoinLaunchTest is Test {
         r.shares = _predictClone(SHARES_IMPL, childSalt, r.dao);
         r.loot = _predictClone(LOOT_IMPL, childSalt, r.dao);
 
-        uint256 unlockTime = block.timestamp + (cfg.lockMonths * 30 days);
+        uint256 unlockTime = block.timestamp + (cfg.lockMonths * SEC_PER_MONTH);
 
         Call[] memory customCalls = new Call[](5);
         customCalls[0] = Call(r.dao, 0, abi.encodeWithSignature("setProposalTTL(uint64)", VOTING_SECS));
@@ -813,8 +813,8 @@ contract CoinLaunchTest is Test {
         IShares shares = IShares(r.shares);
         IMoloch dao = IMoloch(r.dao);
 
-        // Verify supply split
-        uint256 saleSupply = 850_000_000 * 1e18; // 85%
+        // Verify supply split (sale gets -1 for deployer share)
+        uint256 saleSupply = 849_999_999 * 1e18; // 85% - 1
         uint256 teamSupply = 150_000_000 * 1e18; // 15%
         assertEq(shares.totalSupply(), 1 ether + saleSupply + teamSupply, "total supply");
         assertEq(shares.balanceOf(r.dao), saleSupply, "DAO holds sale supply");
@@ -874,7 +874,7 @@ contract CoinLaunchTest is Test {
         assertLt(r.dao.balance, 0.05 ether, "treasury mostly drained after 3mo");
 
         // Team unlock after 6 months
-        uint256 unlockTime = r.deployTime + (6 * 30 days);
+        uint256 unlockTime = r.deployTime + (6 * SEC_PER_MONTH);
         vm.warp(unlockTime + 1);
         uint256 teamBefore = shares.balanceOf(deployer);
         zamm.unlock(r.shares, deployer, 0, teamSupply, unlockTime);
@@ -893,10 +893,10 @@ contract CoinLaunchTest is Test {
         IShares shares = IShares(r.shares);
         IMoloch dao = IMoloch(r.dao);
 
-        // Verify supply: 90% sale, 10% team
-        uint256 saleSupply = 900_000_000 * 1e18;
+        // Verify supply: 90% sale (-1 for deployer), 10% team
+        uint256 saleSupply = 899_999_999 * 1e18;
         uint256 teamSupply = 100_000_000 * 1e18;
-        assertEq(shares.balanceOf(r.dao), saleSupply, "90% sale supply");
+        assertEq(shares.balanceOf(r.dao), saleSupply, "90% sale supply - 1");
         assertEq(shares.balanceOf(ZAMM), teamSupply, "10% team supply");
 
         // Tap allowance = 80% of 50 ETH = 40 ETH
@@ -923,7 +923,7 @@ contract CoinLaunchTest is Test {
 
         // Lockup should block before 12mo
         vm.expectRevert();
-        zamm.unlock(r.shares, deployer, 0, teamSupply, r.deployTime + (12 * 30 days));
+        zamm.unlock(r.shares, deployer, 0, teamSupply, r.deployTime + (12 * SEC_PER_MONTH));
 
         emit log("=== Custom config test complete ===");
     }
@@ -970,7 +970,7 @@ contract CoinLaunchTest is Test {
 
         // Unlock team tokens
         uint256 teamSupply = (COIN_SUPPLY * TEAM_BPS / 10000) * 1e18;
-        uint256 unlockTime = r.deployTime + (6 * 30 days);
+        uint256 unlockTime = r.deployTime + (6 * SEC_PER_MONTH);
         vm.warp(unlockTime + 1);
 
         uint256 teamBefore = shares.balanceOf(deployer);

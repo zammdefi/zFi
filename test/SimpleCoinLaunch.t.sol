@@ -37,7 +37,7 @@ struct TapConfig {
 }
 
 interface IDAICO {
-    function summonDAICO(
+    function summonDAICOCustom(
         SummonConfig calldata summonConfig,
         string calldata orgName,
         string calldata orgSymbol,
@@ -50,7 +50,8 @@ interface IDAICO {
         uint256[] calldata initShares,
         bool sharesLocked,
         bool lootLocked,
-        DAICOConfig calldata daicoConfig
+        DAICOConfig calldata daicoConfig,
+        Call[] calldata customCalls
     ) external payable returns (address dao);
 
     function summonDAICOWithTapCustom(
@@ -129,7 +130,7 @@ interface IZAMM {
 }
 
 /// @title SimpleCoinLaunch tests — validates the "simple" memecoin-style launch path
-/// @dev Uses summonDAICO (no tap, no custom calls) with teamBps=0, lpBps=5000
+/// @dev Uses summonDAICOCustom (no tap, governance calls only) with teamBps=0, lpBps=8000
 contract SimpleCoinLaunchTest is Test {
     // Deployed addresses (mainnet)
     address constant SUMMONER = 0x0000000000330B8df9E3bc5E553074DA58eE9138;
@@ -145,9 +146,12 @@ contract SimpleCoinLaunchTest is Test {
 
     // Simple template params (matching dapp JS COIN_SIMPLE_DEFAULTS)
     uint256 constant COIN_SUPPLY = 1_000_000_000;
-    uint16 constant SIMPLE_LP_BPS = 5000; // 50% to LP
+    uint16 constant SIMPLE_LP_BPS = 8000; // 80% to LP
     uint256 constant FEE = 30;
     uint16 constant QUORUM_BPS = 1500;
+    uint64 constant VOTING_SECS = 7 days;
+    uint64 constant TIMELOCK_SECS = 3 days;
+    uint256 constant SEC_PER_MONTH = 2_629_746;
 
     address deployer;
     address buyer1;
@@ -174,10 +178,10 @@ contract SimpleCoinLaunchTest is Test {
     function _launchSimple(uint256 raiseETH, uint16 lpBps) internal returns (LaunchResult memory r) {
         r.deployTime = block.timestamp;
 
-        // Simple mode: teamBps=0 → 100% sale supply
-        uint256 saleSupply = COIN_SUPPLY * 1e18;
+        // Simple mode: teamBps=0 → 100% sale supply minus 1 (deployer share)
+        uint256 saleSupply = (COIN_SUPPLY - 1) * 1e18;
         uint256 tribAmt = 1 ether;
-        uint256 forAmt = (COIN_SUPPLY / raiseETH) * 1e18;
+        uint256 forAmt = ((COIN_SUPPLY - 1) * 1e18) / raiseETH;
 
         bytes32 salt = keccak256(abi.encode("simple", raiseETH, lpBps, block.timestamp));
         address[] memory holders = new address[](1);
@@ -192,9 +196,14 @@ contract SimpleCoinLaunchTest is Test {
         r.shares = _predictClone(SHARES_IMPL, childSalt, r.dao);
         r.loot = _predictClone(LOOT_IMPL, childSalt, r.dao);
 
-        // Simple launch: no tap, no custom calls
+        // Governance custom calls (matching dapp EZ mode)
+        Call[] memory customCalls = new Call[](2);
+        customCalls[0] = Call(r.dao, 0, abi.encodeWithSignature("setProposalTTL(uint64)", VOTING_SECS));
+        customCalls[1] = Call(r.dao, 0, abi.encodeWithSignature("setTimelockDelay(uint64)", TIMELOCK_SECS));
+
+        // Simple launch: no tap, governance custom calls only
         vm.prank(deployer);
-        daico.summonDAICO(
+        daico.summonDAICOCustom(
             SummonConfig(SUMMONER, MOLOCH_IMPL, SHARES_IMPL, LOOT_IMPL),
             "SimpleCoin",
             "SIMPLE",
@@ -217,7 +226,8 @@ contract SimpleCoinLaunchTest is Test {
                 lpBps: lpBps,
                 maxSlipBps: 100,
                 feeOrHook: FEE
-            })
+            }),
+            customCalls
         );
     }
 
@@ -255,14 +265,14 @@ contract SimpleCoinLaunchTest is Test {
         LaunchResult memory r = _launchSimple(5, SIMPLE_LP_BPS);
         IShares shares = IShares(r.shares);
 
-        // With teamBps=0: 100% of COIN_SUPPLY goes to sale
-        uint256 expectedSaleSupply = COIN_SUPPLY * 1e18;
+        // With teamBps=0: sale = COIN_SUPPLY - 1 (deployer gets 1 share)
+        uint256 expectedSaleSupply = (COIN_SUPPLY - 1) * 1e18;
 
-        // Total supply = 1 deployer share + full sale supply (no team mint)
-        assertEq(shares.totalSupply(), 1 ether + expectedSaleSupply, "total supply = 1B + 1 deployer");
+        // Total supply = 1 deployer share + sale supply = COIN_SUPPLY exactly
+        assertEq(shares.totalSupply(), 1 ether + expectedSaleSupply, "total supply = COIN_SUPPLY");
 
         // DAO holds all sale tokens
-        assertEq(shares.balanceOf(r.dao), expectedSaleSupply, "DAO holds 1B sale supply");
+        assertEq(shares.balanceOf(r.dao), expectedSaleSupply, "DAO holds sale supply");
 
         // ZAMM holds nothing (no team lockup)
         assertEq(shares.balanceOf(ZAMM), 0, "ZAMM holds 0 (no team)");
@@ -283,32 +293,34 @@ contract SimpleCoinLaunchTest is Test {
     }
 
     function test_simple_deploy_various_raises() public {
+        uint256 expectedSale = (COIN_SUPPLY - 1) * 1e18;
+
         // 1 ETH raise
         LaunchResult memory r1 = _launchSimple(1, SIMPLE_LP_BPS);
-        assertEq(IShares(r1.shares).balanceOf(r1.dao), COIN_SUPPLY * 1e18, "1 ETH: full supply");
+        assertEq(IShares(r1.shares).balanceOf(r1.dao), expectedSale, "1 ETH: sale supply");
         assertEq(IMoloch(r1.dao).allowance(address(0), address(daico)), 0, "1 ETH: no tap");
 
         // 10 ETH raise
         LaunchResult memory r2 = _launchSimple(10, SIMPLE_LP_BPS);
-        assertEq(IShares(r2.shares).balanceOf(r2.dao), COIN_SUPPLY * 1e18, "10 ETH: full supply");
+        assertEq(IShares(r2.shares).balanceOf(r2.dao), expectedSale, "10 ETH: sale supply");
         assertEq(IMoloch(r2.dao).allowance(address(0), address(daico)), 0, "10 ETH: no tap");
 
         // 100 ETH raise
         LaunchResult memory r3 = _launchSimple(100, SIMPLE_LP_BPS);
-        assertEq(IShares(r3.shares).balanceOf(r3.dao), COIN_SUPPLY * 1e18, "100 ETH: full supply");
+        assertEq(IShares(r3.shares).balanceOf(r3.dao), expectedSale, "100 ETH: sale supply");
         assertEq(IMoloch(r3.dao).allowance(address(0), address(daico)), 0, "100 ETH: no tap");
     }
 
     function test_simple_deploy_various_lp_splits() public {
-        // 30% LP (minimum in UI)
+        // 30% LP
         LaunchResult memory r1 = _launchSimple(5, 3000);
         assertEq(IMoloch(r1.dao).allowance(address(0), address(daico)), 0, "30% LP: no tap");
 
-        // 50% LP (default)
-        LaunchResult memory r2 = _launchSimple(5, 5000);
-        assertEq(IMoloch(r2.dao).allowance(address(0), address(daico)), 0, "50% LP: no tap");
+        // 80% LP (default)
+        LaunchResult memory r2 = _launchSimple(5, 8000);
+        assertEq(IMoloch(r2.dao).allowance(address(0), address(daico)), 0, "80% LP: no tap");
 
-        // 70% LP (maximum in UI)
+        // 70% LP
         LaunchResult memory r3 = _launchSimple(5, 7000);
         assertEq(IMoloch(r3.dao).allowance(address(0), address(daico)), 0, "70% LP: no tap");
     }
@@ -354,13 +366,13 @@ contract SimpleCoinLaunchTest is Test {
         vm.prank(buyer1);
         daico.buy{value: 5 ether}(r.dao, address(0), 5 ether, 0);
 
-        // With 50% LP: treasury should get ~50% of raise = ~2.5 ETH
+        // With 80% LP: treasury should get ~20% of raise = ~1 ETH
         uint256 treasuryETH = r.dao.balance;
-        uint256 expectedTreasury = 2.5 ether;
-        assertApproxEqRel(treasuryETH, expectedTreasury, 0.01e18, "treasury ~50% of raise");
+        uint256 expectedTreasury = 1 ether;
+        assertApproxEqRel(treasuryETH, expectedTreasury, 0.01e18, "treasury ~20% of raise");
 
         emit log_named_uint("Treasury ETH", treasuryETH);
-        emit log_named_uint("Expected ~50%", expectedTreasury);
+        emit log_named_uint("Expected ~20%", expectedTreasury);
     }
 
     function test_simple_treasury_split_30pct_lp() public {
@@ -518,10 +530,10 @@ contract SimpleCoinLaunchTest is Test {
         uint256 advSaleSupply = IShares(rAdv.shares).balanceOf(rAdv.dao);
         uint256 advZammBalance = IShares(rAdv.shares).balanceOf(ZAMM);
 
-        // Simple has more sale supply (100% vs 85%)
+        // Simple has more sale supply (100% vs 85%, both minus 1 for deployer)
         assertGt(simpleSaleSupply, advSaleSupply, "simple has more sale supply");
-        assertEq(simpleSaleSupply, COIN_SUPPLY * 1e18, "simple = 1B");
-        assertEq(advSaleSupply, 850_000_000 * 1e18, "advanced = 850M");
+        assertEq(simpleSaleSupply, (COIN_SUPPLY - 1) * 1e18, "simple = 999,999,999");
+        assertEq(advSaleSupply, (COIN_SUPPLY * 8500 / 10000 - 1) * 1e18, "advanced = 849,999,999");
 
         // Simple has no team lockup in ZAMM
         assertEq(simpleZammBalance, 0, "simple: no team in ZAMM");
@@ -535,13 +547,13 @@ contract SimpleCoinLaunchTest is Test {
     // ==================== FULL LIFECYCLE ====================
 
     function test_simple_full_lifecycle() public {
-        emit log("=== SIMPLE LAUNCH: 5 ETH raise, 50% LP, no team, no tap ===");
+        emit log("=== SIMPLE LAUNCH: 5 ETH raise, 80% LP, no team, no tap ===");
 
         LaunchResult memory r = _launchSimple(5, SIMPLE_LP_BPS);
         IShares shares = IShares(r.shares);
 
         // Verify initial state
-        assertEq(shares.balanceOf(r.dao), COIN_SUPPLY * 1e18, "full supply for sale");
+        assertEq(shares.balanceOf(r.dao), (COIN_SUPPLY - 1) * 1e18, "sale supply for sale");
         assertEq(shares.balanceOf(ZAMM), 0, "no team lockup");
         assertEq(IMoloch(r.dao).allowance(address(0), address(daico)), 0, "no tap");
 
@@ -557,8 +569,8 @@ contract SimpleCoinLaunchTest is Test {
         uint256 treasuryAfterRaise = r.dao.balance;
         emit log_named_uint("Treasury after full raise", treasuryAfterRaise);
 
-        // Treasury should be ~50% of raise
-        assertApproxEqRel(treasuryAfterRaise, 2.5 ether, 0.01e18, "treasury ~50%");
+        // Treasury should be ~20% of raise (80% LP)
+        assertApproxEqRel(treasuryAfterRaise, 1 ether, 0.01e18, "treasury ~20%");
 
         // Verify pool is seeded
         uint256 poolId = uint256(keccak256(abi.encode(uint256(0), uint256(0), address(0), r.shares, FEE)));
@@ -605,10 +617,10 @@ contract SimpleCoinLaunchTest is Test {
 
         uint256 saleBps = 8500;
         uint256 teamBps = 1500;
-        uint256 saleSupply = (COIN_SUPPLY * saleBps / 10000) * 1e18;
+        uint256 saleSupply = (COIN_SUPPLY * saleBps / 10000 - 1) * 1e18;
         uint256 teamSupply = (COIN_SUPPLY * teamBps / 10000) * 1e18;
         uint256 tribAmt = 1 ether;
-        uint256 forAmt = (COIN_SUPPLY * saleBps / 10000 / raiseETH) * 1e18;
+        uint256 forAmt = ((COIN_SUPPLY * saleBps / 10000 - 1) * 1e18) / raiseETH;
         uint16 lpBps = 3300;
         uint256 tapMonths = 3;
 
@@ -629,11 +641,11 @@ contract SimpleCoinLaunchTest is Test {
         r.shares = _predictClone(SHARES_IMPL, childSalt, r.dao);
         r.loot = _predictClone(LOOT_IMPL, childSalt, r.dao);
 
-        uint256 unlockTime = block.timestamp + (lockMonths * 30 days);
+        uint256 unlockTime = block.timestamp + (lockMonths * SEC_PER_MONTH);
 
         Call[] memory customCalls = new Call[](5);
-        customCalls[0] = Call(r.dao, 0, abi.encodeWithSignature("setProposalTTL(uint64)", uint64(7 days)));
-        customCalls[1] = Call(r.dao, 0, abi.encodeWithSignature("setTimelockDelay(uint64)", uint64(3 days)));
+        customCalls[0] = Call(r.dao, 0, abi.encodeWithSignature("setProposalTTL(uint64)", VOTING_SECS));
+        customCalls[1] = Call(r.dao, 0, abi.encodeWithSignature("setTimelockDelay(uint64)", TIMELOCK_SECS));
         customCalls[2] =
             Call(r.shares, 0, abi.encodeWithSignature("mintFromMoloch(address,uint256)", r.dao, teamSupply));
         customCalls[3] = Call(r.shares, 0, abi.encodeWithSignature("approve(address,uint256)", ZAMM, teamSupply));
