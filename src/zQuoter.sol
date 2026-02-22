@@ -156,6 +156,21 @@ contract zQuoter {
         return abi.encodeWithSelector(IRouterExt.multicall.selector, c);
     }
 
+    function _mc1(bytes memory cd) internal pure returns (bytes memory) {
+        bytes[] memory c = new bytes[](1);
+        c[0] = cd;
+        return _mc(c);
+    }
+
+    function _wrap(uint256 a) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(IRouterExt.wrap.selector, a);
+    }
+
+    function _depUnwrap(uint256 a) internal pure returns (bytes memory d, bytes memory u) {
+        d = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), a);
+        u = abi.encodeWithSelector(IRouterExt.unwrap.selector, a);
+    }
+
     function _i8(int128 x) internal pure returns (uint8) {
         return uint8(uint256(int256(x)));
     }
@@ -266,8 +281,7 @@ contract zQuoter {
             if (fromSet2) {
                 bool dup;
                 for (uint256 d; d < pools1.length; ++d) {
-                    if (pools1[d] == pool) dup = true;
-                    break;
+                    if (pools1[d] == pool) { dup = true; break; }
                 }
                 if (dup) continue;
             }
@@ -285,35 +299,24 @@ contract zQuoter {
             }
             if (!idxOk) continue;
 
-            (bool ok, uint256 qIn, uint256 qOut, bool isStable) =
+            (bool ok, uint256 qIn, uint256 qOut, bool isStable, bool actuallyUnderlying) =
                 _curveTryQuoteOne(pool, exactOut, i, j, underlying, swapAmount);
             if (!ok) continue;
 
             // Skip unbuildable exactOut stable-underlying when both indices are base coins
             uint8 ci_ = _i8(i);
             uint8 cj_ = _i8(j);
-            if (exactOut && underlying && isStable && ci_ > 0 && cj_ > 0) continue;
+            if (exactOut && actuallyUnderlying && isStable && ci_ > 0 && cj_ > 0) continue;
 
-            if (exactOut) {
-                if (qIn < acc.bestIn) {
-                    acc.bestIn = qIn;
-                    acc.bestOut = swapAmount;
-                    acc.bestPool = pool;
-                    acc.usedUnderlying = (underlying && isStable);
-                    acc.usedStable = isStable;
-                    acc.iIdx = ci_;
-                    acc.jIdx = cj_;
-                }
-            } else {
-                if (qOut > acc.bestOut) {
-                    acc.bestOut = qOut;
-                    acc.bestIn = swapAmount;
-                    acc.bestPool = pool;
-                    acc.usedUnderlying = (underlying && isStable);
-                    acc.usedStable = isStable;
-                    acc.iIdx = ci_;
-                    acc.jIdx = cj_;
-                }
+            bool better = exactOut ? qIn < acc.bestIn : qOut > acc.bestOut;
+            if (better) {
+                acc.bestIn = exactOut ? qIn : swapAmount;
+                acc.bestOut = exactOut ? swapAmount : qOut;
+                acc.bestPool = pool;
+                acc.usedUnderlying = actuallyUnderlying;
+                acc.usedStable = isStable;
+                acc.iIdx = ci_;
+                acc.jIdx = cj_;
             }
         }
 
@@ -347,32 +350,42 @@ contract zQuoter {
         }
     }
 
-    // Single-pool quote with ABI autodetect (stable first, else crypto).
+    // Single-pool quote with ABI autodetect. usedUnderlying=true → exchange_underlying needed.
     function _curveTryQuoteOne(address pool, bool exactOut, int128 i, int128 j, bool underlying, uint256 amt)
         internal
         view
-        returns (bool ok, uint256 amountIn, uint256 amountOut, bool usedStable)
+        returns (bool ok, uint256 amountIn, uint256 amountOut, bool usedStable, bool usedUnderlying)
     {
-        // try stable (and underlying) first
-        {
-            bytes4 sel = exactOut
-                ? (underlying ? ICurveStableLike.get_dx_underlying.selector : ICurveStableLike.get_dx.selector)
-                : (underlying ? ICurveStableLike.get_dy_underlying.selector : ICurveStableLike.get_dy.selector);
-            (bool s, bytes memory r) = pool.staticcall(abi.encodeWithSelector(sel, i, j, amt));
-            if (s && r.length >= 32) {
-                uint256 q = abi.decode(r, (uint256));
-                return exactOut ? (true, q, amt, true) : (true, amt, q, true);
+        bytes4 selD = exactOut ? ICurveStableLike.get_dx.selector : ICurveStableLike.get_dy.selector;
+        if (underlying) {
+            bytes4 selU =
+                exactOut ? ICurveStableLike.get_dx_underlying.selector : ICurveStableLike.get_dy_underlying.selector;
+            (bool su, bytes memory ru) = pool.staticcall(abi.encodeWithSelector(selU, i, j, amt));
+            if (su && ru.length >= 32) {
+                uint256 qu = abi.decode(ru, (uint256));
+                // Also try direct: if direct gives more conservative quote, prefer exchange()
+                // over exchange_underlying() — avoids pools that lack exchange_underlying.
+                (bool sd2, bytes memory rd2) = pool.staticcall(abi.encodeWithSelector(selD, i, j, amt));
+                if (sd2 && rd2.length >= 32) {
+                    uint256 qd = abi.decode(rd2, (uint256));
+                    if (exactOut ? qd >= qu : qd <= qu)
+                        return exactOut ? (true, qd, amt, true, false) : (true, amt, qd, true, false);
+                }
+                return exactOut ? (true, qu, amt, true, true) : (true, amt, qu, true, true);
             }
         }
-
-        // fallback: crypto ABI
+        (bool sd, bytes memory rd) = pool.staticcall(abi.encodeWithSelector(selD, i, j, amt));
+        if (sd && rd.length >= 32) {
+            uint256 q = abi.decode(rd, (uint256));
+            return exactOut ? (true, q, amt, true, false) : (true, amt, q, true, false);
+        }
         uint256 ui = uint256(int256(i));
         uint256 uj = uint256(int256(j));
         bytes4 sel2 = exactOut ? ICurveCryptoLike.get_dx.selector : ICurveCryptoLike.get_dy.selector;
         (bool s2, bytes memory r2) = pool.staticcall(abi.encodeWithSelector(sel2, ui, uj, amt));
-        if (!s2 || r2.length < 32) return (false, 0, 0, false);
+        if (!s2 || r2.length < 32) return (false, 0, 0, false, false);
         uint256 q2 = abi.decode(r2, (uint256));
-        return exactOut ? (true, q2, amt, false) : (true, amt, q2, false);
+        return exactOut ? (true, q2, amt, false, false) : (true, amt, q2, false, false);
     }
 
     // ====================== BUILD CALLDATA (single-hop) ======================
@@ -513,7 +526,6 @@ contract zQuoter {
 
         // ---------- ETH <-> WETH (1:1, no slippage) ----------
         if ((tokenIn == address(0) && tokenOut == WETH) || (tokenIn == WETH && tokenOut == address(0))) {
-            require(swapAmount != 0, ZeroAmount());
             best = _asQuote(AMM.WETH_WRAP, swapAmount, swapAmount);
             amountLimit = swapAmount; // 1:1, no slippage
 
@@ -521,25 +533,26 @@ contract zQuoter {
                 // ETH -> WETH
                 msgValue = swapAmount;
                 if (to == ZROUTER) {
-                    callData = abi.encodeWithSelector(IRouterExt.wrap.selector, swapAmount);
+                    callData = _wrap(swapAmount);
                 } else {
                     bytes[] memory c = new bytes[](2);
-                    c[0] = abi.encodeWithSelector(IRouterExt.wrap.selector, swapAmount);
+                    c[0] = _wrap(swapAmount);
                     c[1] = abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, uint256(0), swapAmount, to);
                     callData = _mc(c);
                 }
             } else {
                 // WETH -> ETH
                 msgValue = 0;
+                (bytes memory dep, bytes memory unw) = _depUnwrap(swapAmount);
                 if (to == ZROUTER) {
                     bytes[] memory c = new bytes[](2);
-                    c[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
-                    c[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
+                    c[0] = dep;
+                    c[1] = unw;
                     callData = _mc(c);
                 } else {
                     bytes[] memory c = new bytes[](3);
-                    c[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
-                    c[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
+                    c[0] = dep;
+                    c[1] = unw;
                     c[2] = abi.encodeWithSelector(IRouterExt.sweep.selector, address(0), uint256(0), swapAmount, to);
                     callData = _mc(c);
                 }
@@ -602,8 +615,6 @@ contract zQuoter {
 
     // ** MULTIHOP HELPER
 
-    error ZeroAmount();
-
     function buildBestSwapViaETHMulticall(
         address to,
         address refundTo,
@@ -622,7 +633,6 @@ contract zQuoter {
         returns (Quote memory a, Quote memory b, bytes[] memory calls, bytes memory multicall, uint256 msgValue)
     {
         unchecked {
-            require(swapAmount != 0, ZeroAmount());
             tokenIn = _normalizeETH(tokenIn);
             tokenOut = _normalizeETH(tokenOut);
 
@@ -639,14 +649,13 @@ contract zQuoter {
                 if (tokenIn == address(0)) {
                     // ETH -> WETH: wrap exact amount then sweep WETH to recipient
                     calls = new bytes[](2);
-                    calls[0] = abi.encodeWithSelector(IRouterExt.wrap.selector, swapAmount);
+                    calls[0] = _wrap(swapAmount);
                     calls[1] = _sweepTo(WETH, to);
                     msgValue = swapAmount;
                 } else {
                     // WETH -> ETH: deposit WETH, unwrap exact amount, sweep ETH to recipient
                     calls = new bytes[](3);
-                    calls[0] = abi.encodeWithSelector(IRouterExt.deposit.selector, WETH, uint256(0), swapAmount);
-                    calls[1] = abi.encodeWithSelector(IRouterExt.unwrap.selector, swapAmount);
+                    (calls[0], calls[1]) = _depUnwrap(swapAmount);
                     calls[2] = _sweepTo(address(0), to);
                     msgValue = 0;
                 }
@@ -930,7 +939,6 @@ contract zQuoter {
         )
     {
         unchecked {
-            require(swapAmount != 0, ZeroAmount());
             tokenIn = _normalizeETH(tokenIn);
             tokenOut = _normalizeETH(tokenOut);
             address[6] memory HUBS = _hubs();
@@ -1082,7 +1090,6 @@ contract zQuoter {
         uint256 deadline
     ) public view returns (Quote[2] memory legs, bytes memory multicall, uint256 msgValue) {
         unchecked {
-            require(swapAmount != 0, ZeroAmount());
             tokenIn = _normalizeETH(tokenIn);
             tokenOut = _normalizeETH(tokenOut);
 
@@ -1232,13 +1239,13 @@ contract zQuoter {
                 uint256 ci;
 
                 if (wrapDirect) {
-                    calls_[ci++] = abi.encodeWithSelector(IRouterExt.wrap.selector, directAmt);
+                    calls_[ci++] = _wrap(directAmt);
                 }
                 if (wrapDirect) assembly ("memory-safe") { mstore(add(cdDirect, 100), WETH) }
                 calls_[ci++] = cdDirect;
 
                 if (wrapHop1) {
-                    calls_[ci++] = abi.encodeWithSelector(IRouterExt.wrap.selector, twoHopAmt);
+                    calls_[ci++] = _wrap(twoHopAmt);
                 }
                 if (wrapHop1) assembly ("memory-safe") { mstore(add(cdHop1, 100), WETH) }
                 calls_[ci++] = cdHop1;
@@ -1323,7 +1330,6 @@ contract zQuoter {
         address hookAddress
     ) public view returns (Quote[2] memory legs, bytes memory multicall, uint256 msgValue) {
         unchecked {
-            require(swapAmount != 0, ZeroAmount());
             tokenIn = _normalizeETH(tokenIn);
             tokenOut = _normalizeETH(tokenOut);
 
@@ -1385,18 +1391,16 @@ contract zQuoter {
                 legs[0] = cands[idx1];
                 if (idx1 == hIdx) {
                     uint256 lim = SlippageLib.limit(false, legs[0].amountOut, slippageBps);
-                    bytes[] memory c_ = new bytes[](1);
-                    c_[0] = _buildV4HookedCalldata(
-                        to, tokenIn, tokenOut, swapAmount, lim, deadline, hookPoolFee, hookTickSpacing, hookAddress
+                    multicall = _mc1(
+                        _buildV4HookedCalldata(
+                            to, tokenIn, tokenOut, swapAmount, lim, deadline, hookPoolFee, hookTickSpacing, hookAddress
+                        )
                     );
-                    multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, c_);
                     msgValue = ethIn ? swapAmount : 0;
                 } else {
                     (, bytes memory cd,, uint256 mv) =
                         buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
-                    bytes[] memory c_ = new bytes[](1);
-                    c_[0] = cd;
-                    multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, c_);
+                    multicall = _mc1(cd);
                     msgValue = mv;
                 }
                 return (legs, multicall, msgValue);
@@ -1449,20 +1453,18 @@ contract zQuoter {
                         _tryQuoteV4Hooked(tokenIn, tokenOut, swapAmount, hookPoolFee, hookTickSpacing, hookAddress);
                     legs[winner] = Quote(AMM.V4_HOOKED, 0, swapAmount, ho_);
                     uint256 lim = SlippageLib.limit(false, ho_, slippageBps);
-                    bytes[] memory c_ = new bytes[](1);
-                    c_[0] = _buildV4HookedCalldata(
-                        to, tokenIn, tokenOut, swapAmount, lim, deadline, hookPoolFee, hookTickSpacing, hookAddress
+                    multicall = _mc1(
+                        _buildV4HookedCalldata(
+                            to, tokenIn, tokenOut, swapAmount, lim, deadline, hookPoolFee, hookTickSpacing, hookAddress
+                        )
                     );
-                    multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, c_);
                     msgValue = ethIn ? swapAmount : 0;
                 } else {
                     Quote memory v = winner == 0 ? venue1 : venue2;
                     legs[winner] = _requoteForSource(false, tokenIn, tokenOut, swapAmount, v);
                     (, bytes memory cd,, uint256 mv) =
                         buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
-                    bytes[] memory c_ = new bytes[](1);
-                    c_[0] = cd;
-                    multicall = abi.encodeWithSelector(IRouterExt.multicall.selector, c_);
+                    multicall = _mc1(cd);
                     msgValue = mv;
                 }
                 return (legs, multicall, msgValue);
@@ -1500,7 +1502,7 @@ contract zQuoter {
 
             // Leg 1
             if (wrapLeg1) {
-                calls_[ci++] = abi.encodeWithSelector(IRouterExt.wrap.selector, fa1);
+                calls_[ci++] = _wrap(fa1);
             }
             if (v1h) {
                 calls_[ci++] = _buildV4HookedCalldata(
@@ -1515,7 +1517,7 @@ contract zQuoter {
 
             // Leg 2
             if (wrapLeg2) {
-                calls_[ci++] = abi.encodeWithSelector(IRouterExt.wrap.selector, fa2);
+                calls_[ci++] = _wrap(fa2);
             }
             if (v2h) {
                 calls_[ci++] = _buildV4HookedCalldata(
@@ -1726,60 +1728,9 @@ interface IZRouter {
         uint256 deadline
     ) external payable returns (uint256 amountIn, uint256 amountOut);
 
-    function snwap(
-        address tokenIn,
-        uint256 amountIn,
-        address recipient,
-        address tokenOut,
-        uint256 amountOutMin,
-        address executor,
-        bytes calldata executorData
-    ) external payable returns (uint256 amountOut);
-
-    function snwapMulti(
-        address tokenIn,
-        uint256 amountIn,
-        address recipient,
-        address[] calldata tokensOut,
-        uint256[] calldata amountsOutMin,
-        address executor,
-        bytes calldata executorData
-    ) external payable returns (uint256[] memory amountsOut);
-
     function exactETHToSTETH(address to) external payable returns (uint256 shares);
     function exactETHToWSTETH(address to) external payable returns (uint256 wstOut);
     function ethToExactSTETH(address to, uint256 exactOut) external payable;
     function ethToExactWSTETH(address to, uint256 exactOut) external payable;
-
-    function revealName(string calldata label, bytes32 secret, address to) external payable returns (uint256 tokenId);
-
     function execute(address target, uint256 value, bytes calldata data) external payable returns (bytes memory result);
-
-    function addLiquidity(
-        ZAMMPoolKey calldata poolKey,
-        uint256 amount0Desired,
-        uint256 amount1Desired,
-        uint256 amount0Min,
-        uint256 amount1Min,
-        address to,
-        uint256 deadline
-    ) external payable returns (uint256 amount0, uint256 amount1, uint256 liquidity);
-
-    function permit(address token, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external payable;
-    function permitDAI(uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s) external payable;
-    function permit2TransferFrom(
-        address token,
-        uint256 amount,
-        uint256 nonce,
-        uint256 deadline,
-        bytes calldata signature
-    ) external payable;
-}
-
-struct ZAMMPoolKey {
-    uint256 id0;
-    uint256 id1;
-    address token0;
-    address token1;
-    uint256 feeOrHook;
 }

@@ -89,10 +89,10 @@ input {
   display:flex;flex-direction:column;gap:12px;
 }
 .market-card {
-  border:1px solid var(--border-muted);padding:16px;
-  cursor:pointer;transition:background 0.15s;text-decoration:none;color:var(--fg);display:block;
+  border:1px solid var(--border);padding:16px;
+  cursor:pointer;transition:background 0.15s, transform 0.15s;text-decoration:none;color:var(--fg);display:block;
 }
-.market-card:hover { background:var(--surface-hover); }
+.market-card:hover { background:var(--surface-hover);transform:translateY(-1px); }
 .market-card-question {
   font-size:14px;font-weight:600;line-height:1.5;margin-bottom:12px;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
@@ -103,7 +103,7 @@ input {
 .market-card-odds-label .yes-label { color:var(--yes); }
 .market-card-odds-label .no-label { color:var(--no); }
 .market-card-odds {
-  display:flex;height:6px;overflow:hidden;margin-bottom:8px;
+  display:flex;height:6px;overflow:hidden;margin-bottom:8px;gap:2px;
 }
 .market-card-yes {
   background:var(--yes);transition:width 0.3s;
@@ -138,7 +138,7 @@ input {
 
 /* Detail page */
 .section-card {
-  border:1px solid var(--border-muted);padding:16px;margin-bottom:20px;
+  border:1px solid var(--border);padding:16px;margin-bottom:20px;
 }
 .section-title {
   font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
@@ -156,7 +156,7 @@ input {
 .odds-label .yes-label { color:var(--yes); }
 .odds-label .no-label { color:var(--no); }
 .odds-bar {
-  display:flex;height:8px;overflow:hidden;margin-bottom:16px;cursor:default;
+  display:flex;height:8px;overflow:hidden;margin-bottom:16px;cursor:default;gap:2px;
 }
 .odds-yes {
   background:var(--yes);transition:width 0.3s;
@@ -388,7 +388,7 @@ input[type="datetime-local"] { color-scheme:light; }
 
 /* Footer */
 .site-footer {
-  position:relative;text-align:center;padding:48px 20px;font-size:11px;opacity:0.55;margin-top:40px;
+  position:relative;text-align:center;padding:48px 20px;font-size:11px;opacity:0.65;margin-top:40px;
   letter-spacing:0.5px;font-weight:300;
 }
 .site-footer a { color:inherit;text-decoration:underline;margin:0 2px; }
@@ -469,8 +469,8 @@ input[type="datetime-local"] { color-scheme:light; }
   .form-preview { font-size:11px;padding:8px 10px; }
   .stat-row { font-size:11px;flex-wrap:wrap;gap:2px; }
   .trade-section input { font-size:16px; }
-  .trade-dir button { font-size:10px;padding:6px 0; }
-  .trade-side button { font-size:10px;padding:6px 0; }
+  .trade-dir button { font-size:10px;padding:8px 0; }
+  .trade-side button { font-size:10px;padding:8px 0; }
 }
 </style>
 </head>
@@ -1967,14 +1967,10 @@ async function renderMarketPage(marketId) {
             </div>
           </div>
           <div class="trade-quote" id="tradeQuote"></div>
-          <button id="tradeBtn" style="width:100%;padding:12px;font-size:13px;font-weight:600" onclick="executeTrade()" disabled>Enter amount</button>
-        </div>
-      `;
-
-      // LP button
-      html += `
-        <div style="text-align:center;margin-bottom:16px">
-          <button onclick="openLPModal('${marketId}')" style="font-size:11px;padding:6px 16px;background:transparent;border:1px solid var(--border-muted);color:var(--fg-muted)">Provide Liquidity</button>
+          <button class="form-btn" id="tradeBtn" onclick="executeTrade()" disabled>Enter amount</button>
+          <div style="text-align:center;margin-top:12px">
+            <button onclick="openLPModal('${marketId}')" style="font-size:11px;padding:6px 16px;background:transparent;border:1px solid var(--border-muted);color:var(--fg-muted)">Provide Liquidity</button>
+          </div>
         </div>
       `;
     }

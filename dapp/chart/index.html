@@ -15,6 +15,7 @@
   --surface:#f9f9f9;
   --btn-bg:#000;--btn-fg:#fff;--btn-hover:#333;
   --link-fg:inherit;
+  --green:#22c55e;--red:#ef4444;
 }
 .dark {
   --bg:#0a0a0a;--fg:#e8e8e0;--fg-muted:#777;--fg-dim:#555;
@@ -22,6 +23,7 @@
   --surface:#111;
   --btn-bg:#e8e8e0;--btn-fg:#0a0a0a;--btn-hover:#ccc;
   --link-fg:#e8e8e0;
+  --green:#22c55e;--red:#ef4444;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body {
@@ -53,7 +55,7 @@ h1 {
   width: 100%;
   padding-bottom: 56.25%; /* 16:9 */
   background: var(--surface);
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
 }
 .chart-wrap iframe {
   position: absolute;
@@ -62,6 +64,8 @@ h1 {
   width: 100%;
   height: 100%;
   border: none;
+  background: var(--surface);
+  color-scheme: light dark;
 }
 .chart-error {
   padding: 40px 20px;
@@ -69,6 +73,15 @@ h1 {
   font-size: 13px;
   color: var(--fg-muted);
 }
+.chart-type-toggle {
+  display:inline-flex;gap:0;margin-bottom:12px;border:1px solid var(--border);
+}
+.chart-type-toggle button {
+  font-family:inherit;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;
+  padding:6px 14px;border:none;cursor:pointer;background:transparent;color:var(--fg-muted);
+}
+.chart-type-toggle button.active { background:var(--btn-bg);color:var(--btn-fg); }
+.chart-type-toggle button:not(.active):hover { color:var(--fg); }
 .dark-toggle {
   position: fixed;
   top: max(22px, env(safe-area-inset-top, 0px));
@@ -79,13 +92,10 @@ h1 {
 }
 :root.dark .dark-toggle { background: #fff; }
 .dark-toggle:hover { opacity: 1; }
-@media (max-width:600px) {
-  .dark-toggle { top:18px; left:16px; }
-}
 .site-footer {
   position: relative;
   text-align: center; padding: 48px 20px; font-size: 11px;
-  opacity: 0.55; letter-spacing: 0.5px; font-weight: 300; margin-top: 40px;
+  opacity: 0.65; letter-spacing: 0.5px; font-weight: 300; margin-top: 40px;
 }
 .site-footer a { color: inherit; text-decoration: underline; margin: 0 2px; }
 .site-footer a:hover { opacity: 0.7; }
@@ -103,6 +113,57 @@ h1 {
   line-height: 0;
 }
 .home-btn:hover { opacity: 1; }
+.activity-section {
+  margin-top: 24px;
+  border: 1px solid var(--border);
+}
+.activity-header {
+  padding: 10px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border);
+}
+.activity-content { overflow-x:auto; }
+.activity-table { width:100%;border-collapse:collapse;font-size:12px; }
+.activity-table th {
+  text-align:left;padding:6px 10px;font-size:10px;font-weight:600;letter-spacing:0.05em;
+  text-transform:uppercase;color:var(--fg-muted);border-bottom:1px solid var(--border-muted);
+}
+.activity-table td { padding:5px 10px;border-bottom:1px solid var(--border-muted);white-space:nowrap; }
+.activity-table tr:last-child td { border-bottom:none; }
+.activity-table .evt-buy { color:var(--green); }
+.activity-table .evt-sell { color:var(--red); }
+.activity-table .evt-liqadd { color:var(--green); }
+.activity-table .evt-liqrem { color:var(--red); }
+.activity-table .evt-type { font-weight:600;font-size:11px; }
+.activity-table a { color:var(--fg-muted);font-size:11px; }
+.activity-table a:hover { color:var(--fg); }
+.activity-more {
+  display:block;width:100%;padding:8px;font-size:11px;font-weight:600;letter-spacing:0.05em;
+  text-transform:uppercase;color:var(--fg-muted);background:transparent;border:none;border-top:1px solid var(--border-muted);
+  cursor:pointer;font-family:inherit;
+}
+.activity-more:hover { color:var(--fg);background:var(--surface); }
+.activity-empty { padding:16px;text-align:center;font-size:12px;color:var(--fg-muted); }
+@media (max-width:600px) {
+  body { padding:50px 12px 12px; }
+  .dark-toggle { top:18px; left:16px; }
+  h1 { font-size:13px; margin-bottom:16px; }
+  .pool-id { font-size:10px; margin-bottom:12px; }
+  .activity-table { font-size:11px;min-width:480px; }
+  .activity-table th, .activity-table td { padding:4px 6px; }
+  .site-footer { padding:32px 12px; }
+}
+@media (max-width:380px) {
+  body { padding:50px 8px 8px; }
+  h1 { font-size:12px; }
+  .activity-table { font-size:10px;min-width:420px; }
+  .activity-table th, .activity-table td { padding:3px 4px; }
+  .activity-table a { font-size:10px; }
+}
 </style>
 </head>
 <body>
@@ -114,6 +175,7 @@ h1 {
 <h1>Pool Chart</h1>
 <div class="pool-id" id="poolIdDisplay"></div>
 <div id="chartContainer"></div>
+<div id="activitySection"></div>
 
 <footer class="site-footer">
   <a href="../">Swap</a> &middot; <a href="../domains/">Domains</a> &middot; <a href="../dao/">DAO</a> &middot; <a href="../coin/">Coin</a> &middot; <a href="../predict/">Predict</a> &middot; <a href="../orderbook/">Orderbook</a> &middot; <a href="../lp/">LP</a> &middot; built by <a href="https://opensea.io/collection/zorgz" target="_blank" rel="noopener"><svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin:0 2px;image-rendering:pixelated"><rect width="16" height="16" fill="#0a0a0a"/><rect x="3" y="1" width="1" height="1" fill="#e8e8e0"/><rect x="5" y="2" width="1" height="1" fill="#e8e8e0"/><rect x="10" y="2" width="1" height="1" fill="#e8e8e0"/><rect x="12" y="1" width="1" height="1" fill="#e8e8e0"/><rect x="4" y="4" width="8" height="1" fill="#e8e8e0"/><rect x="3" y="5" width="10" height="1" fill="#e8e8e0"/><rect x="2" y="6" width="12" height="3" fill="#e8e8e0"/><rect x="3" y="9" width="10" height="1" fill="#e8e8e0"/><rect x="4" y="10" width="8" height="1" fill="#e8e8e0"/><rect x="3" y="6" width="3" height="2" fill="#0a0a0a"/><rect x="10" y="6" width="3" height="2" fill="#0a0a0a"/><rect x="5" y="11" width="2" height="1" fill="#e8e8e0"/><rect x="9" y="11" width="2" height="1" fill="#e8e8e0"/><rect x="2" y="12" width="3" height="1" fill="#e8e8e0"/><rect x="7" y="12" width="2" height="1" fill="#e8e8e0"/><rect x="11" y="12" width="3" height="1" fill="#e8e8e0"/><rect x="1" y="13" width="2" height="1" fill="#e8e8e0"/><rect x="13" y="13" width="2" height="1" fill="#e8e8e0"/></svg></a><a href="../dao/#/dao/1/0x5E58BA0e06ED0F5558f83bE732a4b899a674053E">zOrg</a> &middot; <a href="https://x.com/z_fi_" target="_blank" rel="noopener" title="X"><svg width="14" height="14" viewBox="0 0 300 300.251" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;fill:currentColor"><path d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"/></svg></a>
@@ -138,14 +200,34 @@ function getPoolIdFromHash() {
   return m ? m[1] : null;
 }
 
+var _chartType = 'line';
+
+function chartEmbedUrl(poolId, type) {
+  var theme = isDark() ? 'dark' : 'light';
+  return 'https://www.zamm.finance/embed/pool/1/' + poolId + '?type=' + type + '&theme=' + theme;
+}
+
 function updateIframeTheme() {
-  const iframe = document.querySelector('.chart-wrap iframe');
+  var iframe = document.querySelector('.chart-wrap iframe');
   if (!iframe) return;
-  const poolId = getPoolIdFromHash();
+  try { iframe.contentWindow.postMessage({ type: 'theme', value: isDark() ? 'dark' : 'light' }, 'https://www.zamm.finance'); } catch(e) {}
+}
+
+function setChartType(type) {
+  if (type === _chartType) return;
+  _chartType = type;
+  var poolId = getPoolIdFromHash();
   if (!poolId) return;
-  const theme = isDark() ? 'dark' : 'light';
-  try { iframe.contentWindow.postMessage({ type: 'theme', theme: theme }, 'https://www.zamm.finance'); } catch(e) {}
-  iframe.src = 'https://www.zamm.finance/embed/pool/1/' + poolId + '?theme=' + theme;
+  var wrap = document.querySelector('.chart-wrap');
+  if (wrap) {
+    var iframe = document.createElement('iframe');
+    iframe.src = chartEmbedUrl(poolId, type);
+    iframe.allow = 'clipboard-write';
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    wrap.replaceChildren(iframe);
+  }
+  var btns = document.querySelectorAll('.chart-type-toggle button');
+  btns.forEach(function(b){ b.classList.toggle('active', b.dataset.type === type); });
 }
 
 var _currentPoolId = null;
@@ -162,6 +244,7 @@ function render() {
     err.className = 'chart-error';
     err.textContent = 'No pool ID provided. Use chart/#/{poolId}';
     container.appendChild(err);
+    renderActivitySection(null);
     return;
   }
 
@@ -169,15 +252,141 @@ function render() {
   _currentPoolId = poolId;
 
   poolIdDisplay.textContent = 'Pool ID: ' + poolId;
-  var theme = isDark() ? 'dark' : 'light';
+
+  var toggle = document.createElement('div');
+  toggle.className = 'chart-type-toggle';
+  var btnLine = document.createElement('button');
+  btnLine.textContent = 'Line'; btnLine.dataset.type = 'line'; btnLine.className = 'active';
+  btnLine.onclick = function(){ setChartType('line'); };
+  var btnCandle = document.createElement('button');
+  btnCandle.textContent = 'Candle'; btnCandle.dataset.type = 'candle';
+  btnCandle.onclick = function(){ setChartType('candle'); };
+  toggle.appendChild(btnLine); toggle.appendChild(btnCandle);
+
   var wrap = document.createElement('div');
   wrap.className = 'chart-wrap';
   var iframe = document.createElement('iframe');
-  iframe.src = 'https://www.zamm.finance/embed/pool/1/' + poolId + '?theme=' + theme;
+  iframe.src = chartEmbedUrl(poolId, _chartType);
   iframe.allow = 'clipboard-write';
   iframe.sandbox = 'allow-scripts allow-same-origin';
   wrap.appendChild(iframe);
-  container.replaceChildren(wrap);
+
+  container.replaceChildren(toggle, wrap);
+  renderActivitySection(poolId);
+}
+
+// ==================== POOL ACTIVITY ====================
+var INDEXER = 'https://coinchan-indexer-production.up.railway.app';
+var _activityCursor = null;
+var _activityInterval = null;
+
+var _escMap = {'&':'&amp;','<':'&lt;','>':'&gt;'};
+function escText(s) { return String(s).replace(/[&<>]/g, function(m){ return _escMap[m]; }); }
+
+function fmtWei(wei) {
+  if (!wei || wei === '0') return '0';
+  var s = wei.padStart(19, '0');
+  var whole = s.slice(0, s.length - 18) || '0';
+  var frac = s.slice(s.length - 18, s.length - 14);
+  return whole + '.' + frac;
+}
+
+function fmtAge(ts) {
+  var diff = Math.floor(Date.now() / 1000) - ts;
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function activityRow(e) {
+  var cls = 'evt-' + e.type.toLowerCase();
+  var label = { BUY:'Buy', SELL:'Sell', LIQADD:'+LP', LIQREM:'-LP' }[e.type] || e.type;
+  var ethAmt = (e.type === 'BUY' || e.type === 'LIQADD') ? fmtWei(e.amount0_in) : fmtWei(e.amount0_out);
+  var tokenAmt = (e.type === 'BUY' || e.type === 'LIQREM') ? fmtWei(e.amount1_out) : fmtWei(e.amount1_in);
+  var maker = e.maker ? e.maker.slice(0, 6) + '\u2026' + e.maker.slice(-4) : '-';
+  var txShort = e.txhash.slice(0, 6) + '\u2026' + e.txhash.slice(-4);
+  return '<tr class="' + cls + '">' +
+    '<td>' + fmtAge(e.timestamp) + '</td>' +
+    '<td class="evt-type">' + label + '</td>' +
+    '<td>' + ethAmt + '</td>' +
+    '<td>' + tokenAmt + '</td>' +
+    '<td><a href="https://etherscan.io/address/' + escText(e.maker) + '" target="_blank">' + maker + '</a></td>' +
+    '<td><a href="https://etherscan.io/tx/' + escText(e.txhash) + '" target="_blank">' + txShort + '</a></td>' +
+  '</tr>';
+}
+
+function renderActivityTable(events, append) {
+  var content = document.getElementById('activityContent');
+  if (!content) return;
+  if (!events.length && !append) {
+    content.innerHTML = '<div class="activity-empty">No activity yet</div>';
+    return;
+  }
+  var rows = events.map(activityRow).join('');
+  if (append) {
+    var tbody = content.querySelector('tbody');
+    if (tbody) tbody.insertAdjacentHTML('beforeend', rows);
+  } else {
+    content.innerHTML = '<table class="activity-table">' +
+      '<thead><tr><th>Age</th><th>Type</th><th>ETH</th><th>Token</th><th>Maker</th><th>Tx</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>' +
+      (_activityCursor ? '<button class="activity-more" onclick="loadMoreActivity()">Load More</button>' : '');
+  }
+}
+
+function loadActivity(poolId) {
+  fetch(INDEXER + '/api/events?poolId=' + poolId + '&limit=30')
+    .then(function(r){ return r.json(); })
+    .then(function(json){
+      _activityCursor = json.nextCursor || null;
+      renderActivityTable(json.data || [], false);
+    })
+    .catch(function(){
+      var content = document.getElementById('activityContent');
+      if (content) content.innerHTML = '<div class="activity-empty">Failed to load activity</div>';
+    });
+}
+
+function refreshActivity(poolId) {
+  fetch(INDEXER + '/api/events?poolId=' + poolId + '&limit=30')
+    .then(function(r){ return r.json(); })
+    .then(function(json){
+      _activityCursor = json.nextCursor || null;
+      renderActivityTable(json.data || [], false);
+    })
+    .catch(function(){});
+}
+
+function loadMoreActivity() {
+  if (!_activityCursor) return;
+  var poolId = getPoolIdFromHash();
+  if (!poolId) return;
+  var btn = document.querySelector('.activity-more');
+  if (btn) { btn.textContent = 'Loading...'; btn.disabled = true; }
+  fetch(INDEXER + '/api/events?poolId=' + poolId + '&limit=30&before=' + _activityCursor)
+    .then(function(r){ return r.json(); })
+    .then(function(json){
+      _activityCursor = json.nextCursor || null;
+      renderActivityTable(json.data || [], true);
+      if (!_activityCursor && btn) btn.remove();
+      else if (btn) { btn.textContent = 'Load More'; btn.disabled = false; }
+    })
+    .catch(function(){
+      if (btn) { btn.textContent = 'Load More'; btn.disabled = false; }
+    });
+}
+
+function renderActivitySection(poolId) {
+  var section = document.getElementById('activitySection');
+  if (!poolId) { section.innerHTML = ''; if (_activityInterval) { clearInterval(_activityInterval); _activityInterval = null; } return; }
+  section.innerHTML = '<div class="activity-section">' +
+    '<div class="activity-header">Pool Activity</div>' +
+    '<div class="activity-content" id="activityContent"><div class="activity-empty">Loading\u2026</div></div>' +
+    '</div>';
+  loadActivity(poolId);
+  if (_activityInterval) clearInterval(_activityInterval);
+  _activityInterval = setInterval(function(){ refreshActivity(poolId); }, 30000);
 }
 
 render();

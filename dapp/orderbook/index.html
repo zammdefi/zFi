@@ -180,7 +180,7 @@ body.modal-open { overflow:hidden; }
 
 /* ---- Orderbook (exchange-style) ---- */
 .book-container {
-  border:1px solid var(--border-muted); border-radius:0;
+  border:1px solid var(--border); border-radius:0;
   overflow:hidden; margin-top:16px;
 }
 .book-header {
@@ -240,7 +240,7 @@ body.modal-open { overflow:hidden; }
 
 /* ---- Order form ---- */
 .order-card {
-  border:1px solid var(--border-muted); border-radius:0;
+  border:1px solid var(--border); border-radius:0;
   overflow:hidden; margin-top:16px; background:var(--bg);
 }
 .side-tabs {
@@ -312,7 +312,7 @@ body.modal-open { overflow:hidden; }
 /* Status */
 .status-msg {
   font-size:11px; padding:6px 10px; margin-top:8px;
-  border-radius:4px; display:none;
+  display:none;
 }
 .status-msg.show { display:block; }
 .status-msg.error { background:var(--red-bg); color:var(--red); }
@@ -324,11 +324,11 @@ body.modal-open { overflow:hidden; }
 .my-order-item {
   display:flex; align-items:center; gap:10px;
   padding:12px;
-  border:1px solid var(--border-muted); border-radius:0;
+  border:1px solid var(--border); border-radius:0;
   margin-bottom:0; border-bottom:none; font-size:12px;
   transition:background 0.1s;
 }
-.my-order-item:last-child { border-bottom:1px solid var(--border-muted); }
+.my-order-item:last-child { border-bottom:1px solid var(--border); }
 .my-order-item:hover { background:var(--surface-hover); }
 .my-order-side {
   font-size:10px; font-weight:700; letter-spacing:0.06em;
@@ -362,7 +362,7 @@ body.modal-open { overflow:hidden; }
 }
 .global-search input {
   width:100%; padding:8px 10px; font-family:inherit; font-size:13px;
-  border:1px solid var(--border-muted); border-radius:6px;
+  border:1px solid var(--border); border-radius:0;
   background:var(--bg); color:var(--fg); outline:none;
   transition:border-color 0.15s;
 }
@@ -371,12 +371,12 @@ body.modal-open { overflow:hidden; }
 .global-order-item {
   display:flex; align-items:center; gap:10px;
   padding:12px;
-  border:1px solid var(--border-muted); border-radius:0;
+  border:1px solid var(--border); border-radius:0;
   margin-bottom:0; border-bottom:none; font-size:12px;
   cursor:pointer; transition:background 0.1s;
 }
-.global-order-item:first-child { border-top:1px solid var(--border-muted); }
-.global-order-item:last-child { border-bottom:1px solid var(--border-muted); }
+.global-order-item:first-child { border-top:1px solid var(--border); }
+.global-order-item:last-child { border-bottom:1px solid var(--border); }
 .global-order-item:hover { background:var(--surface-hover); }
 .order-token-pair {
   display:flex; align-items:center; gap:6px; flex-shrink:0;
@@ -429,8 +429,8 @@ body.modal-open { overflow:hidden; }
   display:flex; align-items:center; gap:8px; margin-bottom:14px;
 }
 .fill-amt-row input {
-  flex:1; background:var(--bg-surface); border:1px solid var(--border-muted);
-  border-radius:6px; padding:6px 8px; color:var(--fg); font-family:monospace; font-size:13px;
+  flex:1; background:var(--bg-surface); border:1px solid var(--border);
+  border-radius:0; padding:6px 8px; color:var(--fg); font-family:monospace; font-size:13px;
 }
 .fill-amt-row input:focus { outline:none; border-color:var(--accent); }
 .fill-amt-row .max-btn {
@@ -443,7 +443,7 @@ body.modal-open { overflow:hidden; }
 .site-footer {
   position:relative;
   text-align:center; padding:48px 20px; font-size:11px;
-  opacity:0.55; letter-spacing:0.5px; font-weight:300; margin-top:40px;
+  opacity:0.65; letter-spacing:0.5px; font-weight:300; margin-top:40px;
 }
 .site-footer a { color:inherit; text-decoration:underline; margin:0 2px; }
 .site-footer a:hover { opacity:0.7; }
@@ -464,6 +464,18 @@ body.modal-open { overflow:hidden; }
   .spread-row { padding:6px 8px; }
   .order-form-inner { padding:12px; }
   .modal { max-width:100%; margin:0 10px; max-height:calc(100vh - 40px); overflow-y:auto; }
+}
+@media (max-width:380px) {
+  body { padding:50px 8px 8px; }
+  .pair-name { font-size:13px; }
+  .amm-price { font-size:16px; }
+  .book-row { font-size:10px; padding:0 6px; }
+  .book-header { font-size:9px; padding:4px 6px; }
+  .spread-row { font-size:10px; padding:4px 6px; }
+  .order-form-inner { padding:10px; }
+  .order-form-inner input { font-size:14px; }
+  .order-card { padding:10px; }
+  h1 { font-size:12px; }
 }
 </style>
 </head>

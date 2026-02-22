@@ -141,7 +141,7 @@ body.modal-open { overflow:hidden; }
 
 /* Form card */
 .lp-card {
-  border:1px solid var(--border-muted); padding:20px; background:var(--bg);
+  border:1px solid var(--border); padding:20px; background:var(--bg);
 }
 .lp-section { margin-bottom:16px; }
 .lp-section:last-of-type { margin-bottom:0; }
@@ -151,7 +151,7 @@ body.modal-open { overflow:hidden; }
 }
 .lp-input {
   width:100%; padding:8px 0; font-size:24px; font-family:inherit;
-  border:none; border-bottom:1.5px solid var(--border-muted);
+  border:none; border-bottom:1.5px solid var(--border);
   outline:none; background:transparent; color:var(--fg);
 }
 .lp-input:focus { border-bottom-width:2.5px; margin-bottom:-1px; }
@@ -161,7 +161,7 @@ body.modal-open { overflow:hidden; }
 .lp-input[type=number] { -moz-appearance:textfield; }
 .lp-input-sm {
   width:60px; padding:4px 0; font-size:14px; font-family:inherit;
-  border:none; border-bottom:1px solid var(--border-muted);
+  border:none; border-bottom:1px solid var(--border);
   outline:none; background:transparent; color:var(--fg);
   text-align:center;
 }
@@ -174,7 +174,7 @@ body.modal-open { overflow:hidden; }
   padding:2px 4px; border:none; background:none;
   color:var(--fg-dim); font-size:10px; font-weight:600;
   letter-spacing:0.03em; text-transform:uppercase;
-  cursor:pointer; transition:color 0.15s; border-radius:3px;
+  cursor:pointer; transition:color 0.15s;
   font-family:inherit;
 }
 .lp-max:hover { color:var(--fg); background:var(--surface-hover); }
@@ -182,7 +182,7 @@ body.modal-open { overflow:hidden; }
 /* Buttons */
 .btn {
   font-family:inherit; font-size:11px; cursor:pointer;
-  border:1px solid var(--border-muted); border-radius:0;
+  border:1px solid var(--border); border-radius:0;
   padding:3px 8px; background:var(--surface); color:var(--fg);
   transition:background 0.15s;
 }
@@ -203,7 +203,7 @@ body.modal-open { overflow:hidden; }
 /* Status */
 .status-msg {
   font-size:11px; padding:6px 10px; margin-top:8px;
-  border-radius:4px; display:none;
+  display:none;
 }
 .status-msg.show { display:block; }
 .status-msg.error { background:#fff0f0; color:#c00; }
@@ -236,7 +236,7 @@ tr:hover td { background:var(--surface-hover); }
 .site-footer {
   position:relative;
   text-align:center; padding:48px 20px; font-size:11px;
-  opacity:0.55; letter-spacing:0.5px; font-weight:300; margin-top:40px;
+  opacity:0.65; letter-spacing:0.5px; font-weight:300; margin-top:40px;
 }
 .site-footer a { color:inherit; text-decoration:underline; margin:0 2px; }
 .site-footer a:hover { opacity:0.7; }
@@ -247,7 +247,7 @@ tr:hover td { background:var(--surface-hover); }
 .pool-selector-btn {
   display:inline-flex; align-items:center; gap:4px;
   font-family:inherit; font-size:11px; cursor:pointer;
-  border:1px solid var(--border-muted); border-radius:0;
+  border:1px solid var(--border); border-radius:0;
   padding:3px 8px; background:var(--surface); color:var(--fg);
   transition:background 0.15s; vertical-align:middle;
 }
@@ -261,10 +261,10 @@ tr:hover td { background:var(--surface-hover); }
 }
 .pool-modal-overlay.active { display:flex; }
 .pool-modal {
-  background:var(--bg); border:1px solid var(--border-muted);
+  background:var(--bg); border:1px solid var(--border);
   padding:16px; width:100%; max-width:420px;
   max-height:calc(100vh - 40px); max-height:calc(100dvh - 40px);
-  overflow-y:auto; -webkit-overflow-scrolling:touch; border-radius:8px;
+  overflow-y:auto; -webkit-overflow-scrolling:touch;
 }
 .pool-modal-header {
   display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;
@@ -278,7 +278,7 @@ tr:hover td { background:var(--surface-hover); }
 .pool-list-item {
   display:flex; align-items:center; gap:10px;
   padding:10px 12px; cursor:pointer; transition:background 0.12s;
-  border-radius:4px; margin:0 4px;
+  margin:0 4px;
 }
 .pool-list-item:hover { background:var(--surface-hover); }
 .pool-list-item .pool-pair { font-size:13px; font-weight:500; }
@@ -294,6 +294,16 @@ tr:hover td { background:var(--surface-hover); }
   .info-grid { grid-template-columns:1fr; }
   .lp-input { font-size:20px; }
   .wallet-modal { max-width:100%; margin:0 10px; max-height:calc(100vh - 40px); overflow-y:auto; }
+}
+@media (max-width:380px) {
+  body { padding:50px 8px 8px; }
+  h1 { font-size:12px; }
+  .lp-input { font-size:18px; }
+  .lp-card { padding:14px; }
+  .pool-selector-btn { font-size:11px; padding:8px 10px; }
+  .tab-btn { font-size:10px; padding:8px 10px; }
+  .btn { padding:4px 8px; font-size:10px; }
+  .lp-row { font-size:11px; }
 }
 </style>
 </head>

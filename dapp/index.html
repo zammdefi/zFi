@@ -181,8 +181,8 @@ button.secondary:hover { background: var(--surface-hover); }
   padding: 0;
   transition: transform 0.15s ease, border-color 0.15s ease, filter 0.15s ease, opacity 0.15s ease;
   position: relative;
-  filter: grayscale(0.6);
-  opacity: 0.55;
+  filter: grayscale(0.4);
+  opacity: 0.7;
 }
 .quick-token:hover {
   transform: scale(1.15);
@@ -595,7 +595,7 @@ body.modal-open { overflow: hidden; }
   margin-top: 40px;
   padding: 48px 20px;
   font-size: 11px;
-  opacity: 0.55;
+  opacity: 0.65;
   letter-spacing: 0.5px;
   font-weight: 300;
 }
@@ -621,6 +621,7 @@ body.modal-open { overflow: hidden; }
   .dark-toggle { top: 18px; left: 16px; }
   .swap-card { padding: 20px 16px; }
   .quick-token { min-width: 26px; min-height: 26px; padding: 4px; }
+  .arrow-btn { width: 38px; height: 38px; }
   /* Privacy tab mobile */
   .pp-note-area { font-size: 10px; }
   .pp-asset-btn { padding: 8px 6px; font-size: 12px; min-height: 40px; }
@@ -644,9 +645,9 @@ body.modal-open { overflow: hidden; }
   .quick-token .qi { width: 20px; height: 20px; }
   .quote-info { padding: 10px 8px; font-size: 12px; }
   .balance { font-size: 11px; gap: 4px; flex-wrap: wrap; }
-  .max-btn { font-size: 9px; padding: 2px 3px; }
+  .max-btn { font-size: 10px; padding: 4px 6px; }
   /* Privacy tab tight mobile */
-  .pp-asset-btn { padding: 6px 4px; font-size: 11px; }
+  .pp-asset-btn { padding: 8px 6px; font-size: 11px; min-height: 36px; }
   .pp-note-area { font-size: 9px; }
   /* Coin launch form tight mobile */
   .coin-slider-row { flex-wrap:wrap;gap:4px 8px; }
@@ -805,7 +806,7 @@ body.modal-open { overflow: hidden; }
 
 /* Swap card container */
 .swap-card {
-  border: 1px solid var(--card-border);
+  border: 1px solid var(--border);
   border-radius: 0;
   padding: 24px;
   background: var(--bg);
@@ -1431,7 +1432,7 @@ return `<svg width="${s}" height="${s}" viewBox="0 0 400 400" xmlns="http://www.
 
 // ---- Constants ----
 const CHAIN_ID = 1;
-const ZQUOTER_ADDRESS = "0xBe3d86dc8FFfd8FFC1B6fC7e1320417c9C7F18c5";
+const ZQUOTER_ADDRESS = "0x0639d563aACf4Bf13E81Adadf519b988347993dF";
 const ZROUTER_ADDRESS = "0x000000000000FB114709235f1ccBFfb925F600e4";
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
@@ -5348,6 +5349,24 @@ async function executeSwap() {
     const fromData = tokens[fromSnap];
     const amountIn = _isExactOut ? quote.requiredInput : safeParseUnits(amtStr, fromData.decimals);
 
+    // Pre-swap balance check
+    {
+      let bal = getCachedBalance(fromData.address);
+      if (bal == null) {
+        bal = fromData.address === ZERO_ADDRESS
+          ? await provider.getBalance(connectedAddress)
+          : await erc20Read(fromData.address).balanceOf(connectedAddress);
+        setCachedBalance(fromData.address, bal);
+      }
+      if (bal < amountIn) {
+        swapBtn.textContent = `Insufficient ${fromSnap} balance`;
+        swapBtn.disabled = false;
+        _swapResetTimer = setTimeout(() => { handleAmountChange(); }, 3000);
+        _swapBusy = false;
+        return;
+      }
+    }
+
     let txData = quote.multicall;
 
     // ERC20 approval
@@ -5813,7 +5832,7 @@ function updateLpLink(quote) {
 }
 
 // ---- Quick-pick popular tokens ----
-const QUICK_TOKENS = ["BOLD", "DAI", "stETH", "rETH"];
+const QUICK_TOKENS = ["BOLD", "DAI", "USDC", "stETH", "rETH"];
 
 function renderQuickTokens() {
   const el = $('quickTokens');

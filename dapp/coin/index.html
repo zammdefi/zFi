@@ -84,22 +84,24 @@ input {
   display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;
 }
 .coin-card {
-  border:1px solid var(--border-muted);border-radius:8px;padding:16px;
-  cursor:pointer;transition:background 0.15s;text-decoration:none;color:var(--fg);display:block;
+  border:1px solid var(--border);padding:16px;
+  cursor:pointer;transition:background 0.15s, transform 0.15s;text-decoration:none;color:var(--fg);display:block;
 }
-.coin-card:hover { background:var(--surface-hover); }
+.coin-card:hover { background:var(--surface-hover);transform:translateY(-1px); }
 .coin-card-head { display:flex;align-items:center;gap:10px;margin-bottom:10px; }
 .coin-logo {
-  width:40px;height:40px;border-radius:50%;border:1px solid var(--border-muted);
+  width:40px;height:40px;border-radius:50%;border:1px solid var(--border);
   display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;
   font-size:16px;font-weight:700;background:var(--surface);
 }
 .coin-logo img { width:100%;height:100%;object-fit:cover; }
 .coin-card-name { font-size:14px;font-weight:600; }
 .coin-card-symbol { font-size:12px;color:var(--fg-muted); }
-.coin-card-bar { height:4px;background:var(--border-muted);border-radius:2px;margin-top:8px;overflow:hidden; }
-.coin-card-bar-fill { height:100%;background:var(--green);border-radius:2px;transition:width 0.3s; }
+.coin-card-bar { height:4px;background:var(--border-muted);margin-top:8px;overflow:hidden; }
+.coin-card-bar-fill { height:100%;background:var(--green);transition:width 0.3s; }
 .coin-card-stat { font-size:11px;color:var(--fg-muted);margin-top:6px; }
+.coin-card-mcap { font-size:11px;font-weight:600;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--fg); }
+.coin-card-mcap .usd { font-weight:400;color:var(--fg-muted); }
 .coin-tpl-badge {
   display:inline-flex;align-items:center;vertical-align:middle;margin-left:4px;
   color:var(--fg);opacity:0.7;
@@ -114,8 +116,8 @@ input {
 
 /* Detail page */
 .coin-banner {
-  width:100%;height:180px;border-radius:8px;overflow:hidden;margin-bottom:-30px;
-  background:var(--surface);border:1px solid var(--border-muted);
+  width:100%;height:180px;overflow:hidden;margin-bottom:-30px;
+  background:var(--surface);border:1px solid var(--border);
 }
 .coin-banner img { width:100%;height:100%;object-fit:cover; }
 .coin-detail-head {
@@ -131,9 +133,10 @@ input {
 .coin-detail-title .coin-symbol-row { display:flex;align-items:center;gap:6px; }
 .coin-detail-title .coin-symbol-row span { font-size:13px;color:var(--fg-muted); }
 .coin-user-balance { margin-left:auto;font-size:12px;color:var(--fg-muted);white-space:nowrap; }
+.coin-mcap-row { font-size:13px;color:var(--fg-muted);margin-bottom:12px;font-weight:500; }
 
 .section-card {
-  border:1px solid var(--border-muted);border-radius:8px;padding:16px;margin-bottom:16px;
+  border:1px solid var(--border);padding:16px;margin-bottom:16px;
 }
 .section-title {
   font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
@@ -142,8 +145,8 @@ input {
 .stat-row { display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px; }
 .stat-label { color:var(--fg-muted); }
 .stat-value { font-weight:600;overflow:hidden;text-overflow:ellipsis;min-width:0; }
-.progress-bar { height:6px;background:var(--border-muted);border-radius:3px;overflow:hidden;margin:8px 0; }
-.progress-fill { height:100%;border-radius:3px;transition:width 0.3s; }
+.progress-bar { height:6px;background:var(--border-muted);overflow:hidden;margin:8px 0; }
+.progress-fill { height:100%;transition:width 0.3s; }
 
 /* Swap tile */
 .swap-tile { position:relative; }
@@ -205,9 +208,16 @@ input {
 .swap-arrow-btn:hover svg { stroke:var(--btn-fg); }
 .swap-arrow-btn svg { stroke:var(--fg);transition:stroke 0.2s; }
 .swap-quote { font-size:12px;color:var(--fg-muted);min-height:18px;margin-bottom:10px; }
+.action-btn {
+  width:100%;margin:0;padding:12px;font-size:13px;font-weight:600;letter-spacing:0.05em;
+  text-transform:uppercase;cursor:pointer;background:var(--btn-bg);color:var(--btn-fg);
+  border:none;font-family:inherit;transition:background 0.2s;
+}
+.action-btn:hover:not(:disabled) { background:var(--btn-hover); }
+.action-btn:disabled { background:var(--btn-dis-bg);border:1px solid var(--btn-dis-border);color:var(--btn-dis-fg);cursor:not-allowed; }
 
 /* Collapsible drawer (tap, chart) */
-.drawer { border:1px solid var(--border-muted);border-radius:8px;margin-bottom:16px;overflow:hidden; }
+.drawer { border:1px solid var(--border);margin-bottom:16px;overflow:hidden; }
 .drawer-toggle {
   display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;
   font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-muted);
@@ -220,9 +230,19 @@ input {
 .drawer.open .drawer-body { display:block; }
 
 /* Chart drawer body (special: aspect-ratio iframe instead of padded content) */
-.chart-body { display:none;position:relative;width:100%;padding-bottom:56.25%;background:var(--surface); }
+.chart-body { display:none;position:relative;width:100%;background:var(--surface); }
 .drawer.open .chart-body { display:block; }
-.chart-body iframe { position:absolute;top:0;left:0;width:100%;height:100%;border:none; }
+.chart-type-toggle {
+  display:flex;gap:0;border-bottom:1px solid var(--border-muted);
+}
+.chart-type-toggle button {
+  font-family:inherit;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;
+  padding:6px 14px;border:none;cursor:pointer;background:transparent;color:var(--fg-muted);
+}
+.chart-type-toggle button.active { background:var(--btn-bg);color:var(--btn-fg); }
+.chart-type-toggle button:not(.active):hover { color:var(--fg); }
+.chart-iframe-wrap { position:relative;width:100%;padding-bottom:56.25%; }
+.chart-iframe-wrap iframe { position:absolute;top:0;left:0;width:100%;height:100%;border:none;background:var(--surface);color-scheme:light dark; }
 
 /* Pool activity drawer */
 .activity-body { display:none;padding:0; }
@@ -266,7 +286,7 @@ input {
 }
 /* Footer */
 .site-footer {
-  position:relative;text-align:center;padding:48px 20px;font-size:11px;opacity:0.55;margin-top:40px;
+  position:relative;text-align:center;padding:48px 20px;font-size:11px;opacity:0.65;margin-top:40px;
   letter-spacing:0.5px;font-weight:300;
 }
 .site-footer a { color:inherit;text-decoration:underline;margin:0 2px; }
@@ -346,6 +366,7 @@ body.modal-open { overflow:hidden; }
   .coin-card-name { font-size:13px; }
   .coin-card-symbol { font-size:11px; }
   .coin-card-stat { font-size:10px; }
+  .coin-card-mcap { font-size:10px; }
   .coin-search { font-size:14px; }
   .coin-banner { height:130px; }
   .coin-detail-logo { width:48px;height:48px; }
@@ -376,9 +397,11 @@ body.modal-open { overflow:hidden; }
   .section-card { padding:10px; }
   .stat-row { font-size:11px;flex-wrap:wrap;gap:2px; }
   .swap-section input { font-size:16px; }
-  .swap-dir button { font-size:10px;padding:6px 0; }
-  .swap-mode-tabs button { font-size:10px;padding:6px 0; }
+  .swap-dir button { font-size:10px;padding:8px 0; }
+  .swap-mode-tabs button { font-size:10px;padding:8px 0; }
   .coin-banner { height:100px;margin-bottom:-20px; }
+  .activity-table { min-width:420px; }
+  .activity-table a { font-size:10px; }
 }
 </style>
 </head>
@@ -407,6 +430,10 @@ body.modal-open { overflow:hidden; }
 function toggleDark() {
   const on = document.documentElement.classList.toggle('dark');
   localStorage.setItem('dark', on ? '1' : '0');
+  const iframe = document.querySelector('.chart-iframe-wrap iframe');
+  if (iframe) {
+    try { iframe.contentWindow.postMessage({ type: 'theme', value: on ? 'dark' : 'light' }, 'https://www.zamm.finance'); } catch(e) {}
+  }
 }
 const $ = id => document.getElementById(id);
 const _escTextMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
@@ -432,7 +459,9 @@ const VIEW_HELPER = '0x00000000006631040967E58e3430e4B77921a2db';
 const DAICO_ADDR = '0x000000000033e92DB97B4B3beCD2c255126C60aC';
 const SUMMONER = '0x0000000000330B8df9E3bc5E553074DA58eE9138';
 const ZAMM = '0x000000000000040470635EB91b7CE4D132D616eD';
-const ZQUOTER = '0xBe3d86dc8FFfd8FFC1B6fC7e1320417c9C7F18c5';
+const ZQUOTER = '0x0639d563aACf4Bf13E81Adadf519b988347993dF';
+const CHAINLINK_ETH_USD = '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419';
+const CHAINLINK_ABI = ['function latestAnswer() view returns (int256)'];
 const ZERO = ethers.ZeroAddress;
 const IPFS_GW = 'https://content.wrappr.wtf/ipfs/';
 
@@ -559,6 +588,13 @@ function updateOGMeta(title, description, imageUrl) {
   if (cardEl) cardEl.setAttribute('content', imageUrl ? 'summary_large_image' : 'summary');
 }
 
+var _coinChartType = 'line';
+
+function coinChartUrl(poolId, type) {
+  const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  return `https://www.zamm.finance/embed/pool/1/${poolId}?type=${type}&theme=${theme}`;
+}
+
 function toggleChart() {
   const el = $('chartDrawer');
   if (!el) return;
@@ -566,11 +602,26 @@ function toggleChart() {
   if (el.classList.contains('open') && !el.dataset.loaded) {
     el.dataset.loaded = '1';
     const poolId = el.dataset.poolId;
-    const dark = document.documentElement.classList.contains('dark');
-    const theme = dark ? 'dark' : 'light';
     const body = el.querySelector('.chart-body');
-    body.innerHTML = `<iframe src="https://www.zamm.finance/embed/pool/1/${poolId}?theme=${theme}" allow="clipboard-write" sandbox="allow-scripts allow-same-origin"></iframe>`;
+    body.innerHTML = `<div class="chart-type-toggle"><button class="active" data-type="line" onclick="setCoinChartType('line')">Line</button><button data-type="candle" onclick="setCoinChartType('candle')">Candle</button></div><div class="chart-iframe-wrap"><iframe src="${coinChartUrl(poolId, _coinChartType)}" allow="clipboard-write" sandbox="allow-scripts allow-same-origin"></iframe></div>`;
   }
+}
+
+function setCoinChartType(type) {
+  if (type === _coinChartType) return;
+  _coinChartType = type;
+  const el = $('chartDrawer');
+  if (!el) return;
+  const poolId = el.dataset.poolId;
+  const wrap = el.querySelector('.chart-iframe-wrap');
+  if (wrap) {
+    const iframe = document.createElement('iframe');
+    iframe.src = coinChartUrl(poolId, type);
+    iframe.allow = 'clipboard-write';
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    wrap.replaceChildren(iframe);
+  }
+  el.querySelectorAll('.chart-type-toggle button').forEach(b => b.classList.toggle('active', b.dataset.type === type));
 }
 
 // ==================== POOL ACTIVITY ====================
@@ -737,6 +788,71 @@ async function loadMoreActivity() {
   }
 }
 
+function toggleLpList() {
+  const el = $('lpDrawer');
+  if (!el) return;
+  el.classList.toggle('open');
+  if (el.classList.contains('open') && !el.dataset.loaded) {
+    el.dataset.loaded = '1';
+    loadLpProviders(el.dataset.poolId);
+  }
+}
+
+async function loadLpProviders(poolId) {
+  const content = $('lpListContent');
+  if (!content) return;
+  content.innerHTML = `<div class="activity-empty">${zfiLoadingSVG(32)} Loading...</div>`;
+  try {
+    const allEvents = [];
+    let cursor = null;
+    for (;;) {
+      let url = `${INDEXER}/api/events?poolId=${poolId}&limit=500`;
+      if (cursor) url += `&before=${cursor}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      for (const e of json.data) {
+        if (e.type === 'LIQADD' || e.type === 'LIQREM') allEvents.push(e);
+      }
+      cursor = json.nextCursor || null;
+      if (!cursor) break;
+    }
+    // Aggregate net liquidity per address
+    const map = {};
+    for (const e of allEvents) {
+      const addr = e.maker;
+      if (!map[addr]) map[addr] = { addr, net: 0n, lastTs: 0 };
+      const amt = BigInt(e.type === 'LIQADD' ? e.amount0_in : e.amount0_out);
+      map[addr].net += e.type === 'LIQADD' ? amt : -amt;
+      if (e.timestamp > map[addr].lastTs) map[addr].lastTs = e.timestamp;
+    }
+    const providers = Object.values(map).filter(p => p.net > 0n).sort((a, b) => a.net > b.net ? -1 : a.net < b.net ? 1 : 0);
+    renderLpTable(providers);
+  } catch(e) {
+    content.innerHTML = '<div class="activity-empty">Failed to load LP data</div>';
+  }
+}
+
+function renderLpTable(providers) {
+  const content = $('lpListContent');
+  if (!content) return;
+  if (!providers.length) {
+    content.innerHTML = '<div class="activity-empty">No liquidity providers</div>';
+    return;
+  }
+  const rows = providers.map(p => {
+    const short = p.addr.slice(0, 6) + '\u2026' + p.addr.slice(-4);
+    return `<tr>
+      <td><a href="https://etherscan.io/address/${escText(p.addr)}" target="_blank">${short}</a></td>
+      <td>${fmtWei(p.net.toString())}</td>
+      <td>${fmtAge(p.lastTs)}</td>
+    </tr>`;
+  }).join('');
+  content.innerHTML = `<table class="activity-table">
+    <thead><tr><th>Address</th><th>Liquidity (ETH)</th><th>Last Active</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 function pctBar(pct, color) {
   color = color || 'var(--green)';
   return `<div class="progress-bar"><div class="progress-fill" style="width:${Math.min(pct,100).toFixed(1)}%;background:${color}"></div></div>`;
@@ -744,9 +860,14 @@ function pctBar(pct, color) {
 
 function fmtETH(wei) {
   const v = Number(ethers.formatEther(wei));
-  if (v >= 1) return v.toFixed(4) + ' ETH';
-  if (v >= 0.001) return v.toFixed(6) + ' ETH';
-  return v.toFixed(8) + ' ETH';
+  return fmtNum(v) + ' ETH';
+}
+function fmtNum(v) {
+  if (v >= 1) return v.toFixed(4);
+  if (v >= 0.001) return v.toFixed(6);
+  if (v >= 0.000001) return v.toFixed(8);
+  if (v > 0) return v.toExponential(2);
+  return '0';
 }
 
 function fmtShares(wei) {
@@ -754,6 +875,35 @@ function fmtShares(wei) {
   if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
   if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
   return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function fmtMcap(ethVal) {
+  if (ethVal >= 1000) return (ethVal / 1000).toFixed(1) + 'K ETH';
+  if (ethVal >= 1) return ethVal.toFixed(2) + ' ETH';
+  if (ethVal >= 0.01) return ethVal.toFixed(4) + ' ETH';
+  return ethVal.toFixed(6) + ' ETH';
+}
+
+function fmtUsd(val) {
+  if (val >= 1e6) return '$' + (val / 1e6).toFixed(2) + 'M';
+  if (val >= 1e3) return '$' + (val / 1e3).toFixed(1) + 'K';
+  if (val >= 1) return '$' + val.toFixed(0);
+  return '$' + val.toFixed(2);
+}
+
+let _ethUsdPrice = 0;
+let _ethUsdTs = 0;
+async function getEthUsd() {
+  if (_ethUsdPrice > 0 && Date.now() - _ethUsdTs < 5 * 60 * 1000) return _ethUsdPrice;
+  try {
+    const price = await withRPC(async rpc => {
+      const cl = new ethers.Contract(CHAINLINK_ETH_USD, CHAINLINK_ABI, rpc);
+      return await cl.latestAnswer();
+    });
+    _ethUsdPrice = Number(price) / 1e8;
+    _ethUsdTs = Date.now();
+  } catch(e) {}
+  return _ethUsdPrice;
 }
 
 // ==================== ROUTER ====================
@@ -809,9 +959,23 @@ async function renderGallery() {
     ].map(a => a.toLowerCase()));
     const filtered = daicos.filter(d => !EXCLUDED_COINS.has(d.dao.toLowerCase()));
 
-    // Fetch metadata for all coins in parallel
-    const metadataPromises = filtered.map(d => fetchMetadata(d.meta.contractURI));
-    const allMetadata = await Promise.all(metadataPromises);
+    // Fetch metadata, pool reserves, and ETH/USD price in parallel
+    const zammI = new ethers.Interface(ZAMM_POOLS_ABI);
+    const poolCalls = filtered.map(d => {
+      const sale = d.sales && d.sales.length > 0 ? d.sales[0] : null;
+      const feeOrHook = sale ? BigInt(sale.feeOrHook) : 30n;
+      const poolId = computePoolId(ZERO, d.meta.sharesToken, 0n, 0n, feeOrHook);
+      return { target: ZAMM, allowFailure: true, callData: zammI.encodeFunctionData('pools', [poolId]) };
+    });
+
+    const [allMetadata, poolResults, ethUsd] = await Promise.all([
+      Promise.all(filtered.map(d => fetchMetadata(d.meta.contractURI))),
+      withRPC(async rpc => {
+        const mc = new ethers.Contract(MC3, MC3_ABI, rpc);
+        return await mc.aggregate3(poolCalls);
+      }).catch(() => poolCalls.map(() => ({ success: false }))),
+      getEthUsd()
+    ]);
 
     let grid = '';
     for (let i = 0; i < filtered.length; i++) {
@@ -819,12 +983,33 @@ async function renderGallery() {
       const md = allMetadata[i];
       const sale = d.sales && d.sales.length > 0 ? d.sales[0] : null;
 
-      let salePct = 0, raisedETH = '0';
+      let salePct = 0, treasuryDisplay = '0';
       if (sale && sale.totalSupply > 0n) {
         const soldShares = sale.totalSupply - sale.remainingSupply;
         if (sale.totalSupply > 0n) salePct = Number((soldShares * 10000n) / sale.totalSupply) / 100;
-        raisedETH = fmtETH((sale.forAmt > 0n) ? (soldShares * sale.tribAmt / sale.forAmt) : 0n);
+        treasuryDisplay = fmtETH(sale.treasuryBalance || 0n);
       }
+
+      // Market cap (FDV): price * 1B total supply
+      const fdvSupply = Number(COIN_SUPPLY_TOTAL);
+      let mcapETH = 0;
+      const pr = poolResults[i];
+      if (pr && pr.success) {
+        try {
+          const decoded = zammI.decodeFunctionResult('pools', pr.returnData);
+          const r0 = decoded[0], r1 = decoded[1];
+          if (r0 > 0n && r1 > 0n) {
+            const price = Number(ethers.formatEther(r0)) / Number(ethers.formatEther(r1));
+            mcapETH = price * fdvSupply;
+          }
+        } catch(e) {}
+      }
+      if (!mcapETH && sale && sale.tribAmt > 0n && sale.forAmt > 0n) {
+        const price = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt));
+        mcapETH = price * fdvSupply;
+      }
+      const mcapDisplay = mcapETH > 0 ? fmtMcap(mcapETH) : '';
+      const mcapUsd = mcapETH > 0 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
 
       const now = BigInt(Math.floor(Date.now() / 1000));
       const saleActive = sale && sale.remainingSupply > 0n && sale.allowance > 0n && sale.forAmt > 0n && (sale.deadline === 0n || now <= BigInt(sale.deadline));
@@ -843,9 +1028,8 @@ async function renderGallery() {
             </div>
           </div>
           <div class="coin-card-bar"><div class="coin-card-bar-fill" style="width:${Math.min(salePct,100).toFixed(1)}%"></div></div>
-          <div class="coin-card-stat">
-            ${saleActive ? `${salePct.toFixed(1)}% sold` : 'Sale ended'} &middot; ${raisedETH} raised
-          </div>
+          <div class="coin-card-stat">${saleActive ? `${salePct.toFixed(1)}% sold` : 'Sale ended'}${(sale && sale.treasuryBalance > 0n) ? ` &middot; ${treasuryDisplay} treasury` : ''}</div>
+          ${mcapDisplay ? `<div class="coin-card-mcap">MCap ${mcapDisplay}${mcapUsd ? ` <span class="usd">${mcapUsd}</span>` : ''}</div>` : ''}
         </a>
       `;
     }
@@ -920,24 +1104,24 @@ async function renderCoinPage(daoAddr) {
     const feeOrHookVal = sale ? BigInt(sale.feeOrHook) : 30n;
     const poolId = computePoolId(ZERO, sharesAddr, 0n, 0n, feeOrHookVal);
     const tapActive_ = tap && tap.ratePerSec > 0n;
-    const [metadata, poolResult] = await Promise.all([
+    const [metadata, poolResult, ethUsd] = await Promise.all([
       fetchMetadata(data.meta.contractURI),
       withRPC(async rpc => {
         const z = new ethers.Contract(ZAMM, ZAMM_POOLS_ABI, rpc);
         return await z.pools(poolId);
-      }).catch(() => null)
+      }).catch(() => null),
+      getEthUsd()
     ]);
     _coinMeta = metadata;
     const opsLockup = tapActive_ && tap.ops ? await fetchOpsLockup(sharesAddr, tap.ops, metadata) : null;
 
     // Sale stats
     const lpBps = sale ? Number(sale.lpBps) : 0;
-    let salePct = 0, sold = 0n, totalSale = 0n, totalRaised = 0n, treasuryETH = 0n, saleActive = false;
+    let salePct = 0, sold = 0n, totalSale = 0n, treasuryETH = 0n, saleActive = false;
     if (sale) {
       totalSale = sale.totalSupply;
       sold = totalSale - sale.remainingSupply;
       if (totalSale > 0n) salePct = Number((sold * 10000n) / totalSale) / 100;
-      totalRaised = (sale.forAmt > 0n) ? (sold * sale.tribAmt / sale.forAmt) : 0n;
       treasuryETH = sale.treasuryBalance;
       const now = BigInt(Math.floor(Date.now() / 1000));
       saleActive = sale.remainingSupply > 0n && sale.allowance > 0n && sale.forAmt > 0n && (sale.deadline === 0n || now <= BigInt(sale.deadline));
@@ -956,12 +1140,15 @@ async function renderCoinPage(daoAddr) {
       dailyRate = Number(ethers.formatEther(tap.ratePerSec * 86400n));
     }
 
-    // Price per share
+    // Price per 1M shares
     let priceDisplay = '';
     if (sale && sale.tribAmt > 0n && sale.forAmt > 0n) {
-      const pricePerShare = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt));
-      priceDisplay = pricePerShare < 0.000001 ? pricePerShare.toExponential(2) : pricePerShare.toFixed(8);
+      const pricePer1M = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt)) * 1e6;
+      priceDisplay = pricePer1M >= 1 ? pricePer1M.toFixed(4) : pricePer1M >= 0.001 ? pricePer1M.toFixed(6) : pricePer1M.toExponential(2);
     }
+
+    // Market cap (pool price preferred, fallback to sale price)
+    let mcapETH = 0;
 
     // Banner + OG meta for social sharing
     const bannerUrl = resolveIPFS(metadata.banner);
@@ -970,7 +1157,7 @@ async function renderCoinPage(daoAddr) {
     const coinSymbol = data.meta.symbol || '???';
     const ogDesc = metadata.description
       ? metadata.description.slice(0, 200)
-      : `$${coinSymbol} on zFi${saleActive ? ' — sale live' : ''} — ${fmtETH(totalRaised)} raised`;
+      : `$${coinSymbol} on zFi${saleActive ? ' — sale live' : ''} — ${fmtETH(treasuryETH)} treasury`;
     updateOGMeta(
       `$${coinSymbol} — ${coinName}`,
       ogDesc,
@@ -989,6 +1176,18 @@ async function renderCoinPage(daoAddr) {
     const reserve1 = poolResult ? (poolResult.reserve1 ?? poolResult[1] ?? 0n) : 0n;
     const hasPool = reserve0 > 0n || reserve1 > 0n;
 
+    // Compute market cap (FDV): price * 1B total supply
+    const fdvSupply = Number(COIN_SUPPLY_TOTAL);
+    if (hasPool && reserve1 > 0n) {
+      const spotPrice = Number(ethers.formatEther(reserve0)) / Number(ethers.formatEther(reserve1));
+      mcapETH = spotPrice * fdvSupply;
+    } else if (sale && sale.tribAmt > 0n && sale.forAmt > 0n) {
+      const salePrice = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt));
+      mcapETH = salePrice * fdvSupply;
+    }
+    const mcapDisplay = mcapETH > 0 ? fmtMcap(mcapETH) : '';
+    const mcapUsd = mcapETH > 0 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
+
     let html = `
       <a href="#" class="back-link">&larr; All Coins</a>
       ${bannerHTML}
@@ -1002,6 +1201,7 @@ async function renderCoinPage(daoAddr) {
           </div>
         </div>
       </div>
+      ${mcapDisplay ? `<div class="coin-mcap-row">MCap: ${mcapDisplay}${mcapUsd ? ` <span style="color:var(--fg-muted);font-weight:400">(${mcapUsd})</span>` : ''}</div>` : ''}
     `;
 
     // Description + socials
@@ -1024,7 +1224,7 @@ async function renderCoinPage(daoAddr) {
       const simpleLpPct = metadata.lpBps ? metadata.lpBps / 100 : 80;
       const simpleTreasuryPct = 100 - simpleLpPct;
       html += `
-        <div class="section-card" style="background:var(--surface);border:1px solid var(--border-muted)">
+        <div class="section-card" style="background:var(--surface)">
           <div class="section-title">ez launch</div>
           <div style="font-size:12px;line-height:1.8;color:var(--fg-muted)">
             ${simpleLpPct}% LP &middot; ${simpleTreasuryPct}% ragequitable treasury<br>
@@ -1038,9 +1238,9 @@ async function renderCoinPage(daoAddr) {
     const saleContent = `
         <div class="stat-row"><span class="stat-label">Sold</span><span class="stat-value">${fmtShares(sold)} / ${fmtShares(totalSale)}</span></div>
         ${pctBar(salePct, 'var(--green)')}
-        <div class="stat-row"><span class="stat-label">Raised</span><span class="stat-value">${fmtETH(totalRaised)} ${ethIco}</span></div>
-        ${priceDisplay ? `<div class="stat-row"><span class="stat-label">Price</span><span class="stat-value">${priceDisplay} ${ethIco}/share</span></div>` : ''}
-        ${lpBps > 0 ? `<div class="stat-row"><span class="stat-label">LP seeding</span><span class="stat-value">${lpBps / 100}% of buys &rarr; zAMM${feeOrHook <= 10000n ? ` (${Number(feeOrHook) / 100}% fee)` : ''}</span></div>` : ''}`;
+        ${treasuryETH > 0n ? `<div class="stat-row"><span class="stat-label">Treasury</span><span class="stat-value">${fmtETH(treasuryETH)} ${ethIco}</span></div>` : ''}
+        ${priceDisplay ? `<div class="stat-row"><span class="stat-label">Price</span><span class="stat-value">${priceDisplay} ${ethIco}/1M shares</span></div>` : ''}
+        ${lpBps > 0 ? `<div class="stat-row"><span class="stat-label">LP seeding</span><span class="stat-value">${lpBps / 100}% of buys &rarr; zAMM${feeOrHook <= 10000n ? ` (${Number(feeOrHook) / 100}% fee)` : ''}</span></div>` : ''}`
     if (saleActive) {
       html += `
         <div class="section-card">
@@ -1063,16 +1263,18 @@ async function renderCoinPage(daoAddr) {
     }
 
     // Treasury + Pool reserves
-    html += `
-      <div class="section-card">
-        <div class="section-title">Treasury</div>
-        <div class="stat-row"><span class="stat-label">${ethIco} Balance</span><span class="stat-value">${fmtETH(treasuryETH)} ${ethIco}</span></div>
-        ${hasPool ? `
-          <div class="stat-row"><span class="stat-label">Pool ${ethIco}${saleActive ? ' <span style="font-weight:400;font-size:10px;opacity:0.6">(building...)</span>' : ''}</span><span class="stat-value">${fmtETH(reserve0)} ${ethIco}</span></div>
-          <div class="stat-row"><span class="stat-label">Pool $${escText(data.meta.symbol || '???')}</span><span class="stat-value">${fmtShares(reserve1)}</span></div>
-        ` : ''}
-      </div>
-    `;
+    if (treasuryETH > 0n || hasPool) {
+      html += `
+        <div class="section-card">
+          <div class="section-title">Treasury</div>
+          ${treasuryETH > 0n ? `<div class="stat-row"><span class="stat-label">${ethIco} Balance</span><span class="stat-value">${fmtETH(treasuryETH)} ${ethIco}</span></div>` : ''}
+          ${hasPool ? `
+            <div class="stat-row"><span class="stat-label">Pool ${ethIco}${saleActive ? ' <span style="font-weight:400;font-size:10px;opacity:0.6">(building...)</span>' : ''}</span><span class="stat-value">${fmtETH(reserve0)} ${ethIco}</span></div>
+            <div class="stat-row"><span class="stat-label">Pool $${escText(data.meta.symbol || '???')}</span><span class="stat-value">${fmtShares(reserve1)}</span></div>
+          ` : ''}
+        </div>
+      `;
+    }
 
     // Tap drawer (collapsed)
     if (tapActive) {
@@ -1084,12 +1286,12 @@ async function renderCoinPage(daoAddr) {
             <span class="arrow">&#9660;</span>
           </button>
           <div class="drawer-body">
-            <div class="stat-row"><span class="stat-label">Vested</span><span class="stat-value">${tapVested.toFixed(4)} / ${tapTotal.toFixed(4)} ${ethIco}</span></div>
+            <div class="stat-row"><span class="stat-label">Vested</span><span class="stat-value">${fmtNum(tapVested)} / ${fmtNum(tapTotal)} ${ethIco}</span></div>
             ${pctBar(tapPct, 'var(--green)')}
-            <div class="stat-row"><span class="stat-label">Rate</span><span class="stat-value">${dailyRate.toFixed(4)} ${ethIco}/day</span></div>
-            <div class="stat-row"><span class="stat-label">Claimable now</span><span class="stat-value">${claimableETH.toFixed(6)} ${ethIco}</span></div>
+            <div class="stat-row"><span class="stat-label">Rate</span><span class="stat-value">${fmtNum(dailyRate)} ${ethIco}/day</span></div>
+            <div class="stat-row"><span class="stat-label">Claimable now</span><span class="stat-value">${fmtNum(claimableETH)} ${ethIco}</span></div>
             <div class="stat-row"><span class="stat-label">Ops</span><span class="stat-value" style="font-size:11px"><a class="ops-addr-link" href="https://etherscan.io/address/${tap.ops}" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--fg-muted)">${tap.ops}</a></span></div>
-            ${claimableETH > 0 ? `<button id="tapClaimBtn" onclick="onTapClaim()" style="width:100%;margin-top:10px;padding:10px;font-size:12px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;background:var(--btn-bg);color:var(--btn-fg);border:none;font-family:inherit">Claim ${claimableETH.toFixed(6)} ETH</button>` : ''}
+            ${claimableETH > 0 ? `<button id="tapClaimBtn" class="action-btn" style="margin-top:10px" onclick="onTapClaim()">Claim ${claimableETH.toFixed(6)} ETH</button>` : ''}
           </div>
         </div>
       `;
@@ -1126,7 +1328,7 @@ async function renderCoinPage(daoAddr) {
             <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value">${statusBadge}</span></div>
             <div class="stat-row"><span class="stat-label">Unlocks</span><span class="stat-value">${dateStr} (${relStr})</span></div>
             <div class="stat-row"><span class="stat-label">Recipient</span><span class="stat-value" style="font-size:11px"><a class="ops-addr-link" href="https://etherscan.io/address/${tap.ops}" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--fg-muted)">${tap.ops}</a></span></div>
-            ${isUnlockable && isOpsWallet ? `<button id="opsUnlockBtn" onclick="onOpsUnlock('${sharesAddr}','${tap.ops}','${lockCoinId}','${opsLockup.amount}','${opsLockup.unlockTime}')" style="width:100%;margin-top:10px;padding:10px;font-size:12px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;background:var(--btn-bg);color:var(--btn-fg);border:none;font-family:inherit">Unlock ${fmtShares(lockAmt)} $${opsSymbol}</button>` : ''}
+            ${isUnlockable && isOpsWallet ? `<button id="opsUnlockBtn" class="action-btn" style="margin-top:10px" onclick="onOpsUnlock('${sharesAddr}','${tap.ops}','${lockCoinId}','${opsLockup.amount}','${opsLockup.unlockTime}')">Unlock ${fmtShares(lockAmt)} $${opsSymbol}</button>` : ''}
           </div>
         </div>
       `;
@@ -1180,9 +1382,9 @@ async function renderCoinPage(daoAddr) {
             <input type="text" id="saleReceiveInput" placeholder="0.0" oninput="onSaleReceiveInput()" autocomplete="off">
             <div class="sale-lp-note" id="saleLpNote"></div>
           </div>
-          <div class="swap-quote" id="saleQuote">${priceDisplay ? `Sale price: ${priceDisplay} ETH/share` : ''}</div>
+          <div class="swap-quote" id="saleQuote">${priceDisplay ? `Sale price: ${priceDisplay} ETH / 1M shares` : ''}</div>
           <button class="swap-pct-btn" onclick="fillSweep()" style="width:100%;margin-bottom:8px;font-size:11px;padding:6px">Sweep (buy all remaining)</button>
-          <button id="saleBuyBtn" onclick="onSaleBuyBtn()" style="width:100%;margin:0">Connect Wallet</button>
+          <button id="saleBuyBtn" class="action-btn" onclick="onSaleBuyBtn()">Connect Wallet</button>
         </div>
         ` : ''}
 
@@ -1217,7 +1419,7 @@ async function renderCoinPage(daoAddr) {
             <input type="text" id="swapReceiveInput" placeholder="0.0" oninput="onReceiveInput()" autocomplete="off">
           </div>
           <div class="swap-quote" id="swapQuote"></div>
-          <button id="swapBtn" onclick="onSwapBtn()" style="width:100%;margin:0">Connect Wallet</button>
+          <button id="swapBtn" class="action-btn" onclick="onSwapBtn()">Connect Wallet</button>
         </div>
 
         <!-- RAGEQUIT MODE -->
@@ -1237,7 +1439,7 @@ async function renderCoinPage(daoAddr) {
             </div>
           </div>
           <div class="rq-estimate" id="rqEstimate"></div>
-          <button id="rqBtn" onclick="onRagequitBtn()" style="width:100%;margin:0">Connect Wallet</button>
+          <button id="rqBtn" class="action-btn" onclick="onRagequitBtn()">Connect Wallet</button>
         </div>
 
         <!-- LP MODE -->
@@ -1268,7 +1470,7 @@ async function renderCoinPage(daoAddr) {
               <input type="text" id="lpZapSlippage" value="5" style="width:40px;font-size:12px;text-align:center;border-bottom:1px solid var(--border)" autocomplete="off">
               <span style="font-size:11px;color:var(--fg-muted)">%</span>
             </div>
-            <button id="lpZapDoBtn" onclick="doLpZap()" style="width:100%;margin:0">Connect Wallet</button>
+            <button id="lpZapDoBtn" class="action-btn" onclick="doLpZap()">Connect Wallet</button>
           </div>
           <div id="lpPairForm" style="display:none">
             <div class="swap-section">
@@ -1292,7 +1494,7 @@ async function renderCoinPage(daoAddr) {
               <input type="text" id="lpPairSlippage" value="2" style="width:40px;font-size:12px;text-align:center;border-bottom:1px solid var(--border)" autocomplete="off">
               <span style="font-size:11px;color:var(--fg-muted)">%</span>
             </div>
-            <button id="lpPairDoBtn" onclick="doLpAdd()" style="width:100%;margin:0">Connect Wallet</button>
+            <button id="lpPairDoBtn" class="action-btn" onclick="doLpAdd()">Connect Wallet</button>
           </div>
           <div class="swap-quote" id="lpStatus"></div>
           <div id="lpBalanceInfo" style="font-size:11px;color:var(--fg-muted);margin-top:8px"></div>
@@ -1301,15 +1503,18 @@ async function renderCoinPage(daoAddr) {
       </div>
     `;
 
-    // Chart drawer (only if pool has reserves)
+    // Chart drawer (only if pool has reserves; auto-open if sale ended)
+    const chartOpen = hasPool && !saleActive;
+    const dark = document.documentElement.classList.contains('dark');
+    const chartTheme = dark ? 'dark' : 'light';
     if (hasPool) {
       html += `
-        <div class="drawer" id="chartDrawer" data-pool-id="${poolId}">
+        <div class="drawer${chartOpen ? ' open' : ''}" id="chartDrawer" data-pool-id="${poolId}"${chartOpen ? ' data-loaded="1"' : ''}>
           <button class="drawer-toggle" onclick="toggleChart()">
             <span>Price Chart</span>
             <span class="arrow">&#9660;</span>
           </button>
-          <div class="chart-body"></div>
+          <div class="chart-body">${chartOpen ? `<div class="chart-type-toggle"><button class="active" data-type="line" onclick="setCoinChartType('line')">Line</button><button data-type="candle" onclick="setCoinChartType('candle')">Candle</button></div><div class="chart-iframe-wrap"><iframe src="https://www.zamm.finance/embed/pool/1/${poolId}?type=line&theme=${chartTheme}" allow="clipboard-write" sandbox="allow-scripts allow-same-origin"></iframe></div>` : ''}</div>
         </div>
         <div class="drawer" id="activityDrawer" data-pool-id="${poolId}">
           <button class="drawer-toggle" onclick="toggleActivity()">
@@ -1318,6 +1523,15 @@ async function renderCoinPage(daoAddr) {
           </button>
           <div class="activity-body">
             <div id="activityContent"><div class="activity-empty">${zfiLoadingSVG(32)} Loading...</div></div>
+          </div>
+        </div>
+        <div class="drawer" id="lpDrawer" data-pool-id="${poolId}">
+          <button class="drawer-toggle" onclick="toggleLpList()">
+            <span>Liquidity Providers</span>
+            <span class="arrow">&#9660;</span>
+          </button>
+          <div class="activity-body">
+            <div id="lpListContent"><div class="activity-empty">Click to load</div></div>
           </div>
         </div>
       `;
@@ -1631,7 +1845,7 @@ async function connectWithWallet(walletKey) {
     _walletEventHandlers = { accountsChanged: () => window.location.reload(), chainChanged: () => window.location.reload() };
     walletProvider.on('accountsChanged', _walletEventHandlers.accountsChanged);
     walletProvider.on('chainChanged', _walletEventHandlers.chainChanged);
-    try { localStorage.setItem('zcoin_wallet', walletKey); if (walletKey.startsWith('eip6963_')) { const uuid = walletKey.replace('eip6963_', ''); const name = eip6963Providers.get(uuid)?.info?.name; if (name) localStorage.setItem('zcoin_wallet_name', name); } } catch (e) {}
+    try { localStorage.setItem('zcoin_wallet', walletKey); localStorage.setItem('preferredWallet', walletKey); if (walletKey.startsWith('eip6963_')) { const uuid = walletKey.replace('eip6963_', ''); const name = eip6963Providers.get(uuid)?.info?.name; if (name) localStorage.setItem('zcoin_wallet_name', name); } } catch (e) {}
     updateModeButton();
     loadBalances();
   } catch (error) {
@@ -1648,7 +1862,7 @@ function disconnectWallet() {
   $('walletBtn').textContent = 'connect';
   updateWcBanner();
   closeWalletModal();
-  try { localStorage.removeItem('zcoin_wallet'); localStorage.removeItem('zcoin_wallet_name'); } catch (e) {}
+  try { localStorage.removeItem('zcoin_wallet'); localStorage.removeItem('zcoin_wallet_name'); localStorage.removeItem('preferredWallet'); } catch (e) {}
   updateModeButton();
 }
 
@@ -1683,7 +1897,7 @@ function updateWcBanner() {
 }
 
 async function tryAutoConnect() {
-  const savedWallet = localStorage.getItem('zcoin_wallet');
+  const savedWallet = localStorage.getItem('zcoin_wallet') || localStorage.getItem('preferredWallet');
   if (!savedWallet) {
     if (!window.ethereum) return;
     try { const accts = await window.ethereum.request({ method: 'eth_accounts' }); if (accts && accts.length > 0) await connectWithWallet('injected'); } catch {}

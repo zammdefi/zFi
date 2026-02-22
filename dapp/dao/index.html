@@ -320,7 +320,7 @@ body.modal-open { overflow: hidden; }
 .info-box {
   padding: 12px;
   background: var(--surface);
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   margin-bottom: 12px;
   font-size: 13px;
 }
@@ -395,7 +395,7 @@ body.modal-open { overflow: hidden; }
 }
 .checkbox-group input[type="checkbox"] { width: auto; }
 .members-container {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 12px;
 }
 /* Member rows in summoner */
@@ -434,7 +434,7 @@ body.modal-open { overflow: hidden; }
   margin-top: 16px;
   padding: 16px;
   background: var(--surface);
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
 }
 .sale-info-box {
   margin-bottom: 16px;
@@ -448,7 +448,7 @@ body.modal-open { overflow: hidden; }
   margin-top: 8px;
   padding: 12px;
   background: var(--surface);
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -584,12 +584,12 @@ body.modal-open { overflow: hidden; }
   gap: 12px;
 }
 .dao-tile {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 16px;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, transform 0.15s;
 }
-.dao-tile:hover { border-color: var(--fg); }
+.dao-tile:hover { border-color: var(--fg); transform: translateY(-1px); }
 .dao-tile-emblem {
   width: 40px;
   height: 40px;
@@ -597,7 +597,6 @@ body.modal-open { overflow: hidden; }
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
 }
 .dark .dao-tile-emblem {
   background: #222;
@@ -667,7 +666,6 @@ body.modal-open { overflow: hidden; }
   flex-shrink: 0;
   cursor: pointer;
   overflow: hidden;
-  border-radius: 6px;
 }
 .dark .dao-emblem {
   background: #222;
@@ -763,7 +761,7 @@ body.modal-open { overflow: hidden; }
 
 /* DAO Panel */
 .dao-panel {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -839,7 +837,7 @@ body.modal-open { overflow: hidden; }
   font-size: 13px;
 }
 .treasury-asset {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 12px 8px;
   text-align: center;
   transition: border-color 0.2s;
@@ -902,7 +900,7 @@ body.modal-open { overflow: hidden; }
   font-size: 13px;
 }
 .tribute-card {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 12px;
   text-align: center;
   transition: border-color 0.2s;
@@ -959,7 +957,7 @@ body.modal-open { overflow: hidden; }
 
 /* Proposals */
 .proposal-form {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -1005,7 +1003,7 @@ body.modal-open { overflow: hidden; }
 
 /* Proposal list items */
 .proposal-item {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 20px;
   margin-bottom: 12px;
   overflow: hidden;
@@ -1064,7 +1062,6 @@ body.modal-open { overflow: hidden; }
 .proposal-vote-bar {
   display: flex;
   height: 4px;
-  border-radius: 2px;
   overflow: hidden;
   background: var(--divider);
   margin-bottom: 8px;
@@ -1195,7 +1192,7 @@ body.modal-open { overflow: hidden; }
   gap: 16px;
 }
 .badge-card, .balance-card, .delegation-card {
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--border);
   padding: 16px;
 }
 .balance-item {
@@ -1828,7 +1825,7 @@ body.modal-open { overflow: hidden; }
   text-align: center;
   padding: 48px 20px;
   font-size: 11px;
-  opacity: 0.55;
+  opacity: 0.65;
   margin-top: 40px;
   letter-spacing: 0.5px;
   font-weight: 300;
@@ -1873,9 +1870,15 @@ body.modal-open { overflow: hidden; }
   .sale-ratio-arrow { display: none; }
 }
 @media (max-width: 380px) {
-  body { padding: 70px 12px 20px; }
+  body { padding: 70px 8px 20px; }
   h1 { font-size: 12px; }
   .dao-stats-bar { flex-direction: column; gap: 4px; }
+  .dao-panel { padding: 12px; }
+  .proposal-item { padding: 12px; }
+  .member-item { grid-template-columns: 1fr; gap: 4px; }
+  .tribute-offers { grid-template-columns: 1fr; }
+  .member-row { grid-template-columns: 1fr 60px auto; font-size: 11px; }
+  button { padding: 12px 16px; font-size: 11px; }
 }
 .fire-loading { display: flex; justify-content: center; align-items: center; padding: 40px 0; }
 .fire-loading canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
@@ -5171,13 +5174,37 @@ body.modal-open { overflow: hidden; }
           });
         }
 
+        // Also detect via window.ethereum.providers (legacy multi-provider, like coin page does)
+        if (window.ethereum?.providers?.length) {
+          for (let i = 0; i < window.ethereum.providers.length; i++) {
+            const p = window.ethereum.providers[i];
+            const name = p.isMetaMask ? 'MetaMask' : p.isCoinbaseWallet ? 'Coinbase' : p.isRabby ? 'Rabby' : p.isRainbow ? 'Rainbow' : null;
+            if (name && !seenNames.has(name.toLowerCase())) {
+              detected.push({ key: `provider_${i}`, name, icon: '🔗', detect: () => true, getProvider: () => p });
+              seenNames.add(name.toLowerCase());
+            }
+          }
+        }
+
+        // Fallback: generic injected wallet
+        if (detected.length === 0 && window.ethereum) {
+          detected.push({ key: 'injected', name: 'Browser Wallet', icon: '🔗', detect: () => true, getProvider: () => window.ethereum });
+        }
+
         return detected;
       }
 
       // LocalStorage helpers
-      function saveWalletPreference(walletKey) {
+      function saveWalletPreference(walletKey, walletName) {
         try {
           localStorage.setItem('preferredWallet', walletKey);
+          localStorage.setItem('zcoin_wallet', walletKey);
+          if (walletName) localStorage.setItem('zcoin_wallet_name', walletName);
+          else if (walletKey.startsWith('eip6963_')) {
+            const uuid = walletKey.replace('eip6963_', '');
+            const name = eip6963Providers.get(uuid)?.info?.name;
+            if (name) localStorage.setItem('zcoin_wallet_name', name);
+          }
         } catch (e) {
           logger.warn('Failed to save wallet preference:', e);
         }
@@ -5185,7 +5212,7 @@ body.modal-open { overflow: hidden; }
 
       function getWalletPreference() {
         try {
-          return localStorage.getItem('preferredWallet');
+          return localStorage.getItem('preferredWallet') || localStorage.getItem('zcoin_wallet') || null;
         } catch (e) {
           logger.warn('Failed to get wallet preference:', e);
           return null;
@@ -5195,6 +5222,8 @@ body.modal-open { overflow: hidden; }
       function clearWalletPreference() {
         try {
           localStorage.removeItem('preferredWallet');
+          localStorage.removeItem('zcoin_wallet');
+          localStorage.removeItem('zcoin_wallet_name');
         } catch (e) {
           logger.warn('Failed to clear wallet preference:', e);
         }
@@ -5203,6 +5232,11 @@ body.modal-open { overflow: hidden; }
       function showWalletModal() {
         const modalOverlay = getEl('walletModal');
         const walletOptions = document.getElementById('walletOptions');
+
+        // If not connected, re-dispatch EIP-6963 for reliable detection
+        if (!connectedWallet || !connectedAddress) {
+          window.dispatchEvent(new Event('eip6963:requestProvider'));
+        }
 
         // If already connected, show disconnect option
         if (connectedWallet && connectedAddress) {
@@ -5222,6 +5256,8 @@ body.modal-open { overflow: hidden; }
                 icon: safeIcon
               };
             }
+          } else if (connectedWallet.startsWith('provider_') || connectedWallet === 'injected') {
+            wallet = { name: localStorage.getItem('zcoin_wallet_name') || 'Wallet', icon: '🔗' };
           } else {
             wallet = WALLET_CONFIG[connectedWallet];
           }
@@ -5246,44 +5282,58 @@ body.modal-open { overflow: hidden; }
             `;
           }
         } else {
-          // Show wallet selection
-          const wallets = detectWallets();
+          // Show loading state while detecting wallets
+          walletOptions.innerHTML = '<div style="padding:12px;text-align:center;">Detecting wallets...</div>';
+          modalOverlay.classList.add('active');
+          document.body.classList.add('modal-open');
 
-          if (wallets.length === 0) {
-            walletOptions.innerHTML = `
-              <div class="wallet-option" onclick="window.open('https://metamask.io/download/', '_blank')">
-                <div class="wallet-icon">🦊</div>
-                <div class="wallet-info">
-                  <div class="wallet-name">Install MetaMask</div>
-                  <div class="wallet-status">No wallet detected</div>
+          // Retry detection to handle competing wallet extensions and EIP-6963 timing
+          const renderWalletList = (attempt = 1) => {
+            const wallets = detectWallets();
+            // If no non-WC wallets found and first attempt, retry after delay
+            if (!wallets.some(w => w.key !== 'walletconnect') && attempt < 3) {
+              setTimeout(() => renderWalletList(attempt + 1), 200);
+              return;
+            }
+
+            if (wallets.length === 0) {
+              walletOptions.innerHTML = `
+                <div class="wallet-option" onclick="window.open('https://metamask.io/download/', '_blank')">
+                  <div class="wallet-icon">🦊</div>
+                  <div class="wallet-info">
+                    <div class="wallet-name">Install MetaMask</div>
+                    <div class="wallet-status">No wallet detected</div>
+                  </div>
                 </div>
-              </div>
-              <div class="wallet-option" onclick="window.open('https://www.coinbase.com/wallet/downloads', '_blank')">
-                <div class="wallet-icon">🔵</div>
-                <div class="wallet-info">
-                  <div class="wallet-name">Install Coinbase Wallet</div>
-                  <div class="wallet-status">Browser extension</div>
+                <div class="wallet-option" onclick="window.open('https://www.coinbase.com/wallet/downloads', '_blank')">
+                  <div class="wallet-icon">🔵</div>
+                  <div class="wallet-info">
+                    <div class="wallet-name">Install Coinbase Wallet</div>
+                    <div class="wallet-status">Browser extension</div>
+                  </div>
                 </div>
-              </div>
-              <div class="wallet-option" onclick="window.open('https://rainbow.me/download', '_blank')">
-                <div class="wallet-icon">🌈</div>
-                <div class="wallet-info">
-                  <div class="wallet-name">Install Rainbow</div>
-                  <div class="wallet-status">Browser extension</div>
+                <div class="wallet-option" onclick="window.open('https://rainbow.me/download', '_blank')">
+                  <div class="wallet-icon">🌈</div>
+                  <div class="wallet-info">
+                    <div class="wallet-name">Install Rainbow</div>
+                    <div class="wallet-status">Browser extension</div>
+                  </div>
                 </div>
-              </div>
-            `;
-          } else {
-            walletOptions.innerHTML = wallets.map(wallet => `
-              <div class="wallet-option" onclick="connectWithWallet('${escapeHtml(wallet.key)}')">
-                <div class="wallet-icon">${wallet.icon}</div>
-                <div class="wallet-info">
-                  <div class="wallet-name">${wallet.name}</div>
-                  <div class="wallet-status installed">${wallet.isWalletConnect ? 'QR Code' : 'Detected'}</div>
+              `;
+            } else {
+              walletOptions.innerHTML = wallets.map(wallet => `
+                <div class="wallet-option" onclick="connectWithWallet('${escapeHtml(wallet.key)}')">
+                  <div class="wallet-icon">${wallet.icon}</div>
+                  <div class="wallet-info">
+                    <div class="wallet-name">${wallet.name}</div>
+                    <div class="wallet-status installed">${wallet.isWalletConnect ? 'QR Code' : 'Detected'}</div>
+                  </div>
                 </div>
-              </div>
-            `).join('');
-          }
+              `).join('');
+            }
+          };
+          setTimeout(() => renderWalletList(), 150);
+          return; // Early return since modal is already shown above
         }
 
         modalOverlay.classList.add('active');
@@ -5353,13 +5403,50 @@ body.modal-open { overflow: hidden; }
                 getProvider: () => eip6963Wallet.provider
               };
             }
+            // Name-based fallback: UUID may differ across pages, match by wallet name
+            if (!wallet) {
+              const savedName = (localStorage.getItem('zcoin_wallet_name') || '').toLowerCase();
+              if (savedName) {
+                for (const [, { info, provider }] of eip6963Providers) {
+                  if (info?.name?.toLowerCase() === savedName) {
+                    wallet = { name: info.name, icon: '🔌', getProvider: () => provider };
+                    break;
+                  }
+                }
+              }
+            }
             if (!wallet) { logger.error('Unknown wallet:', walletKey); return; }
             walletProvider = wallet.getProvider();
             if (!walletProvider) { showStatus(`${wallet.name} not found`, true); return; }
             await walletProvider.request({ method: 'eth_requestAccounts' });
+          } else if (walletKey.startsWith('provider_')) {
+            // Legacy provider_N keys from coin page — resolve via window.ethereum.providers
+            const idx = parseInt(walletKey.replace('provider_', ''), 10);
+            if (window.ethereum?.providers?.length > idx) {
+              const p = window.ethereum.providers[idx];
+              const name = p.isMetaMask ? 'MetaMask' : p.isCoinbaseWallet ? 'Coinbase' : p.isRabby ? 'Rabby' : p.isRainbow ? 'Rainbow' : 'Wallet';
+              wallet = { name, icon: '🔗', getProvider: () => p };
+            }
+            if (!wallet) { wallet = { name: 'Wallet', icon: '🔗', getProvider: () => window.ethereum }; }
+            walletProvider = wallet.getProvider();
+            if (!walletProvider) { showStatus('Wallet not found', true); return; }
+            await walletProvider.request({ method: 'eth_requestAccounts' });
+          } else if (walletKey === 'injected') {
+            // Generic injected wallet fallback
+            wallet = { name: 'Browser Wallet', icon: '🔗', getProvider: () => window.ethereum };
+            walletProvider = window.ethereum;
+            if (!walletProvider) { showStatus('No wallet detected', true); return; }
+            await walletProvider.request({ method: 'eth_requestAccounts' });
           } else {
             wallet = WALLET_CONFIG[walletKey];
-            if (!wallet) { logger.error('Unknown wallet:', walletKey); return; }
+            if (!wallet) {
+              // Last resort: try to find any available provider
+              if (window.ethereum) {
+                wallet = { name: 'Wallet', icon: '🔗', getProvider: () => window.ethereum };
+              } else {
+                logger.error('Unknown wallet:', walletKey); return;
+              }
+            }
             walletProvider = wallet.getProvider();
             if (!walletProvider) { showStatus(`${wallet.name} not found`, true); return; }
             await walletProvider.request({ method: 'eth_requestAccounts' });
@@ -5390,11 +5477,20 @@ body.modal-open { overflow: hidden; }
           signer = await provider.getSigner();
           const address = await signer.getAddress();
 
+          // Clean up old event listeners BEFORE updating state
+          const oldWalletProvider = connectedWalletProvider;
+          if (oldWalletProvider && walletEventHandlers) {
+            try {
+              oldWalletProvider.removeListener('accountsChanged', walletEventHandlers.accountsChanged);
+              oldWalletProvider.removeListener('chainChanged', walletEventHandlers.chainChanged);
+            } catch (e) {}
+          }
+
           // Store connected wallet info
           connectedWallet = walletKey;
           connectedAddress = address;
           connectedWalletProvider = walletProvider;
-          saveWalletPreference(walletKey);
+          saveWalletPreference(walletKey, wallet?.name);
 
           // Update UI
           const walletBtn = getEl('walletBtn');
@@ -5420,13 +5516,7 @@ body.modal-open { overflow: hidden; }
             updateLootInputs();
           }
 
-          // Setup event listeners (simple: reload on account/chain change)
-          if (connectedWalletProvider && walletEventHandlers) {
-            try {
-              connectedWalletProvider.removeListener('accountsChanged', walletEventHandlers.accountsChanged);
-              connectedWalletProvider.removeListener('chainChanged', walletEventHandlers.chainChanged);
-            } catch (e) {}
-          }
+          // Setup new event listeners
           walletEventHandlers = {
             accountsChanged: () => window.location.reload(),
             chainChanged: () => window.location.reload()
@@ -8005,7 +8095,7 @@ body.modal-open { overflow: hidden; }
                   return '<div style="font-size: 0.7rem; color: var(--green); margin-bottom: 0.5rem;">⏳ Ends ' + dateStr + ' ' + timeStr + ' (' + countdown + ' left)</div>';
                 })()}
                 ${lpConfigHTML}
-                <button onclick="openDaicoPurchaseModal('${sale.token.address}', '${sale.token.symbol}', ${sale.token.decimals}, ${sale.isLoot}, '${sale.tribAmt}', '${sale.forAmt}')"
+                <button onclick="openDaicoPurchaseModal('${sale.token.address}', '${sale.token.symbol}', ${sale.token.decimals}, ${sale.isLoot}, '${sale.tribAmt}', '${sale.forAmt}', ${sale.lpConfig ? sale.lpConfig.lpBps : 0})"
                         onmouseover="this.style.background='var(--status-success)'; this.style.borderColor='var(--green)';"
                         onmouseout="this.style.background='var(--status-success)'; this.style.borderColor='var(--border-muted)';"
                         style="width: 100%; padding: 0.75rem; background: var(--status-success); border: 1px solid var(--green); color: var(--fg); font-size: 0.7rem; letter-spacing: 0.12em; cursor: pointer; text-transform: uppercase; transition: all 0.2s ease; font-weight: 600; min-height: 44px; margin-top: 0.75rem;">
@@ -10477,9 +10567,9 @@ body.modal-open { overflow: hidden; }
       function setMaxPurchaseAmount(maxAmount) {
         const input = getEl('purchaseAmount');
         if (input) {
-          // Format to remove trailing zeros
           const formatted = parseFloat(maxAmount).toString();
           input.value = formatted;
+          input.dispatchEvent(new Event('input'));
           input.focus();
         }
       }
@@ -10587,7 +10677,8 @@ body.modal-open { overflow: hidden; }
       }
 
       // DAICO Purchase Modal - for external OTC sales
-      async function openDaicoPurchaseModal(tribToken, tokenSymbol, tokenDecimals, isLoot, tribAmt, forAmt) {
+      async function openDaicoPurchaseModal(tribToken, tokenSymbol, tokenDecimals, isLoot, tribAmt, forAmt, lpBps) {
+        lpBps = lpBps || 0;
         if (!signer) {
           showStatus('Please connect wallet first', true);
           return;
@@ -10625,16 +10716,21 @@ body.modal-open { overflow: hidden; }
           const tribAmtBn = BigInt(tribAmt);
           const forAmtBn = BigInt(forAmt);
 
-          // Max tokens user can buy = (userBalance * forAmt) / tribAmt
+          // Max tokens user can buy (net after LP deduction)
+          const lpBpsBn = BigInt(lpBps);
           let maxAffordable = '0';
           if (userBalance > 0n && tribAmtBn > 0n) {
-            const maxTokens = (userBalance * forAmtBn) / tribAmtBn;
-            maxAffordable = ethers.formatEther(maxTokens);
+            const maxGross = (userBalance * forAmtBn) / tribAmtBn;
+            const maxNet = lpBpsBn > 0n ? (maxGross * (10000n - lpBpsBn)) / 10000n : maxGross;
+            maxAffordable = ethers.formatEther(maxNet);
           }
 
           // Format ratio for display
           const tribAmtFormatted = parseFloat(ethers.formatUnits(tribAmtBn, tokenDecimals)).toFixed(6);
           const forAmtFormatted = parseFloat(ethers.formatEther(forAmtBn)).toFixed(4);
+
+          // Max ETH user can spend (their full balance, display formatted)
+          const maxPayEth = ethers.formatUnits(userBalance, tokenDecimals);
 
           // Build DAICO sale page link
           const chainId = getNetwork().chainId;
@@ -10662,8 +10758,8 @@ body.modal-open { overflow: hidden; }
             </div>
             <div style="margin-bottom: 1rem;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                <label style="font-size: 0.85rem; color: var(--fg);">Amount to Purchase (${targetSymbol})</label>
-                <button onclick="setMaxPurchaseAmount('${maxAffordable}')"
+                <label style="font-size: 0.85rem; color: var(--fg);">Pay (${tokenSymbol})</label>
+                <button onclick="setMaxPurchaseAmount('${maxPayEth}')"
                         onmouseover="this.style.background='var(--status-success)'; this.style.color='var(--green)';"
                         onmouseout="this.style.background='var(--status-success)'; this.style.color='var(--fg-dim)';"
                         style="padding: 0.35rem 0.65rem; background: var(--status-success); border: 1px solid var(--green); color: var(--fg); font-size: 0.7rem; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; font-weight: 600; transition: all 0.2s ease; min-height: 32px;">
@@ -10671,7 +10767,7 @@ body.modal-open { overflow: hidden; }
                 </button>
               </div>
               <input type="number" id="purchaseAmount" placeholder="0.0" step="any" min="0" inputmode="decimal"
-                     oninput="updateDaicoCostPreview('${tribToken}', ${tokenDecimals}, '${tribAmt}', '${forAmt}', '${tokenSymbol}')"
+                     oninput="updateDaicoReceivePreview('${tribToken}', ${tokenDecimals}, '${tribAmt}', '${forAmt}', '${targetSymbol}', ${lpBps})"
                      style="width: 100%; padding: 0.875rem; background: transparent; border: 1px solid var(--green); color: var(--fg); font-size: 16px; " />
             </div>
             <div id="daicoCostPreview" style="margin-bottom: 1rem; padding: 0.875rem; background: var(--status-success); border: 1px solid var(--green); ">
@@ -10680,11 +10776,12 @@ body.modal-open { overflow: hidden; }
                 <span style="font-size: 0.85rem; color: var(--fg); font-weight: 600;">${balanceFormatted} ${tokenSymbol}</span>
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.75rem; color: var(--fg-dim);">Estimated Cost:</span>
-                <span id="daicoCostAmount" style="font-size: 0.85rem; color: var(--green); font-weight: 600;">-- ${tokenSymbol}</span>
+                <span style="font-size: 0.75rem; color: var(--fg-dim);">You Receive:</span>
+                <span id="daicoCostAmount" style="font-size: 0.85rem; color: var(--green); font-weight: 600;">-- ${targetSymbol}</span>
               </div>
+              ${lpBps > 0 ? `<div id="daicoLpNote" style="font-size: 0.7rem; color: var(--fg-dim); margin-top: 0.35rem;"></div>` : ''}
             </div>
-            <button onclick="executeDaicoPurchase('${tribToken}', ${tokenDecimals}, ${isLoot}, '${tribAmt}', '${forAmt}')"
+            <button onclick="executeDaicoPurchase('${tribToken}', ${tokenDecimals}, ${isLoot}, '${tribAmt}', '${forAmt}', ${lpBps})"
                     onmouseover="this.style.background='var(--status-success)'; this.style.borderColor='var(--green)';"
                     onmouseout="this.style.background='var(--status-success)'; this.style.borderColor='var(--border-muted)';"
                     style="width: 100%; padding: 1rem; background: var(--status-success); border: 1px solid var(--green); color: var(--fg); font-size: 0.8rem; letter-spacing: 0.15em; cursor: pointer; text-transform: uppercase; font-weight: 600; transition: all 0.2s ease; min-height: 48px;">
@@ -10701,36 +10798,53 @@ body.modal-open { overflow: hidden; }
         }
       }
 
-      // Update cost preview for DAICO purchase
-      function updateDaicoCostPreview(tribToken, tokenDecimals, tribAmt, forAmt, tokenSymbol) {
+      // Update receive preview for DAICO purchase (exact-in: user enters pay amount)
+      function updateDaicoReceivePreview(tribToken, tokenDecimals, tribAmt, forAmt, targetSymbol, lpBps) {
+        lpBps = lpBps || 0;
         const amountInput = getEl('purchaseAmount').value.trim();
-        const costEl = document.getElementById('daicoCostAmount');
+        const receiveEl = document.getElementById('daicoCostAmount');
+        const lpNoteEl = document.getElementById('daicoLpNote');
 
-        if (!costEl) return;
+        if (!receiveEl) return;
 
         if (!amountInput || isNaN(parseFloat(amountInput)) || parseFloat(amountInput) <= 0) {
-          costEl.textContent = `-- ${tokenSymbol}`;
+          receiveEl.textContent = `-- ${targetSymbol}`;
+          if (lpNoteEl) lpNoteEl.textContent = '';
           return;
         }
 
         try {
-          const buyAmount = ethers.parseEther(amountInput);
+          const payAmt = ethers.parseUnits(amountInput, tokenDecimals);
           const tribAmtBn = BigInt(tribAmt);
           const forAmtBn = BigInt(forAmt);
+          const lpBpsBn = BigInt(lpBps);
 
-          // Cost = ceil((buyAmount * tribAmt) / forAmt)
-          const num = buyAmount * tribAmtBn;
-          const cost = (num + forAmtBn - 1n) / forAmtBn;
+          // Same logic as coin page: gross = payAmt * forAmt / tribAmt
+          const gross = payAmt * forAmtBn / tribAmtBn;
+          const lpShares = lpBpsBn > 0n ? gross * lpBpsBn / 10000n : 0n;
+          const net = gross - lpShares;
 
-          const costFormatted = parseFloat(ethers.formatUnits(cost, tokenDecimals)).toFixed(6);
-          costEl.textContent = `${costFormatted} ${tokenSymbol}`;
+          if (net === 0n) {
+            receiveEl.textContent = `Amount too small`;
+            if (lpNoteEl) lpNoteEl.textContent = '';
+            return;
+          }
+
+          const v = Number(ethers.formatEther(net));
+          const netFormatted = v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+          receiveEl.textContent = `~${netFormatted} ${targetSymbol}`;
+          if (lpNoteEl && lpBpsBn > 0n) {
+            lpNoteEl.textContent = `${Number(lpBpsBn)/100}% of tokens go to LP`;
+          }
         } catch (e) {
-          costEl.textContent = `-- ${tokenSymbol}`;
+          receiveEl.textContent = `-- ${targetSymbol}`;
+          if (lpNoteEl) lpNoteEl.textContent = '';
         }
       }
 
-      // Execute DAICO purchase
-      async function executeDaicoPurchase(tribToken, tokenDecimals, isLoot, tribAmt, forAmt) {
+      // Execute DAICO purchase (exact-in: user specifies pay amount, same as coin page)
+      async function executeDaicoPurchase(tribToken, tokenDecimals, isLoot, tribAmt, forAmt, lpBps) {
+        lpBps = lpBps || 0;
         try {
           const amountInput = getEl('purchaseAmount').value.trim();
           if (!amountInput || isNaN(parseFloat(amountInput)) || parseFloat(amountInput) <= 0) {
@@ -10738,17 +10852,18 @@ body.modal-open { overflow: hidden; }
             return;
           }
 
-          const buyAmount = ethers.parseEther(amountInput);
+          const payAmt = ethers.parseUnits(amountInput, tokenDecimals);
           const tribAmtBn = BigInt(tribAmt);
           const forAmtBn = BigInt(forAmt);
+          const lpBpsBn = BigInt(lpBps);
 
-          // Calculate cost with ceiling division
-          // cost = ceil((buyAmount * tribAmt) / forAmt)
-          const num = buyAmount * tribAmtBn;
-          const cost = (num + forAmtBn - 1n) / forAmtBn;
+          // Calculate expected output (same as coin page)
+          const gross = payAmt * forAmtBn / tribAmtBn;
+          const lpShares = lpBpsBn > 0n ? gross * lpBpsBn / 10000n : 0n;
+          const net = gross - lpShares;
 
-          // Add slippage for maxPay (5%)
-          const maxPay = (cost * 105n) / 100n;
+          // minBuyAmt = 95% of expected net (5% slippage tolerance)
+          const minBuyAmt = net * 95n / 100n;
 
           const daicoContract = new ethers.Contract(DAICO_ADDRESS, DAICO_ABI, signer);
           const daoAddress = currentDAO.dao.dao;
@@ -10761,19 +10876,18 @@ body.modal-open { overflow: hidden; }
 
             // Check user balance
             const userBalance = await tokenContract.balanceOf(connectedAddress);
-            if (userBalance < cost) {
-              showStatus(`Insufficient balance. Need ${ethers.formatUnits(cost, tokenDecimals)} tokens`, true);
+            if (userBalance < payAmt) {
+              showStatus(`Insufficient balance. Need ${ethers.formatUnits(payAmt, tokenDecimals)} tokens`, true);
               return;
             }
 
             // Check allowance to DAICO contract
             const currentAllowance = await tokenContract.allowance(connectedAddress, DAICO_ADDRESS);
 
-            if (currentAllowance < maxPay) {
+            if (currentAllowance < payAmt) {
               showStatus('Approving token spend... Please confirm in wallet', false);
 
-              // Request approval for the DAICO contract
-              const approveTx = await tokenContract.approve(DAICO_ADDRESS, maxPay, getWalletConnectTxOverrides());
+              const approveTx = await tokenContract.approve(DAICO_ADDRESS, payAmt, getWalletConnectTxOverrides());
 
               showStatus(`Approval transaction submitted. <a href="${getNetwork().explorer}/tx/${approveTx.hash}" target="_blank" rel="noopener" style="color: var(--green); text-decoration: underline;">View on Explorer</a>`, false);
 
@@ -10786,13 +10900,11 @@ body.modal-open { overflow: hidden; }
           showStatus('Confirming DAICO purchase... Please sign the transaction', false);
 
           let tx;
-          // Use buyExactOut for exact output amount
+          // Use buy() exact-in: pay exact payAmt, get at least minBuyAmt
           if (tribToken === ethers.ZeroAddress) {
-            // ETH payment - send maxPay as value, contract will refund excess
-            tx = await daicoContract.buyExactOut(daoAddress, tribToken, buyAmount, maxPay, getWalletConnectTxOverrides({ value: maxPay }));
+            tx = await daicoContract.buy(daoAddress, tribToken, payAmt, minBuyAmt, getWalletConnectTxOverrides({ value: payAmt }));
           } else {
-            // ERC20 payment
-            tx = await daicoContract.buyExactOut(daoAddress, tribToken, buyAmount, maxPay, getWalletConnectTxOverrides());
+            tx = await daicoContract.buy(daoAddress, tribToken, payAmt, minBuyAmt, getWalletConnectTxOverrides());
           }
 
           const tokenType = isLoot ? 'LOOT' : 'SHARES';
@@ -10800,7 +10912,7 @@ body.modal-open { overflow: hidden; }
 
           await tx.wait();
 
-          showStatus(`✨ DAICO purchase successful! You received ${amountInput} ${tokenType}. <a href="${getNetwork().explorer}/tx/${tx.hash}" target="_blank" rel="noopener" style="color: var(--green); text-decoration: underline;">View transaction</a>`, false);
+          showStatus(`✨ DAICO purchase successful! <a href="${getNetwork().explorer}/tx/${tx.hash}" target="_blank" rel="noopener" style="color: var(--green); text-decoration: underline;">View transaction</a>`, false);
 
           closePurchaseModal();
           await refreshCurrentDAO();
@@ -18965,8 +19077,9 @@ body.modal-open { overflow: hidden; }
           }
         }
 
-        // Small delay to allow EIP-6963 providers to announce themselves
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Re-dispatch EIP-6963 and wait for providers to announce
+        window.dispatchEvent(new Event('eip6963:requestProvider'));
+        await new Promise(resolve => setTimeout(resolve, 300));
 
         // Auto-reconnect logic with improved wallet preference handling
         let autoReconnected = false;
@@ -18975,23 +19088,45 @@ body.modal-open { overflow: hidden; }
         // WalletConnect sessions don't persist across page reloads - clear stale preference
         if (preferredWallet === 'walletconnect') {
           clearWalletPreference();
-        } else if (window.ethereum) {
+        } else if (preferredWallet) {
           try {
-            const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-            if (accounts.length > 0) {
-              // Try to reconnect with the user's preferred wallet
+            // Check if any provider has authorized accounts (works even with competing wallets)
+            let hasAccounts = false;
+            if (window.ethereum?.providers?.length) {
+              for (const p of window.ethereum.providers) {
+                try { const a = await p.request({ method: 'eth_accounts' }); if (a?.length > 0) { hasAccounts = true; break; } } catch {}
+              }
+            }
+            if (!hasAccounts && window.ethereum) {
+              try { const a = await window.ethereum.request({ method: 'eth_accounts' }); if (a?.length > 0) hasAccounts = true; } catch {}
+            }
+
+            if (hasAccounts) {
               const wallets = detectWallets();
 
-              if (preferredWallet && wallets.some(w => w.key === preferredWallet)) {
-                // Reconnect with preferred wallet
+              if (wallets.some(w => w.key === preferredWallet)) {
+                // Exact key match
                 await connectWithWallet(preferredWallet);
                 autoReconnected = true;
-              } else if (wallets.length > 0) {
-                // Fallback: connect with first detected wallet (skip walletconnect)
-                const nonWCWallet = wallets.find(w => w.key !== 'walletconnect');
-                if (nonWCWallet) {
-                  await connectWithWallet(nonWCWallet.key);
+              } else {
+                // Key mismatch (cross-page EIP-6963 UUID difference, provider_ key, etc.)
+                // Try name-based match first
+                const savedName = (localStorage.getItem('zcoin_wallet_name') || '').toLowerCase();
+                const nameMatch = savedName && wallets.find(w => w.name.toLowerCase() === savedName && w.key !== 'walletconnect');
+                if (nameMatch) {
+                  await connectWithWallet(nameMatch.key);
                   autoReconnected = true;
+                } else if (preferredWallet) {
+                  // Direct attempt — connectWithWallet now handles provider_/injected/fallback keys
+                  await connectWithWallet(preferredWallet);
+                  autoReconnected = !!connectedAddress;
+                }
+                if (!autoReconnected && wallets.length > 0) {
+                  const nonWC = wallets.find(w => w.key !== 'walletconnect');
+                  if (nonWC) {
+                    await connectWithWallet(nonWC.key);
+                    autoReconnected = true;
+                  }
                 }
               }
             }
