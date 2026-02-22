@@ -1024,8 +1024,8 @@ async function renderGallery() {
         const circulating = Number(COIN_SUPPLY_TOTAL) - unsold - teamLocked;
         mcapETH = circulating > 0 ? price * circulating : 0;
       }
-      const mcapDisplay = mcapETH > 0 ? fmtMcap(mcapETH) : '';
-      const mcapUsd = mcapETH > 0 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
+      const mcapDisplay = mcapETH > 1e-6 ? fmtMcap(mcapETH) : '';
+      const mcapUsd = mcapETH > 1e-6 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
 
       const now = BigInt(Math.floor(Date.now() / 1000));
       const saleActive = sale && sale.remainingSupply > 0n && sale.allowance > 0n && sale.forAmt > 0n && (sale.deadline === 0n || now <= BigInt(sale.deadline));
@@ -1209,8 +1209,8 @@ async function renderCoinPage(daoAddr) {
       const salePrice = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt));
       mcapETH = circulating > 0 ? salePrice * circulating : 0;
     }
-    const mcapDisplay = mcapETH > 0 ? fmtMcap(mcapETH) : '';
-    const mcapUsd = mcapETH > 0 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
+    const mcapDisplay = mcapETH > 1e-6 ? fmtMcap(mcapETH) : '';
+    const mcapUsd = mcapETH > 1e-6 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
 
     let html = `
       <a href="#" class="back-link">&larr; All Coins</a>

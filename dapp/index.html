@@ -4251,8 +4251,26 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     else console.log("[mc3] batch OK, entries:", mc3Result.value?.length);
     const mc3 = mc3Result.status === 'fulfilled' ? mc3Result.value : null;
     const quotesResult = mc3AsSettled(mc3, 0, QUOTER_IFACE, "getQuotes");
-    const curveResult = mc3AsSettled(mc3, 1, QUOTER_IFACE, "quoteCurve");
-    const lidoQuoteResult = mc3LidoIdx >= 0 ? mc3AsSettled(mc3, mc3LidoIdx, QUOTER_IFACE, "quoteLido") : undefined;
+    let curveResult = mc3AsSettled(mc3, 1, QUOTER_IFACE, "quoteCurve");
+    // Fallback: if mc3 failed, try direct quoteCurve call
+    if (curveResult?.status !== 'fulfilled') {
+      try {
+        const cq = await quoter.quoteCurve(false, fromData.address, toData.address, amountIn, 8, callOpts);
+        if (cq.amountOut > 0n) curveResult = { status: 'fulfilled', value: cq };
+      } catch (_) {}
+    }
+    let lidoQuoteResult = mc3LidoIdx >= 0 ? mc3AsSettled(mc3, mc3LidoIdx, QUOTER_IFACE, "quoteLido") : undefined;
+    // Fallback: if mc3 failed but Lido is eligible, we know ETH→stETH is 1:1
+    if (isLidoEligible && lidoQuoteResult?.status !== 'fulfilled') {
+      if (toData.address.toLowerCase() === STETH_ADDRESS.toLowerCase()) {
+        lidoQuoteResult = { status: 'fulfilled', value: { amountIn, amountOut: amountIn } };
+      } else {
+        try {
+          const lq = await quoter.quoteLido(false, toData.address, amountIn, callOpts);
+          if (lq.amountOut > 0n) lidoQuoteResult = { status: 'fulfilled', value: lq };
+        } catch (_) {}
+      }
+    }
     let rocketQuoteResult;
     if (isRocketEligible) {
       const rethDec = mc3Decode(mc3, mc3RethIdx, RETH_RATE_IFACE, "getRethValue");
@@ -4323,37 +4341,43 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     }
 
     // Attach all-quotes for display
+    result.allQuotes = [];
     if (quotesResult.status === 'fulfilled') {
       const q = quotesResult.value;
-      result.allQuotes = q.quotes.map(qt => ({
-        source: AMM_NAMES[qt.source] || `AMM #${qt.source}`,
-        sourceId: Number(qt.source),
-        feeBps: qt.feeBps,
-        amountIn: qt.amountIn,
-        amountOut: qt.amountOut,
-      })).filter(qt => qt.amountOut > 0n);
-      // Merge Curve quote if available
-      if (curveResult.status === 'fulfilled') {
-        const c = curveResult.value;
-        if (c.amountOut > 0n) {
-          result.allQuotes.push({ source: "Curve", sourceId: 5, feeBps: 0n, amountIn: c.amountIn, amountOut: c.amountOut });
-        }
-      }
-      // Merge Lido quote if available
-      if (lidoQuoteResult?.status === 'fulfilled') {
-        const l = lidoQuoteResult.value;
-        if (l.amountOut > 0n) {
-          result.allQuotes.push({ source: "Lido", sourceId: 6, feeBps: 0n, amountIn: l.amountIn, amountOut: l.amountOut });
-        }
-      }
-      // Merge Rocket Pool quote if available
-      if (rocketQuoteResult?.status === 'fulfilled') {
-        const rp = rocketQuoteResult.value;
-        if (rp.amountOut > 0n) {
-          result.allQuotes.push({ source: "Rocket Pool", sourceId: -1, feeBps: 0n, amountIn: rp.amountIn, amountOut: rp.amountOut });
+      for (const qt of q.quotes) {
+        if (qt.amountOut > 0n) {
+          result.allQuotes.push({
+            source: AMM_NAMES[qt.source] || `AMM #${qt.source}`,
+            sourceId: Number(qt.source),
+            feeBps: qt.feeBps,
+            amountIn: qt.amountIn,
+            amountOut: qt.amountOut,
+          });
         }
       }
     }
+    // Merge Curve quote if available
+    if (curveResult?.status === 'fulfilled') {
+      const c = curveResult.value;
+      if (c.amountOut > 0n) {
+        result.allQuotes.push({ source: "Curve", sourceId: 5, feeBps: 0n, amountIn: c.amountIn, amountOut: c.amountOut });
+      }
+    }
+    // Merge Lido quote if available
+    if (lidoQuoteResult?.status === 'fulfilled') {
+      const l = lidoQuoteResult.value;
+      if (l.amountOut > 0n) {
+        result.allQuotes.push({ source: "Lido", sourceId: 6, feeBps: 0n, amountIn: l.amountIn, amountOut: l.amountOut });
+      }
+    }
+    // Merge Rocket Pool quote if available
+    if (rocketQuoteResult?.status === 'fulfilled') {
+      const rp = rocketQuoteResult.value;
+      if (rp.amountOut > 0n) {
+        result.allQuotes.push({ source: "Rocket Pool", sourceId: -1, feeBps: 0n, amountIn: rp.amountIn, amountOut: rp.amountOut });
+      }
+    }
+    console.log("[allQuotes]", result.allQuotes.length, "entries:", result.allQuotes.map(q => q.source + "=" + q.amountOut));
 
     // Check if 3-hop beats current best
     if (threeHopResult?.status === 'fulfilled' && threeHopResult.value) {
@@ -4498,7 +4522,7 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     console.log("[CurveOverride] fromData.address:", fromData.address, "ZERO:", ZERO_ADDRESS, "curveResult status:", curveResult?.status, "curveResult value:", curveResult?.status === 'fulfilled' ? curveResult.value : curveResult?.reason?.toString?.());
     if (fromData.address === ZERO_ADDRESS && curveResult?.status === 'fulfilled') {
       const c = curveResult.value;
-      if (c.bestPool !== ZERO_ADDRESS && c.amountOut > 0n) {
+      if (c.bestPool !== ZERO_ADDRESS && c.amountOut > 0n && c.amountOut >= result.expectedOutput) {
         // Probe: try crypto get_dy(uint256,uint256,uint256) to determine true pool type
         let isCrypto = false;
         try {
@@ -4654,32 +4678,37 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
     };
 
     // Attach all-quotes for display
+    result.allQuotes = [];
     if (quotesResult.status === 'fulfilled') {
       const q = quotesResult.value;
-      result.allQuotes = q.quotes.map(qt => ({
-        source: AMM_NAMES[qt.source] || `AMM #${qt.source}`,
-        sourceId: Number(qt.source),
-        feeBps: qt.feeBps,
-        amountIn: qt.amountIn,
-        amountOut: qt.amountOut,
-      })).filter(qt => qt.amountIn > 0n);
-      if (curveResult.status === 'fulfilled') {
-        const c = curveResult.value;
-        if (c.amountIn > 0n) {
-          result.allQuotes.push({ source: "Curve", sourceId: 5, feeBps: 0n, amountIn: c.amountIn, amountOut: c.amountOut });
+      for (const qt of q.quotes) {
+        if (qt.amountIn > 0n) {
+          result.allQuotes.push({
+            source: AMM_NAMES[qt.source] || `AMM #${qt.source}`,
+            sourceId: Number(qt.source),
+            feeBps: qt.feeBps,
+            amountIn: qt.amountIn,
+            amountOut: qt.amountOut,
+          });
         }
       }
-      if (lidoQuoteResult?.status === 'fulfilled') {
-        const l = lidoQuoteResult.value;
-        if (l.amountIn > 0n) {
-          result.allQuotes.push({ source: "Lido", sourceId: 6, feeBps: 0n, amountIn: l.amountIn, amountOut: l.amountOut });
-        }
+    }
+    if (curveResult?.status === 'fulfilled') {
+      const c = curveResult.value;
+      if (c.amountIn > 0n) {
+        result.allQuotes.push({ source: "Curve", sourceId: 5, feeBps: 0n, amountIn: c.amountIn, amountOut: c.amountOut });
       }
-      if (rocketQuoteResult?.status === 'fulfilled') {
-        const rp = rocketQuoteResult.value;
-        if (rp.amountIn > 0n) {
-          result.allQuotes.push({ source: "Rocket Pool", sourceId: -1, feeBps: 0n, amountIn: rp.amountIn, amountOut: rp.amountOut });
-        }
+    }
+    if (lidoQuoteResult?.status === 'fulfilled') {
+      const l = lidoQuoteResult.value;
+      if (l.amountIn > 0n) {
+        result.allQuotes.push({ source: "Lido", sourceId: 6, feeBps: 0n, amountIn: l.amountIn, amountOut: l.amountOut });
+      }
+    }
+    if (rocketQuoteResult?.status === 'fulfilled') {
+      const rp = rocketQuoteResult.value;
+      if (rp.amountIn > 0n) {
+        result.allQuotes.push({ source: "Rocket Pool", sourceId: -1, feeBps: 0n, amountIn: rp.amountIn, amountOut: rp.amountOut });
       }
     }
 
