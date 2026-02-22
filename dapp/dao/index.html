@@ -5446,9 +5446,39 @@ body.modal-open { overflow: hidden; }
 
           if (deepLink) {
             if (currentDAO && currentDAO.dao.dao.toLowerCase() === deepLink.address.toLowerCase()) {
-              // DAO already loaded read-only — just refresh wallet-dependent parts
-              await renderAllowances();
+              // DAO was loaded read-only via deep link — upgrade to full userDAOs data if available
+              const userDaoEntry = userDAOs.find(ud => ud.dao.dao.toLowerCase() === deepLink.address.toLowerCase());
+              if (userDaoEntry) {
+                currentDAO = userDaoEntry;
+              }
+              // Re-render with fresh data (messages, proposals, membership)
+              renderChatroom().catch(e => logger.error('renderChatroom failed:', e));
               renderDaoStats();
+              const daoAddress = currentDAO.dao.dao;
+              const userAddr = signer ? await signer.getAddress() : null;
+              let batchData;
+              try {
+                batchData = await batchDashboardData(daoAddress, userAddr);
+              } catch (e) {
+                batchData = { config: undefined, sales: [], allowances: [], tributes: undefined, sharesTransfersLocked: undefined, lootTransfersLocked: undefined, contractURI: undefined };
+              }
+              renderGovernanceInfo(batchData).catch(e => logger.error('renderGovernanceInfo failed:', e));
+              await Promise.all([
+                renderProposals(batchData.config),
+                renderSalesInfo(batchData.sales),
+                renderTributes(batchData.tributes),
+                renderAllowances(batchData.allowances),
+                renderDAOEmblem(daoAddress, batchData.contractURI)
+              ]);
+              await renderTreasury();
+              // Show/hide membership tab
+              const membershipBtn = document.getElementById('viewToggleMembership');
+              if (currentDAO.member) {
+                membershipBtn.style.display = 'block';
+              } else {
+                membershipBtn.style.display = 'none';
+                switchDaoView('dao');
+              }
             } else {
               showStatus('Opening linked DAO...', false);
               const opened = await openDAOByAddress(deepLink.address);
@@ -13045,7 +13075,7 @@ body.modal-open { overflow: hidden; }
             const viewHelper = new ethers.Contract(VIEW_HELPER_ADDRESS, VIEW_HELPER_ABI, rpcProvider);
             return await viewHelper.getDAOWithDAICO(
               address,
-              0, 5, 0, 5,
+              0, 5, 0, 200,
               treasuryTokens, treasuryTokens
             );
           });
