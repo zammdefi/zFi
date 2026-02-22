@@ -374,18 +374,21 @@ contract zQuoter {
                 return exactOut ? (true, qu, amt, true, true) : (true, amt, qu, true, true);
             }
         }
-        (bool sd, bytes memory rd) = pool.staticcall(abi.encodeWithSelector(selD, i, j, amt));
-        if (sd && rd.length >= 32) {
-            uint256 q = abi.decode(rd, (uint256));
-            return exactOut ? (true, q, amt, true, false) : (true, amt, q, true, false);
-        }
+        // Try crypto (uint256) first — pools that support both get_dy signatures
+        // may only have exchange(uint256,...), so crypto classification is safer.
         uint256 ui = uint256(int256(i));
         uint256 uj = uint256(int256(j));
         bytes4 sel2 = exactOut ? ICurveCryptoLike.get_dx.selector : ICurveCryptoLike.get_dy.selector;
         (bool s2, bytes memory r2) = pool.staticcall(abi.encodeWithSelector(sel2, ui, uj, amt));
-        if (!s2 || r2.length < 32) return (false, 0, 0, false, false);
-        uint256 q2 = abi.decode(r2, (uint256));
-        return exactOut ? (true, q2, amt, false, false) : (true, amt, q2, false, false);
+        if (s2 && r2.length >= 32) {
+            uint256 q2 = abi.decode(r2, (uint256));
+            return exactOut ? (true, q2, amt, false, false) : (true, amt, q2, false, false);
+        }
+        // Fall back to stable (int128)
+        (bool sd, bytes memory rd) = pool.staticcall(abi.encodeWithSelector(selD, i, j, amt));
+        if (!sd || rd.length < 32) return (false, 0, 0, false, false);
+        uint256 q = abi.decode(rd, (uint256));
+        return exactOut ? (true, q, amt, true, false) : (true, amt, q, true, false);
     }
 
     // ====================== BUILD CALLDATA (single-hop) ======================

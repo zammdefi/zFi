@@ -459,7 +459,7 @@ const VIEW_HELPER = '0x00000000006631040967E58e3430e4B77921a2db';
 const DAICO_ADDR = '0x000000000033e92DB97B4B3beCD2c255126C60aC';
 const SUMMONER = '0x0000000000330B8df9E3bc5E553074DA58eE9138';
 const ZAMM = '0x000000000000040470635EB91b7CE4D132D616eD';
-const ZQUOTER = '0x0639d563aACf4Bf13E81Adadf519b988347993dF';
+const ZQUOTER = '0x10D7e794518b45ced364FF38C0D48dfdC586f0Ef';
 const CHAINLINK_ETH_USD = '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419';
 const CHAINLINK_ABI = ['function latestAnswer() view returns (int256)'];
 const ZERO = ethers.ZeroAddress;
@@ -557,7 +557,7 @@ function symbolSVG(symbol, size) {
 function logoHTML(meta, metadata, size) {
   size = size || 40;
   const imgUrl = resolveIPFS(metadata.image);
-  if (imgUrl) return `<img src="${escText(imgUrl)}" alt="" onerror="this.parentNode.innerHTML=symbolSVG(${JSON.stringify(meta.symbol).replace(/</g,'\\u003c')},${size})">`;
+  if (imgUrl) return `<img src="${escAttr(imgUrl)}" alt="" onerror="this.parentNode.innerHTML=symbolSVG(${JSON.stringify(meta.symbol).replace(/</g,'\\u003c')},${size})">`;
   return symbolSVG(meta.symbol, size);
 }
 
@@ -887,7 +887,7 @@ function fmtMcap(ethVal) {
 function fmtUsd(val) {
   if (val >= 1e6) return '$' + (val / 1e6).toFixed(2) + 'M';
   if (val >= 1e3) return '$' + (val / 1e3).toFixed(1) + 'K';
-  if (val >= 1) return '$' + val.toFixed(0);
+  if (val >= 1) return '$' + val.toFixed(2);
   return '$' + val.toFixed(2);
 }
 
@@ -908,6 +908,8 @@ async function getEthUsd() {
 
 // ==================== ROUTER ====================
 
+let _renderGen = 0;
+
 function route() {
   if (_activityInterval) { clearInterval(_activityInterval); _activityInterval = null; }
   const hash = location.hash.replace('#','').trim();
@@ -923,6 +925,7 @@ window.addEventListener('hashchange', route);
 // ==================== GALLERY ====================
 
 async function renderGallery() {
+  const gen = ++_renderGen;
   updateOGMeta('COIN', 'Trade coins on zFi - the most secure-by-default exchange', '');
   const app = $('app');
   app.innerHTML = `
@@ -976,6 +979,10 @@ async function renderGallery() {
       }).catch(() => poolCalls.map(() => ({ success: false }))),
       getEthUsd()
     ]);
+    if (gen !== _renderGen) return;
+
+    // Team locked: fund templates have ops with 15% (150M) locked
+    const TEAM_LOCKED_DEFAULT = 150_000_000;
 
     let grid = '';
     for (let i = 0; i < filtered.length; i++) {
@@ -990,23 +997,32 @@ async function renderGallery() {
         treasuryDisplay = fmtETH(sale.treasuryBalance || 0n);
       }
 
-      // Market cap (FDV): price * 1B total supply
-      const fdvSupply = Number(COIN_SUPPLY_TOTAL);
+      // Market cap (circulating): price * circulating supply
+      // Circulating = total - unsold - tokens in LP
       let mcapETH = 0;
+      let poolR1 = 0n;
       const pr = poolResults[i];
       if (pr && pr.success) {
         try {
           const decoded = zammI.decodeFunctionResult('pools', pr.returnData);
           const r0 = decoded[0], r1 = decoded[1];
+          poolR1 = r1;
           if (r0 > 0n && r1 > 0n) {
             const price = Number(ethers.formatEther(r0)) / Number(ethers.formatEther(r1));
-            mcapETH = price * fdvSupply;
+            const unsold = sale ? Number(ethers.formatEther(sale.remainingSupply)) : 0;
+            const inLp = Number(ethers.formatEther(r1));
+            const teamLocked = (d.tap && d.tap.ops && d.tap.ops !== ZERO) ? TEAM_LOCKED_DEFAULT : 0;
+            const circulating = Number(COIN_SUPPLY_TOTAL) - unsold - inLp - teamLocked;
+            mcapETH = circulating > 0 ? price * circulating : 0;
           }
         } catch(e) {}
       }
       if (!mcapETH && sale && sale.tribAmt > 0n && sale.forAmt > 0n) {
         const price = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt));
-        mcapETH = price * fdvSupply;
+        const unsold = Number(ethers.formatEther(sale.remainingSupply));
+        const teamLocked = (d.tap && d.tap.ops && d.tap.ops !== ZERO) ? TEAM_LOCKED_DEFAULT : 0;
+        const circulating = Number(COIN_SUPPLY_TOTAL) - unsold - teamLocked;
+        mcapETH = circulating > 0 ? price * circulating : 0;
       }
       const mcapDisplay = mcapETH > 0 ? fmtMcap(mcapETH) : '';
       const mcapUsd = mcapETH > 0 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
@@ -1081,6 +1097,7 @@ let _poolReserve1 = 0n;
 let _lpBalance = 0n;
 
 async function renderCoinPage(daoAddr) {
+  const gen = ++_renderGen;
   const app = $('app');
   app.innerHTML = `
     <a href="#" class="back-link">&larr; All Coins</a>
@@ -1092,6 +1109,7 @@ async function renderCoinPage(daoAddr) {
       const helper = new ethers.Contract(VIEW_HELPER, GET_DAICO_ABI, rpc);
       return await helper.getDAICO(daoAddr, [ZERO]);
     });
+    if (gen !== _renderGen) return;
     _coinData = data;
     _saleExactOut = false;
     _cachedQuote = null;
@@ -1112,8 +1130,10 @@ async function renderCoinPage(daoAddr) {
       }).catch(() => null),
       getEthUsd()
     ]);
+    if (gen !== _renderGen) return;
     _coinMeta = metadata;
     const opsLockup = tapActive_ && tap.ops ? await fetchOpsLockup(sharesAddr, tap.ops, metadata) : null;
+    if (gen !== _renderGen) return;
 
     // Sale stats
     const lpBps = sale ? Number(sale.lpBps) : 0;
@@ -1176,14 +1196,18 @@ async function renderCoinPage(daoAddr) {
     const reserve1 = poolResult ? (poolResult.reserve1 ?? poolResult[1] ?? 0n) : 0n;
     const hasPool = reserve0 > 0n || reserve1 > 0n;
 
-    // Compute market cap (FDV): price * 1B total supply
-    const fdvSupply = Number(COIN_SUPPLY_TOTAL);
-    if (hasPool && reserve1 > 0n) {
+    // Compute market cap (circulating): price * circulating supply
+    // Circulating = total - unsold - tokens in LP - locked team allocation
+    const unsold = sale ? Number(ethers.formatEther(sale.remainingSupply)) : 0;
+    const inLp = Number(ethers.formatEther(reserve1));
+    const teamLocked = opsLockup ? Number(ethers.formatEther(BigInt(opsLockup.amount || '0'))) : 0;
+    const circulating = Number(COIN_SUPPLY_TOTAL) - unsold - inLp - teamLocked;
+    if (hasPool && reserve1 > 0n && circulating > 0) {
       const spotPrice = Number(ethers.formatEther(reserve0)) / Number(ethers.formatEther(reserve1));
-      mcapETH = spotPrice * fdvSupply;
-    } else if (sale && sale.tribAmt > 0n && sale.forAmt > 0n) {
+      mcapETH = spotPrice * circulating;
+    } else if (sale && sale.tribAmt > 0n && sale.forAmt > 0n && circulating > 0) {
       const salePrice = Number(ethers.formatEther(sale.tribAmt)) / Number(ethers.formatEther(sale.forAmt));
-      mcapETH = salePrice * fdvSupply;
+      mcapETH = circulating > 0 ? salePrice * circulating : 0;
     }
     const mcapDisplay = mcapETH > 0 ? fmtMcap(mcapETH) : '';
     const mcapUsd = mcapETH > 0 && ethUsd > 0 ? fmtUsd(mcapETH * ethUsd) : '';
@@ -1201,7 +1225,7 @@ async function renderCoinPage(daoAddr) {
           </div>
         </div>
       </div>
-      ${mcapDisplay ? `<div class="coin-mcap-row">MCap: ${mcapDisplay}${mcapUsd ? ` <span style="color:var(--fg-muted);font-weight:400">(${mcapUsd})</span>` : ''}</div>` : ''}
+      ${mcapDisplay ? `<div class="coin-mcap-row">Circ. MCap: ${mcapDisplay}${mcapUsd ? ` <span style="color:var(--fg-muted);font-weight:400">(${mcapUsd})</span>` : ''}</div>` : ''}
     `;
 
     // Description + socials
@@ -2064,6 +2088,7 @@ function onSaleReceiveInput() {
   const lpBps = BigInt(_saleData.lpBps);
   // grossNeeded = ceil(buyAmt * 10000 / (10000 - lpBps))
   const denom = 10000n - lpBps;
+  if (denom === 0n) { $('salePayInput').value = ''; $('saleLpNote').textContent = ''; return; }
   const grossNeeded = (buyAmt * 10000n + denom - 1n) / denom;
   // payNeeded = ceil(grossNeeded * tribAmt / forAmt)
   const payNeeded = (grossNeeded * _saleData.tribAmt + _saleData.forAmt - 1n) / _saleData.forAmt;
@@ -2466,8 +2491,8 @@ async function refreshPoolReserves() {
       const z = new ethers.Contract(ZAMM, ZAMM_POOLS_ABI, rpc);
       return await z.pools(poolId);
     });
-    _poolReserve0 = result.reserve0;
-    _poolReserve1 = result.reserve1;
+    _poolReserve0 = result.reserve0 ?? result[0] ?? 0n;
+    _poolReserve1 = result.reserve1 ?? result[1] ?? 0n;
   } catch(e) {
     console.debug('refreshPoolReserves:', e.message);
   }

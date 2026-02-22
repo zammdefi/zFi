@@ -1432,7 +1432,7 @@ return `<svg width="${s}" height="${s}" viewBox="0 0 400 400" xmlns="http://www.
 
 // ---- Constants ----
 const CHAIN_ID = 1;
-const ZQUOTER_ADDRESS = "0x0639d563aACf4Bf13E81Adadf519b988347993dF";
+const ZQUOTER_ADDRESS = "0x10D7e794518b45ced364FF38C0D48dfdC586f0Ef";
 const ZROUTER_ADDRESS = "0x000000000000FB114709235f1ccBFfb925F600e4";
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
@@ -2721,7 +2721,7 @@ function mc3ViewBatch(rpc, entries) {
   const data = MULTICALL3_IFACE.encodeFunctionData("aggregate3", [
     entries.map(e => [e.target, true, e.data])
   ]);
-  return rpc.call({ to: MULTICALL3_ADDRESS, data }).then(raw =>
+  return rpc.call({ to: MULTICALL3_ADDRESS, data, gasLimit: 100_000_000 }).then(raw =>
     MULTICALL3_IFACE.decodeFunctionResult("aggregate3", raw)[0]
   );
 }
@@ -4247,6 +4247,8 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     const [bestResult, splitResult, threeHopResult, hybridSplitResult, mc3Result] = settled;
     const v4SplitResult = isPNKSTR ? settled[5] : undefined;
     // Decode Multicall3 batch into settled-style objects (post-processing code unchanged)
+    if (mc3Result.status !== 'fulfilled') console.error("[mc3] batch FAILED:", mc3Result.reason);
+    else console.log("[mc3] batch OK, entries:", mc3Result.value?.length);
     const mc3 = mc3Result.status === 'fulfilled' ? mc3Result.value : null;
     const quotesResult = mc3AsSettled(mc3, 0, QUOTER_IFACE, "getQuotes");
     const curveResult = mc3AsSettled(mc3, 1, QUOTER_IFACE, "quoteCurve");
@@ -4300,11 +4302,12 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       allQuotes: null,
     };
 
-    // Check if split beats best
+    // Check if split beats best (skip if a Curve leg would embed broken swapCurve for native-ETH pool)
     if (splitResult.status === 'fulfilled') {
       const s = splitResult.value;
       const splitTotal = s.legs[0].amountOut + s.legs[1].amountOut;
-      if (splitTotal > bestOutput && s.legs[0].amountOut > 0n && s.legs[1].amountOut > 0n) {
+      const splitHasCurve = fromData.address === ZERO_ADDRESS && (Number(s.legs[0].source) === 5 || Number(s.legs[1].source) === 5);
+      if (splitTotal > bestOutput && s.legs[0].amountOut > 0n && s.legs[1].amountOut > 0n && !splitHasCurve) {
         result.expectedOutput = splitTotal;
         result.multicall = s.multicall;
         result.msgValue = s.msgValue ?? 0n;
@@ -4356,7 +4359,8 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     if (threeHopResult?.status === 'fulfilled' && threeHopResult.value) {
       const h3 = threeHopResult.value;
       const h3Output = h3.c.amountOut;
-      if (h3Output > result.expectedOutput && h3Output > 0n) {
+      const h3HasCurve = fromData.address === ZERO_ADDRESS && (Number(h3.a.source) === 5 || Number(h3.b.source) === 5 || Number(h3.c.source) === 5);
+      if (h3Output > result.expectedOutput && h3Output > 0n && !h3HasCurve) {
         result.expectedOutput = h3Output;
         result.multicall = h3.multicall;
         result.calls = h3.calls;
@@ -4374,7 +4378,8 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       const hs = hybridSplitResult.value;
       const hsTotal = hs.legs[0].amountOut + hs.legs[1].amountOut;
       const isTrueSplit = hs.legs[0].amountOut > 0n && hs.legs[1].amountOut > 0n;
-      if (hsTotal > result.expectedOutput && hsTotal > 0n) {
+      const hsHasCurve = fromData.address === ZERO_ADDRESS && (Number(hs.legs[0].source) === 5 || Number(hs.legs[1].source) === 5);
+      if (hsTotal > result.expectedOutput && hsTotal > 0n && !hsHasCurve) {
         result.expectedOutput = hsTotal;
         result.multicall = hs.multicall;
         result.msgValue = hs.msgValue ?? 0n;
@@ -4415,7 +4420,8 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
         }
       }
 
-      if (hsTotal > result.expectedOutput && hsTotal > 0n) {
+      const v4HasCurve = fromData.address === ZERO_ADDRESS && (Number(hs.legs[0].source) === 5 || Number(hs.legs[1].source) === 5);
+      if (hsTotal > result.expectedOutput && hsTotal > 0n && !v4HasCurve) {
         result.expectedOutput = hsTotal;
         result.multicall = hs.multicall;
         result.msgValue = hs.msgValue ?? 0n;
@@ -4486,40 +4492,42 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       }
     }
 
-    // Curve native-ETH pools: router's swapCurve wraps to WETH but legacy pools
-    // need msg.value. Detect and rebuild via execute+sweep, also promote Curve
-    // when it beats the current best (like Lido/Rocket Pool overrides).
+    // ETH→Curve: bypass swapCurve (which may misclassify pool ABI) and use
+    // execute to forward native ETH directly. Independently probe the pool to
+    // determine the correct exchange ABI (crypto uint256 vs stable int128).
+    console.log("[CurveOverride] fromData.address:", fromData.address, "ZERO:", ZERO_ADDRESS, "curveResult status:", curveResult?.status, "curveResult value:", curveResult?.status === 'fulfilled' ? curveResult.value : curveResult?.reason?.toString?.());
     if (fromData.address === ZERO_ADDRESS && curveResult?.status === 'fulfilled') {
       const c = curveResult.value;
-      if (c.bestPool !== ZERO_ADDRESS && c.amountOut > 0n && !c.usedUnderlying) {
-        const curveIsWinner = result.sourceA === "Curve" && !result.isSplit && !result.isTwoHop;
-        const curveBeatsBest = c.amountOut > result.expectedOutput;
-        if (curveIsWinner || curveBeatsBest) {
-          try {
-            const poolContract = new ethers.Contract(c.bestPool, ["function coins(uint256) view returns (address)"], rpc);
-            const inputCoin = await poolContract.coins(c.iIndex, callOpts);
-            if (inputCoin.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-              const exchangeIface = c.usedStable
-                ? new ethers.Interface(["function exchange(int128,int128,uint256,uint256) payable"])
-                : new ethers.Interface(["function exchange(uint256,uint256,uint256,uint256) payable"]);
-              const minOut = c.amountOut * (10000n - BigInt(slippageBps)) / 10000n;
-              const exchangeData = exchangeIface.encodeFunctionData('exchange', [c.iIndex, c.jIndex, amountIn, minOut]);
-              const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [c.bestPool, amountIn, exchangeData]);
-              const sweepOut = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
-              const calls = [executeCall, sweepOut];
-              const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
-              result.expectedOutput = c.amountOut;
-              result.multicall = multicall;
-              result.calls = calls;
-              result.msgValue = amountIn;
-              result.isTwoHop = false;
-              result.isSplit = false;
-              result.splitLegs = null;
-              result.sourceA = "Curve";
-              result.sourceB = null;
-            }
-          } catch (_) {}
-        }
+      if (c.bestPool !== ZERO_ADDRESS && c.amountOut > 0n) {
+        // Probe: try crypto get_dy(uint256,uint256,uint256) to determine true pool type
+        let isCrypto = false;
+        try {
+          const probePool = new ethers.Contract(c.bestPool, [
+            "function get_dy(uint256,uint256,uint256) view returns (uint256)"
+          ], rpc);
+          const probeOut = await probePool.get_dy(BigInt(c.iIndex), BigInt(c.jIndex), amountIn, callOpts);
+          isCrypto = probeOut > 0n;
+        } catch (_) {}
+        const useUnderlying = c.usedUnderlying && !isCrypto;
+        const fnName = useUnderlying ? 'exchange_underlying' : 'exchange';
+        const exchangeIface = isCrypto
+          ? new ethers.Interface(["function exchange(uint256,uint256,uint256,uint256) payable"])
+          : new ethers.Interface([`function ${fnName}(int128,int128,uint256,uint256) payable`]);
+        const minOut = c.amountOut * (10000n - BigInt(slippageBps)) / 10000n;
+        const exchangeData = exchangeIface.encodeFunctionData(fnName, [c.iIndex, c.jIndex, amountIn, minOut]);
+        const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [c.bestPool, amountIn, exchangeData]);
+        const sweepOut = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
+        const calls = [executeCall, sweepOut];
+        const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
+        result.expectedOutput = c.amountOut;
+        result.multicall = multicall;
+        result.calls = calls;
+        result.msgValue = amountIn;
+        result.isTwoHop = false;
+        result.isSplit = false;
+        result.splitLegs = null;
+        result.sourceA = "Curve";
+        result.sourceB = null;
       }
     }
 
@@ -4623,6 +4631,7 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
       }
     }
 
+
     if (bestResult.status === 'rejected') throw bestResult.reason;
     const r = bestResult.value;
 
@@ -4720,41 +4729,40 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
       }
     }
 
-    // Curve native-ETH pools: router's swapCurve wraps to WETH but legacy pools
-    // need msg.value. Detect and rebuild via execute+sweep, also promote Curve
-    // when it needs less input than the current best.
+    // ETH→Curve exact-out: bypass swapCurve and use execute with correct ABI.
     if (fromData.address === ZERO_ADDRESS && curveResult?.status === 'fulfilled') {
       const c = curveResult.value;
-      if (c.bestPool !== ZERO_ADDRESS && c.amountIn > 0n && !c.usedUnderlying) {
-        const curveIsWinner = result.sourceA === "Curve" && !result.isSplit && !result.isTwoHop;
-        const curveBeatsBest = c.amountIn < result.requiredInput;
-        if (curveIsWinner || curveBeatsBest) {
-          try {
-            const poolContract = new ethers.Contract(c.bestPool, ["function coins(uint256) view returns (address)"], rpc);
-            const inputCoin = await poolContract.coins(c.iIndex, callOpts);
-            if (inputCoin.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-              const exchangeIface = c.usedStable
-                ? new ethers.Interface(["function exchange(int128,int128,uint256,uint256) payable"])
-                : new ethers.Interface(["function exchange(uint256,uint256,uint256,uint256) payable"]);
-              // For exact-out: swap c.amountIn input, require at least amountOut output
-              const exchangeData = exchangeIface.encodeFunctionData('exchange', [c.iIndex, c.jIndex, c.amountIn, amountOut]);
-              const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [c.bestPool, c.amountIn, exchangeData]);
-              const sweepOut = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
-              const calls = [executeCall, sweepOut];
-              const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
-              result.requiredInput = c.amountIn;
-              result.expectedOutput = c.amountOut;
-              result.multicall = multicall;
-              result.calls = calls;
-              result.msgValue = c.amountIn;
-              result.isTwoHop = false;
-              result.isSplit = false;
-              result.splitLegs = null;
-              result.sourceA = "Curve";
-              result.sourceB = null;
-            }
-          } catch (_) {}
-        }
+      if (c.bestPool !== ZERO_ADDRESS && c.amountIn > 0n && c.amountIn <= result.requiredInput) {
+        // Probe: try crypto get_dy(uint256,uint256,uint256) to determine true pool type
+        let isCrypto = false;
+        try {
+          const probePool = new ethers.Contract(c.bestPool, [
+            "function get_dy(uint256,uint256,uint256) view returns (uint256)"
+          ], rpc);
+          const probeOut = await probePool.get_dy(BigInt(c.iIndex), BigInt(c.jIndex), c.amountIn, callOpts);
+          isCrypto = probeOut > 0n;
+        } catch (_) {}
+        const useUnderlying = c.usedUnderlying && !isCrypto;
+        const fnName = useUnderlying ? 'exchange_underlying' : 'exchange';
+        const exchangeIface = isCrypto
+          ? new ethers.Interface(["function exchange(uint256,uint256,uint256,uint256) payable"])
+          : new ethers.Interface([`function ${fnName}(int128,int128,uint256,uint256) payable`]);
+        // For exact-out: swap c.amountIn input, require at least amountOut output
+        const exchangeData = exchangeIface.encodeFunctionData(fnName, [c.iIndex, c.jIndex, c.amountIn, amountOut]);
+        const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [c.bestPool, c.amountIn, exchangeData]);
+        const sweepOut = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
+        const calls = [executeCall, sweepOut];
+        const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [calls]);
+        result.requiredInput = c.amountIn;
+        result.expectedOutput = c.amountOut;
+        result.multicall = multicall;
+        result.calls = calls;
+        result.msgValue = c.amountIn;
+        result.isTwoHop = false;
+        result.isSplit = false;
+        result.splitLegs = null;
+        result.sourceA = "Curve";
+        result.sourceB = null;
       }
     }
 
@@ -5368,6 +5376,43 @@ async function executeSwap() {
     }
 
     let txData = quote.multicall;
+
+    // ETH→Curve override: only when quote actually chose Curve as source, rebuild
+    // calldata using execute (bypasses swapCurve which doesn't handle native-ETH pools)
+    if (fromData.address === ZERO_ADDRESS && !_isExactOut && quote.sourceA === "Curve" && !quote.isSplit) {
+      try {
+        const toData = tokens[toSnap];
+        const rpc = new ethers.JsonRpcProvider(RPCS[0], { chainId: CHAIN_ID, name: "mainnet" }, { staticNetwork: true });
+        const quoter = new ethers.Contract(ZQUOTER_ADDRESS, QUOTER_IFACE, rpc);
+        const callOpts = { blockTag: "latest" };
+        const cq = await quoter.quoteCurve(false, fromData.address, toData.address, amountIn, 8, callOpts);
+        if (cq.bestPool !== ZERO_ADDRESS && cq.amountOut > 0n) {
+          // Determine correct exchange ABI by probing pool
+          let isCrypto = false;
+          try {
+            const pp = new ethers.Contract(cq.bestPool, ["function get_dy(uint256,uint256,uint256) view returns (uint256)"], rpc);
+            isCrypto = (await pp.get_dy(BigInt(cq.iIndex), BigInt(cq.jIndex), amountIn, callOpts)) > 0n;
+          } catch(_){}
+          const fnName = (cq.usedUnderlying && !isCrypto) ? 'exchange_underlying' : 'exchange';
+          const exchIface = isCrypto
+            ? new ethers.Interface(["function exchange(uint256,uint256,uint256,uint256) payable"])
+            : new ethers.Interface([`function ${fnName}(int128,int128,uint256,uint256) payable`]);
+          const slipBps = slippageBps || 50;
+          const minOut = cq.amountOut * (10000n - BigInt(slipBps)) / 10000n;
+          const exchData = exchIface.encodeFunctionData(fnName, [cq.iIndex, cq.jIndex, amountIn, minOut]);
+          const receiver = getReceiver();
+          const execCall = ROUTER_IFACE.encodeFunctionData('execute', [cq.bestPool, amountIn, exchData]);
+          const sweepCall = ROUTER_IFACE.encodeFunctionData('sweep', [toData.address, 0, 0, receiver]);
+          const newMulticall = ROUTER_IFACE.encodeFunctionData('multicall', [[execCall, sweepCall]]);
+          txData = newMulticall;
+          quote.msgValue = amountIn;
+          quote.expectedOutput = cq.amountOut;
+          console.log("[CurveExecOverride] Applied! isCrypto:", isCrypto, "pool:", cq.bestPool);
+        }
+      } catch (overrideErr) {
+        console.warn("[CurveExecOverride] Failed, using original calldata:", overrideErr);
+      }
+    }
 
     // ERC20 approval
     if (fromData.address !== ZERO_ADDRESS) {
@@ -6120,9 +6165,15 @@ document.addEventListener("DOMContentLoaded", () => {
     initTokenListClick();
     initTokenSearch();
     const fromEl = $("fromAmount");
-    if (fromEl) fromEl.addEventListener("input", debounce(() => { _inputMode = 'exactIn'; handleAmountChange(); }, 400));
+    if (fromEl) {
+      fromEl.addEventListener("input", debounce(() => { _inputMode = 'exactIn'; handleAmountChange(); }, 400));
+      fromEl.addEventListener("blur", () => { if (fromEl.value && !isNaN(fromEl.value)) fromEl.value = +fromEl.value; });
+    }
     const toEl = $("toAmount");
-    if (toEl) toEl.addEventListener("input", debounce(() => { _inputMode = 'exactOut'; handleAmountChange(); }, 400));
+    if (toEl) {
+      toEl.addEventListener("input", debounce(() => { _inputMode = 'exactOut'; handleAmountChange(); }, 400));
+      toEl.addEventListener("blur", () => { if (toEl.value && !isNaN(toEl.value)) toEl.value = +toEl.value; });
+    }
     (window.requestIdleCallback || setTimeout)(() => loadWeiLists());
     // Parse send deeplink params: ?token=ETH&amt=1.5&to=0x...#send
     if (_dlTabHash === '#send') {
@@ -6272,9 +6323,15 @@ document.addEventListener("DOMContentLoaded", () => {
   initTokenListClick();
   initTokenSearch();
   const fromEl = $("fromAmount");
-  if (fromEl) fromEl.addEventListener("input", debounce(() => { _inputMode = 'exactIn'; handleAmountChange(); }, 400));
+  if (fromEl) {
+    fromEl.addEventListener("input", debounce(() => { _inputMode = 'exactIn'; handleAmountChange(); }, 400));
+    fromEl.addEventListener("blur", () => { if (fromEl.value && !isNaN(fromEl.value)) fromEl.value = +fromEl.value; });
+  }
   const toEl = $("toAmount");
-  if (toEl) toEl.addEventListener("input", debounce(() => { _inputMode = 'exactOut'; handleAmountChange(); }, 400));
+  if (toEl) {
+    toEl.addEventListener("input", debounce(() => { _inputMode = 'exactOut'; handleAmountChange(); }, 400));
+    toEl.addEventListener("blur", () => { if (toEl.value && !isNaN(toEl.value)) toEl.value = +toEl.value; });
+  }
   // Defer heavy localStorage parsing until after first render
   (window.requestIdleCallback || setTimeout)(() => loadWeiLists());
 });
@@ -6910,7 +6967,10 @@ document.addEventListener("DOMContentLoaded", () => {
     syncSendURL();
   });
   const sa = $('sendAmount');
-  if (sa) sa.addEventListener('input', debounce(syncSendURL, 400));
+  if (sa) {
+    sa.addEventListener('input', debounce(syncSendURL, 400));
+    sa.addEventListener("blur", () => { if (sa.value && !isNaN(sa.value)) sa.value = +sa.value; });
+  }
   const ut = $('sendUnlockTime');
   if (ut) ut.addEventListener('input', sendUpdateButton);
 });
@@ -7851,7 +7911,10 @@ function ppwUseChangeNote() {
 // Wire up ppAmount input
 document.addEventListener("DOMContentLoaded", () => {
   const ppAmtEl = $("ppAmount");
-  if (ppAmtEl) ppAmtEl.addEventListener("input", () => { updatePPButton(); syncPrivacyURL(); ppRequestZapEstimate(); });
+  if (ppAmtEl) {
+    ppAmtEl.addEventListener("input", () => { updatePPButton(); syncPrivacyURL(); ppRequestZapEstimate(); });
+    ppAmtEl.addEventListener("blur", () => { if (ppAmtEl.value && !isNaN(ppAmtEl.value)) ppAmtEl.value = +ppAmtEl.value; });
+  }
   ppRenderDepositRoundedSuggestions();
 
   // Populate PP asset selector icons
