@@ -147,6 +147,34 @@ body.modal-open { overflow:hidden; }
 .sale-bar { height:6px;background:var(--border-muted);margin:8px 0; }
 .sale-bar-fill { height:100%;background:var(--green);transition:width 0.3s; }
 
+/* Swap-style buy form */
+.buy-card { border:1px solid var(--border-muted);padding:14px;margin-bottom:16px; }
+.buy-section { margin-bottom:8px; }
+.buy-section-head {
+  display:flex;align-items:center;gap:6px;margin-bottom:4px;
+}
+.buy-section-head label { font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:var(--fg-muted);margin:0;flex-shrink:0; }
+.buy-balance { font-size:11px;color:var(--fg-muted);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:right;margin:0 8px; }
+.buy-balance:hover { color:var(--fg); }
+.buy-token-tag {
+  font-size:12px;font-weight:500;display:inline-flex;align-items:center;gap:5px;color:var(--fg);flex-shrink:0;
+}
+.buy-section input {
+  width:100%;border:none;border-bottom:1.5px solid var(--border-muted);
+  font-size:22px;font-weight:500;padding:8px 0;background:transparent;color:var(--fg);outline:none;
+}
+.buy-section input::placeholder { color:var(--fg-dim); }
+.buy-section input:focus { border-bottom-width:2.5px;margin-bottom:-1px; }
+.buy-section input[readonly] { color:var(--fg-muted); }
+.buy-arrow-row { display:flex;justify-content:center;margin:2px 0 8px; }
+.buy-quote { font-size:12px;color:var(--fg-muted);min-height:18px;margin-bottom:10px; }
+.buy-pct-row { display:flex;gap:6px;margin-top:6px; }
+.buy-pct-btn {
+  flex:1;font-size:10px;padding:5px 0;background:transparent;border:1px solid var(--border-muted);
+  color:var(--fg-muted);cursor:pointer;font-weight:500;letter-spacing:0.05em;
+}
+.buy-pct-btn:hover { background:var(--surface-hover);color:var(--fg); }
+
 /* Action button */
 .action-btn {
   width:100%;padding:14px 24px;font-size:13px;font-weight:600;
@@ -195,7 +223,7 @@ body.modal-open { overflow:hidden; }
 
 <div class="form-hint">
   Collector DAO for <a href="https://etherscan.io/address/0xb33d806a94B6770C9d309E0842a75f8E6edCd5A6" target="_blank">FundingWorks S02</a>.
-  Buy shares via <a href="../coin/#0xE7Aa6cA3a9Ca3fe92a425dFeaD24900B9BF49853" style="color:inherit;text-decoration:underline">coin page</a> &mdash; ETH goes to minter &mdash; mint open NFT slot when 1 ETH accumulates.
+  Buy shares below &mdash; ETH goes to minter &mdash; mint open NFT slot when 1 ETH accumulates.
 </div>
 
 <!-- Dashboard (shown when DAO is deployed) -->
@@ -210,11 +238,39 @@ body.modal-open { overflow:hidden; }
     <div class="info-row"><span class="info-label">Next NFT progress</span><span class="info-value" id="p2NftPct">-</span></div>
   </div>
 
+  <!-- Buy shares -->
+  <div class="buy-card" id="buySection" style="display:none">
+    <div class="buy-section">
+      <div class="buy-section-head">
+        <label>From</label>
+        <span id="buyBal" class="buy-balance"></span>
+        <span class="buy-token-tag"><svg width="14" height="14" viewBox="0 0 256 417" fill="currentColor" opacity="0.6"><path d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/><path d="M127.962 0L0 212.32l127.962 75.639V154.158z"/><path d="M127.961 312.187l-1.575 1.92V414.55l1.575 4.6L256 236.587z"/><path d="M127.962 419.15V312.187L0 236.587z"/></svg> ETH</span>
+      </div>
+      <input type="text" id="buyAmt" placeholder="0.0" inputmode="decimal" autocomplete="off">
+      <div class="buy-pct-row">
+        <button class="buy-pct-btn" onclick="fillBuyPct(25)">25%</button>
+        <button class="buy-pct-btn" onclick="fillBuyPct(50)">50%</button>
+        <button class="buy-pct-btn" onclick="fillBuyPct(75)">75%</button>
+        <button class="buy-pct-btn" onclick="fillBuyPct(100)">100%</button>
+      </div>
+    </div>
+    <div class="buy-arrow-row">
+      <div style="width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--fg)" stroke-width="2.5"><path d="M7 10L12 15L17 10"/></svg></div>
+    </div>
+    <div class="buy-section">
+      <div class="buy-section-head">
+        <label>To</label>
+        <span class="buy-token-tag">$FWC</span>
+      </div>
+      <input type="text" id="buyReceive" placeholder="0" readonly>
+    </div>
+    <div class="buy-quote">1 ETH = 1M shares</div>
+    <button class="action-btn" id="buyBtn" onclick="buyShares()" style="margin-bottom:0">Buy Shares</button>
+    <div id="buyStatusArea"></div>
+  </div>
+
   <!-- NFT Progress -->
   <div class="info-card" id="nftCard"></div>
-
-  <!-- Buy shares (via coin page) — pending governance -->
-  <div id="buySection" style="font-size:12px;color:var(--fg-muted);text-align:center;padding:12px 0">Pending governance to continue sale</div>
 
   <!-- Mint from balance -->
   <button class="action-btn" id="mintBtn" onclick="mintFromBalance()" style="display:none">Mint NFT from Balance</button>
@@ -247,7 +303,7 @@ body.modal-open { overflow:hidden; }
     &middot; <a href="" id="daoLink" target="_blank" style="color:var(--fg-dim)">DAO</a>
     &middot; <a href="" id="minterLink" target="_blank" style="color:var(--fg-dim)">Minter</a>
     &middot; <a href="" id="manageLink" style="color:var(--fg-dim)">Manage DAO</a>
-    &middot; <a href="https://etherscan.io/address/0x5D03BeE003859d250c1AB868490d09D90F10C8E8" target="_blank" style="color:var(--fg-dim)">Sale Contract</a>
+    &middot; <a href="https://etherscan.io/address/0x824d11a46F32cd16cdF46380314343e9697e2491" target="_blank" style="color:var(--fg-dim)">Sale Contract</a>
   </div>
 </div>
 
@@ -366,10 +422,10 @@ const SHARES_ABI = [
   'function totalSupply() view returns (uint256)'
 ];
 
-const FOLLOW_ON_SALE = '0x5D03BeE003859d250c1AB868490d09D90F10C8E8';
+const FOLLOW_ON_SALE = '0x824d11a46F32cd16cdF46380314343e9697e2491';
 const P2_CAP = 9_000_000n * 10n**18n; // 9M shares
 const MOLOCH_ABI = ['function allowance(address token, address spender) view returns (uint256)'];
-const FOLLOW_ON_ABI = ['function paused() view returns (bool)'];
+const FOLLOW_ON_ABI = ['function paused() view returns (bool)', 'function buy() payable'];
 
 let _minterAddress = null; // discovered from tap.ops
 
@@ -420,6 +476,7 @@ async function loadDashboard() {
     const p2Sold = P2_CAP - p2Remaining;
     const p2Pct = Number(p2Sold * 10000n / P2_CAP) / 100;
 
+    const p2Open = !p2Paused && p2Remaining > 0n;
     if (p2Paused) {
       $('p2Status').innerHTML = '<span style="color:var(--fg-muted)">Paused</span>';
     } else if (p2Remaining === 0n) {
@@ -429,6 +486,7 @@ async function loadDashboard() {
     }
     $('p2Bar').style.width = Math.min(p2Pct, 100).toFixed(2) + '%';
     $('p2Remaining').textContent = fmtShares(p2Remaining) + ' / ' + fmtShares(P2_CAP);
+    $('buySection').style.display = p2Open ? '' : 'none';
 
 
     // Minter data
@@ -570,6 +628,63 @@ async function closeSale() {
   } finally { $('closeBtn').disabled = false; }
 }
 
+// ==================== BUY SHARES ====================
+
+$('buyAmt').addEventListener('input', function() {
+  const v = parseFloat(this.value);
+  const recv = $('buyReceive');
+  if (v > 0) {
+    const shares = v * 1_000_000;
+    recv.value = shares.toLocaleString();
+  } else {
+    recv.value = '';
+  }
+});
+
+function fillBuyPct(pct) {
+  if (!_connectedAddress || !_ethBalance) return;
+  const amt = _ethBalance * BigInt(pct) / 100n;
+  $('buyAmt').value = ethers.formatEther(amt);
+  $('buyAmt').dispatchEvent(new Event('input'));
+}
+
+let _ethBalance = 0n;
+async function loadBuyBalance() {
+  if (!_connectedAddress) { $('buyBal').textContent = ''; return; }
+  try {
+    const rpc = getRPC();
+    _ethBalance = await rpc.getBalance(_connectedAddress);
+    $('buyBal').textContent = Number(ethers.formatEther(_ethBalance)).toLocaleString(undefined, {maximumFractionDigits:6}) + ' ETH';
+    $('buyBal').onclick = () => fillBuyPct(100);
+  } catch(e) {}
+}
+
+async function buyShares() {
+  if (!_signer) { toggleWallet(); return; }
+  const amt = $('buyAmt').value.trim();
+  if (!amt || parseFloat(amt) <= 0) { showStatus('buyStatusArea', 'Enter an ETH amount', true); return; }
+  $('buyBtn').disabled = true;
+  try {
+    showStatus('buyStatusArea', 'Confirm in wallet...');
+    const sale = new ethers.Contract(FOLLOW_ON_SALE, FOLLOW_ON_ABI, _signer);
+    const tx = await sale.buy({ value: ethers.parseEther(amt) });
+    showStatus('buyStatusArea', `Tx submitted. <a href="https://etherscan.io/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,10)}...</a>`);
+    await tx.wait();
+    const shares = parseFloat(amt) * 1_000_000;
+    showStatus('buyStatusArea', `Success! Bought ${shares >= 1000 ? (shares / 1e6).toFixed(2) + 'M' : shares.toFixed(0)} shares. <a href="https://etherscan.io/tx/${tx.hash}" target="_blank">View tx</a>`);
+    $('buyAmt').value = '';
+    $('buyReceive').value = '';
+    loadDashboard();
+    loadBuyBalance();
+  } catch (e) {
+    if ((e.message || '').toLowerCase().includes('user rejected') || e.code === 'ACTION_REJECTED') {
+      clearStatus('buyStatusArea');
+    } else {
+      showStatus('buyStatusArea', escText((e.shortMessage || e.reason || e.message || '').split('\n')[0].slice(0, 120)), true);
+    }
+  } finally { $('buyBtn').disabled = false; }
+}
+
 // ==================== DEPLOY ====================
 
 let _deploying = false;
@@ -705,7 +820,7 @@ async function init() {
 }
 
 init();
-walletInit({ appName: 'zFi Collect', onConnect: [() => { if (_daoDeployed) loadDashboard(); }], onDisconnect: [() => { $('userCard').style.display = 'none'; }] });
+walletInit({ appName: 'zFi Collect', onConnect: [() => { if (_daoDeployed) { loadDashboard(); loadBuyBalance(); } }], onDisconnect: [() => { $('userCard').style.display = 'none'; $('buyBal').textContent = ''; }] });
 </script>
 </body>
 </html>

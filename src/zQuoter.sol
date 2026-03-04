@@ -10,7 +10,10 @@ interface IZQuoterBase {
     function quoteV2(bool, address, address, uint256, bool) external view returns (uint256, uint256);
     function quoteV3(bool, address, address, uint24, uint256) external view returns (uint256, uint256);
     function quoteV4(bool, address, address, uint24, int24, address, uint256) external view returns (uint256, uint256);
-    function quoteZAMM(bool, uint256, address, address, uint256, uint256, uint256) external view returns (uint256, uint256);
+    function quoteZAMM(bool, uint256, address, address, uint256, uint256, uint256)
+        external
+        view
+        returns (uint256, uint256);
 }
 
 IZQuoterBase constant _BASE = IZQuoterBase(0x658bF1A6608210FDE7310760f391AD4eC8006A5F);
@@ -51,13 +54,18 @@ contract zQuoter {
             uint256 badFee = best.feeBps;
             best = Quote(AMM.UNI_V2, 0, 0, 0);
             for (uint256 i; i < quotes.length; ++i) {
-                if (quotes[i].source == AMM.UNI_V3 && quotes[i].feeBps == badFee) { quotes[i].amountIn = 0; quotes[i].amountOut = 0; continue; }
-                if (quotes[i].amountIn > 0 && (best.amountIn == 0 || quotes[i].amountIn < best.amountIn)) best = quotes[i];
+                if (quotes[i].source == AMM.UNI_V3 && quotes[i].feeBps == badFee) {
+                    quotes[i].amountIn = 0;
+                    quotes[i].amountOut = 0;
+                    continue;
+                }
+                if (quotes[i].amountIn > 0 && (best.amountIn == 0 || quotes[i].amountIn < best.amountIn)) {
+                    best = quotes[i];
+                }
             }
             // Loop: if new best is also V3, round-trip check it too
         }
     }
-
 
     function _asQuote(AMM source, uint256 amountIn, uint256 amountOut) internal pure returns (Quote memory q) {
         q.source = source;
@@ -242,7 +250,8 @@ contract zQuoter {
             if (fromSet2) {
                 bool dup;
                 for (uint256 d; d < pools1.length; ++d) {
-                    if (pools1[d] == pool) { dup = true; break; }
+                    if (pools1[d] == pool) dup = true;
+                    break;
                 }
                 if (dup) continue;
             }

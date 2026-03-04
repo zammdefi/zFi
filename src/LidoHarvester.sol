@@ -16,7 +16,7 @@ contract LidoHarvester {
     event OwnershipTransferred(address indexed from, address indexed to);
 
     address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
-    
+
     uint256 public staked;
     uint16 public slipBps;
     address public owner;
@@ -48,14 +48,18 @@ contract LidoHarvester {
 
     receive() external payable {
         uint256 stethBal = IERC20(STETH).balanceOf(address(this));
-        (bool ok, ) = STETH.call{value: msg.value}("");
+        (bool ok,) = STETH.call{value: msg.value}("");
         require(ok);
-        unchecked { staked += IERC20(STETH).balanceOf(address(this)) - stethBal; }
+        unchecked {
+            staked += IERC20(STETH).balanceOf(address(this)) - stethBal;
+        }
     }
 
     function deposit(uint256 amt) public payable {
         IERC20(STETH).transferFrom(msg.sender, address(this), amt);
-        unchecked { staked += amt; }
+        unchecked {
+            staked += amt;
+        }
     }
 
     function withdraw(address to, uint256 val, bytes calldata data) public payable {
@@ -70,23 +74,26 @@ contract LidoHarvester {
 
         if (conditioned) balBefore = ethCondition ? _holder.balance : IERC20(_asset).balanceOf(_holder);
 
-        (bool ok, ) = to.call{value: val}(data);
-        require(ok);  
+        (bool ok,) = to.call{value: val}(data);
+        require(ok);
 
         if (conditioned) {
-             uint256 balAfter = ethCondition ? _holder.balance : IERC20(_asset).balanceOf(_holder);
-             require(balAfter > balBefore, ConditionUnmet());
+            uint256 balAfter = ethCondition ? _holder.balance : IERC20(_asset).balanceOf(_holder);
+            require(balAfter > balBefore, ConditionUnmet());
         }
-
     }
 
     function harvest(address to, bytes calldata data) public payable returns (uint256 yield) {
         uint256 ethBal = address(this).balance; // how much eth is in contract before call
         uint256 stethBal = IERC20(STETH).balanceOf(address(this)); // how much steth is in contract before call
-        unchecked { yield = (stethBal - staked); } // the yield amount in terms of steth accrued over deposits
-        (bool ok, ) = to.call(data); // the call to any contract with any data
+        unchecked {
+            yield = (stethBal - staked); // the yield amount in terms of steth accrued over deposits
+        }
+        (bool ok,) = to.call(data); // the call to any contract with any data
         require(ok); // the requirement that the call succeeds
-        unchecked { require(address(this).balance >= (ethBal + yield) * (slipBps / 10000)); } 
+        unchecked {
+            require(address(this).balance >= (ethBal + yield) * (slipBps / 10000));
+        }
         // the requirement that eth balance increased from the call adjusted for slippage bps
     }
 }

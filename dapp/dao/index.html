@@ -15639,13 +15639,19 @@ body.modal-open { overflow: hidden; }
 
         const address = addressInput.value.trim().toLowerCase();
 
-        // Check if address matches any known tokens
+        // Check if address matches any known tokens or infrastructure contracts
         const tokenMap = {
           [TOKEN_ADDRESSES.usdc.toLowerCase()]: 'USDC Token',
           [TOKEN_ADDRESSES.usdt.toLowerCase()]: 'USDT Token',
           [TOKEN_ADDRESSES.dai.toLowerCase()]: 'DAI Token',
           [TOKEN_ADDRESSES.wsteth.toLowerCase()]: 'wstETH Token',
-          [TOKEN_ADDRESSES.reth.toLowerCase()]: 'rETH Token'
+          [TOKEN_ADDRESSES.reth.toLowerCase()]: 'rETH Token',
+          '0x000000000044bfe6c2bbfed8862973e0612f07c0': 'pAMM (Prediction Market)',
+          '0x000000000000040470635eb91b7ce4d132d616ed': 'zAMM (DEX)',
+          '0x000000000033e92db97b4b3becd2c255126c60ac': 'DAICO Factory',
+          '0x0000000000330b8df9e3bc5e553074da58ee9138': 'DAO Summoner',
+          '0x000000000040084694f7b6fb2846d067b4c3aa9f': 'Share Burner',
+          '0x0000000000bb32e4f5b60041f0682d12119283f7': 'Collector Vault Factory'
         };
 
         // Add shares and loot tokens if currentDAO is available
@@ -15731,13 +15737,16 @@ body.modal-open { overflow: hidden; }
           isDaoSelfCall = (target === currentDAO.dao.dao.toLowerCase());
         }
 
+        // Check if targeting pAMM
+        const isPamm = target === '0x000000000044bfe6c2bbfed8862973e0612f07c0';
+
         if (!calldata || calldata === '0x' || calldata.length < 10) {
           translationDiv.style.display = 'none';
           return;
         }
 
-        // If it's neither a token nor a DAO self-call, don't translate
-        if (!token && !isDaoSelfCall) {
+        // If it's neither a token, DAO self-call, nor known infra, don't translate
+        if (!token && !isDaoSelfCall && !isPamm) {
           translationDiv.style.display = 'none';
           return;
         }
@@ -16070,13 +16079,80 @@ body.modal-open { overflow: hidden; }
               <div style="margin-top: 0.25rem; font-size: 0.8rem;">To: <code style="background: var(--surface-hover); padding: 0.15rem 0.35rem;">${recipient}</code></div>
             `;
           }
+          // --- pAMM (Prediction Market) functions ---
+          // resolve(uint256 marketId, bool outcome) - 0x52a34b05
+          else if (isPamm && functionSelector === '0x52a34b05' && calldata.length >= 138) {
+            const decoded = abiCoder.decode(['uint256', 'bool'], '0x' + calldata.slice(10));
+            const marketId = decoded[0].toString();
+            const outcome = decoded[1] ? 'YES' : 'NO';
+
+            autoDescription = `Resolve prediction market #${marketId} → ${outcome}`;
+            translation = `
+              <div style="opacity: 0.8; margin-bottom: 0.35rem; font-size: 0.8rem;">Resolve Prediction Market</div>
+              <div>Market <strong>#${marketId}</strong> → Outcome: <strong>${outcome}</strong></div>
+              <div style="margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.7;">pAMM &mdash; Prediction Market</div>
+            `;
+          }
+          // closeMarket(uint256 marketId) - 0xae418095
+          else if (isPamm && functionSelector === '0xae418095' && calldata.length >= 74) {
+            const decoded = abiCoder.decode(['uint256'], '0x' + calldata.slice(10));
+            const marketId = decoded[0].toString();
+
+            autoDescription = `Close prediction market #${marketId}`;
+            translation = `
+              <div style="opacity: 0.8; margin-bottom: 0.35rem; font-size: 0.8rem;">Close Prediction Market</div>
+              <div>Close market <strong>#${marketId}</strong> for resolution</div>
+              <div style="margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.7;">pAMM &mdash; Prediction Market</div>
+            `;
+          }
+          // claim(uint256 marketId, address to) - 0xddd5e1b2
+          else if (isPamm && functionSelector === '0xddd5e1b2' && calldata.length >= 138) {
+            const decoded = abiCoder.decode(['uint256', 'address'], '0x' + calldata.slice(10));
+            const marketId = decoded[0].toString();
+            const to = decoded[1];
+
+            autoDescription = `Claim payout from prediction market #${marketId}`;
+            translation = `
+              <div style="opacity: 0.8; margin-bottom: 0.35rem; font-size: 0.8rem;">Claim Market Payout</div>
+              <div>Claim from market <strong>#${marketId}</strong></div>
+              <div style="margin-top: 0.25rem; font-size: 0.8rem;">To: <code style="background: var(--surface-hover); padding: 0.15rem 0.35rem;">${to}</code></div>
+              <div style="margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.7;">pAMM &mdash; Prediction Market</div>
+            `;
+          }
+          // claimMany(uint256[] marketIds, address to) - 0x7c20d5be
+          else if (isPamm && functionSelector === '0x7c20d5be' && calldata.length >= 138) {
+            const decoded = abiCoder.decode(['uint256[]', 'address'], '0x' + calldata.slice(10));
+            const marketIds = decoded[0].map(id => id.toString());
+            const to = decoded[1];
+
+            autoDescription = `Claim payouts from ${marketIds.length} prediction markets`;
+            translation = `
+              <div style="opacity: 0.8; margin-bottom: 0.35rem; font-size: 0.8rem;">Claim Multiple Market Payouts</div>
+              <div>Claim from <strong>${marketIds.length} markets</strong>: ${marketIds.map(id => '#' + id).join(', ')}</div>
+              <div style="margin-top: 0.25rem; font-size: 0.8rem;">To: <code style="background: var(--surface-hover); padding: 0.15rem 0.35rem;">${to}</code></div>
+              <div style="margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.7;">pAMM &mdash; Prediction Market</div>
+            `;
+          }
+          // setResolverFeeBps(uint16 bps) - 0xfb105091
+          else if (isPamm && functionSelector === '0xfb105091' && calldata.length >= 74) {
+            const decoded = abiCoder.decode(['uint16'], '0x' + calldata.slice(10));
+            const bps = Number(decoded[0]);
+            const percent = (bps / 100).toFixed(2);
+
+            autoDescription = `Set resolver fee to ${percent}%`;
+            translation = `
+              <div style="opacity: 0.8; margin-bottom: 0.35rem; font-size: 0.8rem;">Set Resolver Fee</div>
+              <div>Set DAO resolver fee to <strong>${percent}%</strong> (${bps} bps)</div>
+              <div style="margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.7;">pAMM &mdash; Prediction Market</div>
+            `;
+          }
 
           if (translation) {
             translationDiv.innerHTML = translation;
             translationDiv.style.display = 'block';
 
-            // Auto-populate description for recognized DAO self-calls when pasting calldata manually
-            if (isDaoSelfCall && autoDescription) {
+            // Auto-populate description for recognized calls when pasting calldata manually
+            if ((isDaoSelfCall || isPamm) && autoDescription) {
               const descField = getEl('proposalDescription');
               const fullDescField = document.getElementById('proposalDescriptionFull');
               if (descField && !descField.value && (!fullDescField || !fullDescField.value)) {

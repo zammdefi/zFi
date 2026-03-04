@@ -20,7 +20,7 @@ contract Cowol {
         "uint256 buyAmount,uint32 validTo,bytes32 appData,uint256 feeAmount,"
         "string kind,bool partiallyFillable,string sellTokenBalance,string buyTokenBalance)"
     );
-    bytes32 constant KIND_SELL     = keccak256("sell");
+    bytes32 constant KIND_SELL = keccak256("sell");
     bytes32 constant BALANCE_ERC20 = keccak256("erc20");
     bytes32 constant DOMAIN_SEPARATOR = 0xc078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943;
 
@@ -29,7 +29,7 @@ contract Cowol {
     /// @dev order digest → approved.
     mapping(bytes32 => bool) public validDigests;
     /// @dev token → expiry timestamp for recovery.
-    mapping(address => uint32)  public expiry;
+    mapping(address => uint32) public expiry;
     /// @dev token → receiver for recovery.
     mapping(address => address) public recipient;
 
@@ -54,7 +54,7 @@ contract Cowol {
             address receiver,
             uint256 sellAmount,
             uint256 buyAmount,
-            uint32  validTo,
+            uint32 validTo,
             bytes32 appData,
             uint256 feeAmount
         ) = abi.decode(data, (address, address, uint256, uint256, uint32, bytes32, uint256));
@@ -64,30 +64,28 @@ contract Cowol {
 
         // Cap expiry and store recovery info.
         require(validTo <= uint32(block.timestamp) + MAX_EXPIRY);
-        expiry[tokenIn]    = validTo;
+        expiry[tokenIn] = validTo;
         recipient[tokenIn] = receiver;
 
         // Compute the EIP-712 struct hash → order digest on-chain.
-        bytes32 structHash = keccak256(abi.encode(
-            ORDER_TYPE_HASH,
-            tokenIn,        // sellToken
-            buyToken,
-            receiver,
-            sellAmount,
-            buyAmount,
-            validTo,
-            appData,
-            feeAmount,
-            KIND_SELL,      // only sell orders supported
-            false,          // partiallyFillable = false
-            BALANCE_ERC20,  // sellTokenBalance
-            BALANCE_ERC20   // buyTokenBalance
-        ));
-        bytes32 digest = keccak256(abi.encodePacked(
-            bytes2(0x1901),
-            DOMAIN_SEPARATOR,
-            structHash
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                ORDER_TYPE_HASH,
+                tokenIn, // sellToken
+                buyToken,
+                receiver,
+                sellAmount,
+                buyAmount,
+                validTo,
+                appData,
+                feeAmount,
+                KIND_SELL, // only sell orders supported
+                false, // partiallyFillable = false
+                BALANCE_ERC20, // sellTokenBalance
+                BALANCE_ERC20 // buyTokenBalance
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked(bytes2(0x1901), DOMAIN_SEPARATOR, structHash));
         validDigests[digest] = true;
     }
 

@@ -566,10 +566,38 @@ const ERC20_ABI = [
   'function approve(address,uint256) returns (bool)',
   'function allowance(address,address) view returns (uint256)'
 ];
+const ERC721_ABI = [
+  'function ownerOf(uint256) view returns (address)',
+  'function getApproved(uint256) view returns (address)',
+  'function approve(address,uint256)'
+];
 const MC3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
 const MC3_ABI = [
   'function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) view returns (tuple(bool success, bytes returnData)[])',
   'function getEthBalance(address) view returns (uint256)'
+];
+
+// Collector Vault Factory
+const COLLECTOR_VAULT_FACTORY = '0x0000000000Bb32e4f5b60041F0682d12119283f7';
+const COLLECTOR_VAULT_ABI = [
+  'function buy() payable',
+  'function mode() view returns (uint8)',
+  'function deadline() view returns (uint256)',
+  'function shareRate() view returns (uint256)',
+  'function callsMade() view returns (uint256)',
+  'function maxCalls() view returns (uint256)',
+  'function filled() view returns (bool)',
+  'function target() view returns (address)',
+  'function ethPerCall() view returns (uint256)',
+  'function token() view returns (address)',
+  'function minBalance() view returns (uint256)',
+  'function specificId() view returns (bool)',
+  'function executable() view returns (uint256)',
+  'function isFilled() view returns (bool)',
+  'function fill()'
+];
+const COLLECTOR_FACTORY_ABI = [
+  'event Deployed(address indexed dao, address indexed vault, uint8 mode)'
 ];
 
 // ZORG DAO spam filtering
@@ -1429,6 +1457,8 @@ function route() {
   if (_activityInterval) { clearInterval(_activityInterval); _activityInterval = null; }
   if (_saleRefreshInterval) { clearInterval(_saleRefreshInterval); _saleRefreshInterval = null; }
   if (_saleCountdownInterval) { clearInterval(_saleCountdownInterval); _saleCountdownInterval = null; }
+  if (_vaultRefreshInterval) { clearInterval(_vaultRefreshInterval); _vaultRefreshInterval = null; }
+  _vaultAddr = null; _vaultData = null; _isCollectorDAO = false; _vaultSaleActive = false;
   const hash = location.hash.replace('#','').trim();
   if (hash && hash.startsWith('0x') && hash.length === 42) {
     renderCoinPage(hash);
@@ -1754,6 +1784,13 @@ let _tradeMode = 'swap'; // 'sale' | 'swap' | 'ragequit' | 'lp'
 let _saleData = null; // sale object from getDAICO
 let _saleExactOut = false; // true when user typed in receive field
 let _lpSubMode = 'zap'; // 'zap' | 'pair'
+
+// Collector Vault state
+let _vaultAddr = null;
+let _vaultData = null;
+let _isCollectorDAO = false;
+let _vaultSaleActive = false;
+let _vaultRefreshInterval = null;
 let _poolReserve0 = 0n;
 let _poolReserve1 = 0n;
 let _lpBalance = 0n;
@@ -1794,6 +1831,75 @@ async function renderCoinPage(daoAddr) {
     ]);
     if (gen !== _renderGen) return;
     _coinMeta = metadata;
+
+    // Collector DAO detection + vault discovery
+    _isCollectorDAO = !!(metadata && metadata.type === 'collector');
+    _vaultAddr = null;
+    _vaultData = null;
+    _vaultSaleActive = false;
+    if (_isCollectorDAO && COLLECTOR_VAULT_FACTORY !== ZERO) {
+      try {
+        const factoryIface = new ethers.Interface(COLLECTOR_FACTORY_ABI);
+        const logs = await withRPC(async rpc => {
+          return await rpc.getLogs({
+            address: COLLECTOR_VAULT_FACTORY,
+            topics: [factoryIface.getEvent('Deployed').topicHash, ethers.zeroPadValue(daoAddr, 32)],
+            fromBlock: 0, toBlock: 'latest'
+          });
+        });
+        if (logs.length > 0) {
+          const parsed = factoryIface.parseLog(logs[logs.length - 1]);
+          _vaultAddr = parsed.args.vault;
+          // Batch-read vault state via MC3
+          const vaultIface = new ethers.Interface(COLLECTOR_VAULT_ABI);
+          const mc3i = new ethers.Interface(MC3_ABI);
+          const vCalls = [
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('mode') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('deadline') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('shareRate') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('callsMade') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('maxCalls') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('filled') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('target') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('ethPerCall') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('token') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('minBalance') },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('specificId') },
+            { target: MC3, allowFailure: false, callData: mc3i.encodeFunctionData('getEthBalance', [_vaultAddr]) },
+            { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('isFilled') }
+          ];
+          const vResults = await withRPC(async rpc => {
+            const mc = new ethers.Contract(MC3, MC3_ABI, rpc);
+            return await mc.aggregate3(vCalls);
+          });
+          const vd = (fn, idx) => { try { return vResults[idx].success ? vaultIface.decodeFunctionResult(fn, vResults[idx].returnData)[0] : null; } catch { return null; } };
+          const filledFlag = !!(vd('filled', 5));
+          const isFilledLive = !!(vd('isFilled', 12));
+          _vaultData = {
+            mode: Number(vd('mode', 0) ?? 0),
+            deadline: vd('deadline', 1) ?? 0n,
+            shareRate: vd('shareRate', 2) ?? 0n,
+            callsMade: vd('callsMade', 3) ?? 0n,
+            maxCalls: vd('maxCalls', 4) ?? 0n,
+            filled: filledFlag || isFilledLive,
+            target: vd('target', 6) ?? ZERO,
+            ethPerCall: vd('ethPerCall', 7) ?? 0n,
+            token: vd('token', 8) ?? ZERO,
+            minBalance: vd('minBalance', 9) ?? 0n,
+            specificId: !!(vd('specificId', 10)),
+            balance: mc3i.decodeFunctionResult('getEthBalance', vResults[11].returnData)[0]
+          };
+          // Determine if vault sale is active
+          const now = BigInt(Math.floor(Date.now() / 1000));
+          const pastDeadline = _vaultData.deadline > 0n && now >= _vaultData.deadline;
+          const callsRemain = _vaultData.maxCalls === 0n || _vaultData.callsMade < _vaultData.maxCalls;
+          _vaultSaleActive = _vaultData.shareRate > 0n && !pastDeadline &&
+            (_vaultData.mode === 0 ? callsRemain : !_vaultData.filled);
+        }
+      } catch (e) { console.error('Vault discovery failed:', e); }
+    }
+    if (gen !== _renderGen) return;
+
     const opsLockup = tapActive_ && tap.ops ? await fetchOpsLockup(sharesAddr, tap.ops, metadata) : null;
     if (gen !== _renderGen) return;
 
@@ -1895,7 +2001,7 @@ async function renderCoinPage(daoAddr) {
       <div class="coin-detail-head">
         <div class="coin-detail-logo">${logoHTML(data.meta, metadata, 64)}</div>
         <div class="coin-detail-title" style="flex:1">
-          <h2>${escText(metadata.name || data.meta.name || 'Unnamed')}${isFWCollector ? ' <span style="font-size:11px;font-weight:400;color:var(--fg-dim);letter-spacing:0.05em">Collector DAO</span>' : ''}</h2>
+          <h2>${escText(metadata.name || data.meta.name || 'Unnamed')}${isFWCollector ? ' <span style="font-size:11px;font-weight:400;color:var(--fg-dim);letter-spacing:0.05em">Collector DAO</span>' : _isCollectorDAO ? ` <span style="font-size:11px;font-weight:400;color:var(--fg-dim);letter-spacing:0.05em">${_vaultData ? (_vaultData.mode === 0 ? 'Call Raise' : 'Bounty Raise') : 'Collector DAO'}</span>` : ''}</h2>
           <div class="coin-symbol-row">
             <span>$${escText(metadata.symbol || data.meta.symbol || '???')}${(metadata.launchType === 'ez' || metadata.launchType === 'simple') ? `<span class="coin-tpl-badge coin-tpl-simple" title="ez launch &middot; ${metadata.lpBps ? (metadata.lpBps/100) + '% LP' : '80% LP'} &middot; ragequitable treasury &middot; no ops &middot; no tap">ez</span>` : metadata.launchType === 'fund' ? `<span class="coin-tpl-badge coin-tpl-simple" title="fund launch &middot; ops allocation &middot; tap vesting &middot; governance">fund</span>` : metadata.template ? `<span class="coin-tpl-badge" title="${escText(metadata.template)} template"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>` : ''}</span>
             <div id="coinUserBalance" class="coin-user-balance" style="display:none"></div>
@@ -1941,6 +2047,78 @@ async function renderCoinPage(daoAddr) {
           </div>
         </div>
       `;
+    }
+
+    // Collector Vault info card
+    if (_isCollectorDAO && _vaultData) {
+      const vd = _vaultData;
+      const vMode = vd.mode;
+      const vBal = vd.balance;
+      const vBalFmt = fmtETH(vBal);
+      let missionHTML = '';
+      if (vMode === 0) {
+        const callsMax = vd.maxCalls > 0n ? Number(vd.maxCalls) : '&infin;';
+        missionHTML = `Call Raise &mdash; pooling ETH to call <a href="https://etherscan.io/address/${vd.target}" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--fg-muted)">${vd.target.slice(0,6)}...${vd.target.slice(-4)}</a> at ${fmtETH(vd.ethPerCall)} ${ethIco}/call. ${Number(vd.callsMade)}/${callsMax} calls made. ${vBalFmt} ${ethIco} pooled.`;
+      } else {
+        const fillStatus = vd.filled ? 'Filled' : 'Open';
+        const tokenLabel = vd.specificId ? `#${vd.minBalance.toString()}` : `${fmtShares(vd.minBalance)}`;
+        missionHTML = `Bounty Raise &mdash; pooling ETH for <a href="https://etherscan.io/address/${vd.token}" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--fg-muted)">${vd.token.slice(0,6)}...${vd.token.slice(-4)}</a> ${tokenLabel}. ${vBalFmt} ${ethIco} pooled. <span style="font-weight:600;color:${vd.filled ? 'var(--green)' : 'var(--fg)'}">${fillStatus}</span>`;
+      }
+      // Progress bar
+      let vaultPct = 0;
+      if (vMode === 0 && vd.ethPerCall > 0n) {
+        const needed = vd.maxCalls > 0n ? vd.ethPerCall * (vd.maxCalls - vd.callsMade) : vd.ethPerCall;
+        vaultPct = needed > 0n ? Math.min(100, Number(vBal * 10000n / needed) / 100) : 0;
+      }
+      html += `
+        <div class="section-card" id="vaultInfoCard">
+          <div class="section-title">${_vaultSaleActive ? 'Vault (Live)' : 'Vault'}</div>
+          <div style="font-size:12px;line-height:1.6;color:var(--fg-muted);margin-bottom:8px">${missionHTML}</div>
+          <div id="vaultBalRow" class="stat-row"><span class="stat-label">Vault balance</span><span class="stat-value" id="vaultBalVal">${vBalFmt} ${ethIco}</span></div>
+          <div id="vaultPctBar">${pctBar(vaultPct, 'var(--green)')}</div>
+          ${vMode === 0 ? `<div id="vaultCallsRow" class="stat-row"><span class="stat-label">Calls</span><span class="stat-value" id="vaultCallsVal">${Number(vd.callsMade)} / ${vd.maxCalls > 0n ? Number(vd.maxCalls) : '&infin;'}</span></div>` : ''}
+          ${vd.deadline > 0n ? '<div id="vaultDeadlineRow"></div>' : ''}
+          ${vMode === 1 && !vd.filled && vBal > 0n ? `
+          <div id="vaultFillSection" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-muted)">
+            <div style="font-size:12px;font-weight:600;margin-bottom:6px">Fill Bounty</div>
+            <div style="font-size:11px;color:var(--fg-muted);line-height:1.6;margin-bottom:8px">
+              Deliver <a href="https://etherscan.io/address/${vd.token}" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--fg-muted)">${vd.token.slice(0,6)}...${vd.token.slice(-4)}</a>
+              ${vd.specificId ? `<span style="font-weight:600">#${vd.minBalance.toString()}</span>` : `<span style="font-weight:600">${fmtShares(vd.minBalance)}</span> tokens`}
+              to claim <span style="font-weight:600">${vBalFmt} ETH</span>
+            </div>
+            <div id="vaultFillBalInfo" style="font-size:11px;color:var(--fg-muted);margin-bottom:8px;display:none"></div>
+            <button id="vaultFillBtn" class="action-btn" onclick="onVaultFillBtn()" style="width:100%">Fill Bounty &mdash; Claim ${vBalFmt} ETH</button>
+            <div id="vaultFillStatus" class="swap-quote" style="margin-top:6px"></div>
+          </div>
+          ` : ''}
+          <div style="margin-top:6px;font-size:11px"><a href="https://etherscan.io/address/${_vaultAddr}" target="_blank" style="color:var(--fg-muted);text-decoration:none;border-bottom:1px dotted var(--fg-muted)">Vault contract</a></div>
+        </div>
+      `;
+      // Vault deadline countdown
+      if (vd.deadline > 0n) {
+        const _vaultDl = Number(vd.deadline);
+        setTimeout(() => {
+          const dlEl = $('vaultDeadlineRow');
+          if (!dlEl) return;
+          const dlDate = new Date(_vaultDl * 1000);
+          const dlStr = dlDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+          function updateVaultCd() {
+            const rem = _vaultDl - Math.floor(Date.now() / 1000);
+            if (rem <= 0) {
+              dlEl.innerHTML = `<div class="stat-row"><span class="stat-label">Deadline</span><span class="stat-value">${dlStr} (ended)</span></div>`;
+              return;
+            }
+            const d = Math.floor(rem / 86400);
+            const h = Math.floor((rem % 86400) / 3600);
+            const m = Math.floor((rem % 3600) / 60);
+            const s = rem % 60;
+            const timer = d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+            dlEl.innerHTML = `<div class="stat-row"><span class="stat-label">Deadline</span><span class="stat-value">${dlStr}</span></div><div style="font-size:14px;font-weight:600;letter-spacing:0.05em;text-align:center;padding:4px 0;color:var(--fg-muted)">${timer} remaining</div>`;
+          }
+          updateVaultCd();
+          _saleCountdownInterval = setInterval(updateVaultCd, 1000);
+        }, 0);
+      }
     }
 
     if (isFWCollector) {
@@ -2012,7 +2190,8 @@ async function renderCoinPage(daoAddr) {
       }
     }
 
-    // Sale section (drawer if ended, full card if live)
+    // Sale section (drawer if ended, full card if live) — skip for collector DAOs (vault handles sale)
+    const hasDaicoSale = sale && sale.forAmt > 0n;
     const saleContent = `
         <div class="stat-row"><span class="stat-label">Sold</span><span class="stat-value" id="saleSoldVal">${fmtShares(sold)} / ${fmtShares(totalSale)} <span style="color:var(--green);font-weight:600">(${salePct.toFixed(1)}%)</span></span></div>
         <div id="salePctBar">${pctBar(salePct, 'var(--green)')}</div>
@@ -2021,7 +2200,7 @@ async function renderCoinPage(daoAddr) {
         ${priceDisplay ? `<div class="stat-row"><span class="stat-label">Price</span><span class="stat-value">${priceDisplay} ${ethIco}/1M shares</span></div>` : ''}
         ${lpBps > 0 ? `<div class="stat-row"><span class="stat-label">LP seeding</span><span class="stat-value">${lpBps / 100}% of buys &rarr; zAMM${feeOrHook <= 10000n ? ` (${Number(feeOrHook) / 100}% fee)` : ''}</span></div>` : ''}
         ${sale && sale.deadline > 0n ? `<div id="saleDeadlineRow"></div>` : ''}`
-    if (saleActive) {
+    if (saleActive && hasDaicoSale) {
       html += `
         <div class="section-card">
           <div class="section-title">Sale (Live)</div>
@@ -2055,7 +2234,7 @@ async function renderCoinPage(daoAddr) {
       }
       // Auto-refresh sale stats every 20s while sale is live
       _saleRefreshInterval = setInterval(refreshSaleStats, 20000);
-    } else {
+    } else if (hasDaicoSale) {
       html += `
         <div class="drawer" id="saleDrawer">
           <button class="drawer-toggle" onclick="this.parentElement.classList.toggle('open')">
@@ -2165,10 +2344,12 @@ async function renderCoinPage(daoAddr) {
       : '';
     const ethSvg = `<span class="eth-icon"><svg width="14" height="14" viewBox="0 0 256 417" fill="currentColor" opacity="0.6"><path d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/><path d="M127.962 0L0 212.32l127.962 75.639V154.158z"/><path d="M127.961 312.187l-1.575 1.92V414.55l1.575 4.6L256 236.587z"/><path d="M127.962 419.15V312.187L0 236.587z"/></svg></span>`;
 
-    const defaultMode = saleActive ? 'sale' : 'swap';
+    const defaultMode = _isCollectorDAO
+      ? (_vaultSaleActive ? 'sale' : 'ragequit')
+      : (saleActive ? 'sale' : hasPool ? 'swap' : 'ragequit');
 
     // Continuous Sale (FW Collector only)
-    const FW_FOLLOW_ON_SALE = '0x5D03BeE003859d250c1AB868490d09D90F10C8E8';
+    const FW_FOLLOW_ON_SALE = '0x824d11a46F32cd16cdF46380314343e9697e2491';
     if (isFWCollector && !saleActive) {
       html += `
         <div class="section-card" id="phase2SaleCard" style="position:relative;overflow:hidden">
@@ -2178,7 +2359,34 @@ async function renderCoinPage(daoAddr) {
           <div id="phase2Stats" style="margin-bottom:10px">
             <div style="font-size:11px;color:var(--fg-dim)">Loading...</div>
           </div>
-          <div style="font-size:12px;color:var(--fg-muted);text-align:center;padding:12px 0;border-top:1px solid var(--border-muted)">Pending governance to continue sale</div>
+          <div id="phase2BuySection" style="border-top:1px solid var(--border-muted);padding-top:12px">
+            <div class="swap-section">
+              <div class="swap-section-head">
+                <label>From</label>
+                <span id="phase2Bal" class="swap-balance"></span>
+                <span class="swap-token-tag">${ethSvg} ETH</span>
+              </div>
+              <input type="text" id="phase2PayInput" placeholder="0.0" inputmode="decimal" oninput="onPhase2Input()" autocomplete="off">
+              <div class="swap-pct-row">
+                <button class="swap-pct-btn" onclick="fillPhase2Pct(25)">25%</button>
+                <button class="swap-pct-btn" onclick="fillPhase2Pct(50)">50%</button>
+                <button class="swap-pct-btn" onclick="fillPhase2Pct(75)">75%</button>
+                <button class="swap-pct-btn" onclick="fillPhase2Pct(100)">100%</button>
+              </div>
+            </div>
+            <div class="swap-arrow-row">
+              <div style="width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--fg)" stroke-width="2.5"><path d="M7 10L12 15L17 10"/></svg></div>
+            </div>
+            <div class="swap-section">
+              <div class="swap-section-head">
+                <label>To</label>
+                <span class="swap-token-tag">${coinLogoTag} $${sym}</span>
+              </div>
+              <input type="text" id="phase2ReceiveInput" placeholder="0" readonly>
+            </div>
+            <div class="swap-quote" id="phase2Quote">1 ETH = 1M shares</div>
+            <button id="phase2BuyBtn" class="action-btn" onclick="onPhase2BuyBtn()" style="margin:0">Buy Shares</button>
+          </div>
         </div>
       `;
 
@@ -2219,11 +2427,16 @@ async function renderCoinPage(daoAddr) {
             `;
           }
 
-          if (paused) {
+          // Remove loading spinner
+          const spinner = document.querySelector('#phase2SaleCard > div[style*="position:absolute"]');
+          if (spinner) spinner.remove();
+
+          if (paused || allowance === 0n) {
             const buySection = document.getElementById('phase2BuySection');
             if (buySection) buySection.style.display = 'none';
+            const label = paused ? 'Sale paused' : 'Sold out';
             const statsEl2 = document.getElementById('phase2Stats');
-            if (statsEl2) statsEl2.insertAdjacentHTML('afterend', '<div style="font-size:12px;color:var(--amber);text-align:center;padding:6px 0;font-weight:600">Sale paused</div>');
+            if (statsEl2) statsEl2.insertAdjacentHTML('afterend', `<div style="font-size:12px;color:var(--fg-muted);text-align:center;padding:6px 0;font-weight:600">${label}</div>`);
           }
 
           // Store for buy logic
@@ -2247,14 +2460,51 @@ async function renderCoinPage(daoAddr) {
     html += `
       <div class="section-card swap-tile">
         <div class="swap-mode-tabs">
-          ${saleActive ? `<button id="modeTabSale" class="${defaultMode==='sale'?'active':''}" onclick="setTradeMode('sale')">Sale</button>` : ''}
-          <button id="modeTabSwap" class="${defaultMode==='swap'?'active':''}" onclick="setTradeMode('swap')">Swap</button>
-          ${isFWCollector ? '' : `<button id="modeTabRagequit" onclick="setTradeMode('ragequit')">Ragequit</button>`}
-          ${hasPool ? `<button id="modeTabLp" onclick="setTradeMode('lp')">LP</button>` : ''}
+          ${_isCollectorDAO ? `
+            ${_vaultSaleActive ? `<button id="modeTabSale" class="${defaultMode==='sale'?'active':''}" onclick="setTradeMode('sale')">Sale</button>` : ''}
+            <button id="modeTabRagequit" class="${defaultMode==='ragequit'?'active':''}" onclick="setTradeMode('ragequit')">Ragequit</button>
+          ` : `
+            ${saleActive ? `<button id="modeTabSale" class="${defaultMode==='sale'?'active':''}" onclick="setTradeMode('sale')">Sale</button>` : ''}
+            <button id="modeTabSwap" class="${defaultMode==='swap'?'active':''}" onclick="setTradeMode('swap')">Swap</button>
+            ${isFWCollector ? '' : `<button id="modeTabRagequit" class="${defaultMode==='ragequit'?'active':''}" onclick="setTradeMode('ragequit')">Ragequit</button>`}
+            ${hasPool ? `<button id="modeTabLp" onclick="setTradeMode('lp')">LP</button>` : ''}
+          `}
         </div>
 
-        <!-- SALE MODE -->
-        ${saleActive ? `
+        <!-- VAULT SALE MODE (Collector DAOs) -->
+        ${_isCollectorDAO && _vaultSaleActive ? `
+        <div id="saleMode" class="swap-mode-content${defaultMode==='sale'?' active':''}">
+          <div class="swap-section">
+            <div class="swap-section-head">
+              <label>From</label>
+              <span id="vaultSalePayBal" class="swap-balance"></span>
+              <span class="swap-token-tag">${ethSvg} ETH</span>
+            </div>
+            <input type="text" id="vaultSalePayInput" placeholder="0.0" inputmode="decimal" oninput="onVaultSaleInput()" autocomplete="off">
+            <div class="swap-pct-row">
+              <button class="swap-pct-btn" onclick="fillVaultPct(25)">25%</button>
+              <button class="swap-pct-btn" onclick="fillVaultPct(50)">50%</button>
+              <button class="swap-pct-btn" onclick="fillVaultPct(75)">75%</button>
+              <button class="swap-pct-btn" onclick="fillVaultPct(100)">100%</button>
+            </div>
+          </div>
+          <div class="swap-arrow-row">
+            <div style="width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--fg)" stroke-width="2.5"><path d="M7 10L12 15L17 10"/></svg></div>
+          </div>
+          <div class="swap-section">
+            <div class="swap-section-head">
+              <label>To</label>
+              <span class="swap-token-tag">${coinLogoTag} $${sym}</span>
+            </div>
+            <input type="text" id="vaultSaleReceiveInput" placeholder="0" readonly>
+          </div>
+          <div class="swap-quote" id="vaultSaleQuote">${_vaultData && _vaultData.shareRate > 0n ? `1 ETH = ${Number(ethers.formatEther(_vaultData.shareRate)).toLocaleString()} shares` : ''}</div>
+          <button id="vaultBuyBtn" class="action-btn" onclick="onVaultBuyBtn()">Connect Wallet</button>
+        </div>
+        ` : ''}
+
+        <!-- SALE MODE (DAICO) -->
+        ${!_isCollectorDAO && saleActive ? `
         <div id="saleMode" class="swap-mode-content${defaultMode==='sale'?' active':''}">
           <div class="swap-section">
             <div class="swap-section-head">
@@ -2290,6 +2540,7 @@ async function renderCoinPage(daoAddr) {
         ` : ''}
 
         <!-- SWAP MODE -->
+        ${!_isCollectorDAO ? `
         <div id="swapMode" class="swap-mode-content${defaultMode==='swap'?' active':''}">
           <div class="swap-dir">
             <button id="swapBuyBtn" class="active" onclick="setSwapDir('buy')">Buy</button>
@@ -2322,9 +2573,10 @@ async function renderCoinPage(daoAddr) {
           <div class="swap-quote" id="swapQuote"></div>
           <button id="swapBtn" class="action-btn" onclick="onSwapBtn()">Connect Wallet</button>
         </div>
+        ` : ''}
 
         <!-- RAGEQUIT MODE -->
-        <div id="ragequitMode" class="swap-mode-content">
+        <div id="ragequitMode" class="swap-mode-content${defaultMode==='ragequit'?' active':''}">
           <div class="swap-section">
             <div class="swap-section-head">
               <label>Burn shares</label>
@@ -2344,7 +2596,7 @@ async function renderCoinPage(daoAddr) {
         </div>
 
         <!-- LP MODE -->
-        ${hasPool ? `
+        ${hasPool && !_isCollectorDAO ? `
         <div id="lpMode" class="swap-mode-content">
           <div class="swap-dir">
             <button id="lpZapBtn" class="active" onclick="setLpSubMode('zap')">Zap (ETH only)</button>
@@ -2404,11 +2656,32 @@ async function renderCoinPage(daoAddr) {
       </div>
     `;
 
+    // Vault Sale (Ended) drawer for collector DAOs
+    if (_isCollectorDAO && _vaultData && !_vaultSaleActive) {
+      const vd = _vaultData;
+      const vBalFmt = fmtETH(vd.balance);
+      html += `
+        <div class="drawer" id="vaultSaleDrawer">
+          <button class="drawer-toggle" onclick="this.parentElement.classList.toggle('open')">
+            <span>Vault Sale (Ended)</span>
+            <span class="arrow">&#9660;</span>
+          </button>
+          <div class="drawer-body">
+            <div class="stat-row"><span class="stat-label">Vault balance</span><span class="stat-value">${vBalFmt} ${ethIco}</span></div>
+            ${vd.mode === 0 ? `<div class="stat-row"><span class="stat-label">Calls made</span><span class="stat-value">${Number(vd.callsMade)} / ${vd.maxCalls > 0n ? Number(vd.maxCalls) : '&infin;'}</span></div>` : ''}
+            ${vd.mode === 1 ? `<div class="stat-row"><span class="stat-label">Status</span><span class="stat-value">${vd.filled ? '<span style="color:var(--green)">Filled</span>' : 'Open'}</span></div>` : ''}
+            ${vd.shareRate > 0n ? `<div class="stat-row"><span class="stat-label">Share rate</span><span class="stat-value">${Number(ethers.formatEther(vd.shareRate)).toLocaleString()} shares/ETH</span></div>` : ''}
+            <div style="margin-top:6px;font-size:11px"><a href="https://etherscan.io/address/${_vaultAddr}" target="_blank" style="color:var(--fg-muted);text-decoration:none;border-bottom:1px dotted var(--fg-muted)">Vault contract</a></div>
+          </div>
+        </div>
+      `;
+    }
+
     // Chart drawer (only if pool has reserves; hidden until activity confirmed)
     const dark = document.documentElement.classList.contains('dark');
     const chartTheme = dark ? 'dark' : 'light';
     const _fwcHide = '';
-    const _activityLpHTML = hasPool && !(isFWCollector && saleActive) ? `
+    const _activityLpHTML = hasPool && !saleActive ? `
         <div class="drawer" id="activityDrawer" data-pool-id="${poolId}"${_fwcHide}>
           <button class="drawer-toggle" onclick="toggleActivity()">
             <span>Pool Activity</span>
@@ -2428,7 +2701,7 @@ async function renderCoinPage(daoAddr) {
           </div>
         </div>` : '';
 
-    const _chartHTML = hasPool ? `
+    const _chartHTML = hasPool && !saleActive ? `
         <div class="drawer" id="chartDrawer" data-pool-id="${poolId}" style="display:none">
           <button class="drawer-toggle" onclick="toggleChart()">
             <span>Price Chart</span>
@@ -2518,6 +2791,11 @@ async function renderCoinPage(daoAddr) {
     _tradeMode = defaultMode;
     updateModeButton();
     loadBalances();
+
+    // Vault auto-refresh (20s) when sale is active
+    if (_vaultSaleActive && _vaultAddr) {
+      _vaultRefreshInterval = setInterval(refreshVaultStats, 20000);
+    }
 
     // Update nav orderbook link to point at this coin's ETH pair
     const _navOb = $('navOrderbook');
@@ -2616,6 +2894,10 @@ function setTradeMode(mode) {
 function updateModeButton() {
   const connected = !!_signer;
   if (_tradeMode === 'sale') {
+    // Vault sale button
+    const vBtn = $('vaultBuyBtn');
+    if (vBtn) vBtn.textContent = connected ? 'Buy' : 'Connect Wallet';
+    // DAICO sale button
     const btn = $('saleBuyBtn');
     if (btn) btn.textContent = connected ? 'Buy' : 'Connect Wallet';
   } else if (_tradeMode === 'swap') {
@@ -2744,6 +3026,16 @@ async function loadBalances() {
       { target: MC3, allowFailure: false, callData: mc3i.encodeFunctionData('getEthBalance', [daoAddr]) },
       { target: ZORG_TOKEN, allowFailure: true, callData: erc20.encodeFunctionData('balanceOf', [addr]) }
     ];
+    // Mode 1 vault fill token check
+    const vaultFillCheck = _vaultData && _vaultData.mode === 1 && !_vaultData.filled;
+    if (vaultFillCheck) {
+      if (_vaultData.specificId) {
+        const erc721 = new ethers.Interface(ERC721_ABI);
+        calls.push({ target: _vaultData.token, allowFailure: true, callData: erc721.encodeFunctionData('ownerOf', [_vaultData.minBalance]) });
+      } else {
+        calls.push({ target: _vaultData.token, allowFailure: true, callData: erc20.encodeFunctionData('balanceOf', [addr]) });
+      }
+    }
     const results = await withRPC(async rpc => {
       const mc = new ethers.Contract(MC3, MC3_ABI, rpc);
       return await mc.aggregate3(calls);
@@ -2797,6 +3089,13 @@ async function loadBalances() {
       phase2BalEl.onclick = () => fillPhase2Pct(100);
     }
 
+    // Vault sale balance (ETH)
+    const vaultSaleBalEl = $('vaultSalePayBal');
+    if (vaultSaleBalEl) {
+      vaultSaleBalEl.textContent = Number(ethers.formatEther(ethBal)).toLocaleString(undefined, {maximumFractionDigits:6}) + ' ETH';
+      vaultSaleBalEl.onclick = () => fillVaultPct(100);
+    }
+
     // Ragequit mode balance (shares)
     const rqEl = $('rqSharesBal');
     if (rqEl) {
@@ -2816,6 +3115,41 @@ async function loadBalances() {
 
     // Store treasury balance for ragequit estimate
     _coinData._treasuryEthBal = treasuryBal;
+
+    // Fill token balance UI
+    if (vaultFillCheck && results.length > 6) {
+      const fillBalEl = $('vaultFillBalInfo');
+      const fillBtn = $('vaultFillBtn');
+      if (fillBalEl && fillBtn) {
+        if (_vaultData.specificId) {
+          const erc721 = new ethers.Interface(ERC721_ABI);
+          let ownsNFT = false;
+          try {
+            const owner = results[6].success ? erc721.decodeFunctionResult('ownerOf', results[6].returnData)[0] : null;
+            ownsNFT = owner && owner.toLowerCase() === addr.toLowerCase();
+          } catch {}
+          fillBalEl.style.display = '';
+          if (ownsNFT) {
+            fillBalEl.innerHTML = `You own NFT <span style="font-weight:600">#${_vaultData.minBalance.toString()}</span>`;
+            fillBtn.disabled = false;
+          } else {
+            fillBalEl.innerHTML = `<span style="color:var(--red)">You don't own NFT #${_vaultData.minBalance.toString()}</span>`;
+            fillBtn.disabled = true;
+          }
+        } else {
+          const fillTokenBal = decode(erc20, 'balanceOf', results[6]);
+          fillBalEl.style.display = '';
+          const hasBal = fillTokenBal >= _vaultData.minBalance;
+          fillBalEl.innerHTML = `Your balance: ${fmtShares(fillTokenBal)} (need ${fmtShares(_vaultData.minBalance)})`;
+          if (!hasBal) {
+            fillBalEl.innerHTML += ` <span style="color:var(--red)">&mdash; insufficient</span>`;
+            fillBtn.disabled = true;
+          } else {
+            fillBtn.disabled = false;
+          }
+        }
+      }
+    }
   } catch {}
 }
 
@@ -3119,6 +3453,237 @@ async function executePhase2Buy() {
     btn.textContent = 'Buy Shares';
     btn.disabled = false;
   }
+}
+
+// ==================== VAULT SALE (Collector DAOs) ====================
+
+function onVaultSaleInput() {
+  const raw = ($('vaultSalePayInput').value || '').trim();
+  const recvEl = $('vaultSaleReceiveInput');
+  if (!raw || isNaN(raw) || Number(raw) <= 0 || !_vaultData || _vaultData.shareRate <= 0n) {
+    if (recvEl) recvEl.value = '';
+    return;
+  }
+  try {
+    const ethWei = ethers.parseEther(raw);
+    const sharesOut = ethWei * _vaultData.shareRate / (10n ** 18n);
+    if (recvEl) recvEl.value = Number(ethers.formatEther(sharesOut)).toLocaleString();
+  } catch { if (recvEl) recvEl.value = ''; }
+}
+
+function fillVaultPct(pct) {
+  if (!_signer || _ethBalance <= 0n) return;
+  let amt = _ethBalance * BigInt(pct) / 100n;
+  if (pct === 100 && amt > ethers.parseEther('0.005')) amt -= ethers.parseEther('0.005');
+  if (amt <= 0n) return;
+  const input = $('vaultSalePayInput');
+  if (input) {
+    input.value = ethers.formatEther(amt);
+    onVaultSaleInput();
+  }
+}
+
+async function onVaultBuyBtn() {
+  if (!_signer) { await connectWallet(); return; }
+  executeVaultBuy();
+}
+
+async function executeVaultBuy() {
+  const s = await connectWallet();
+  if (!s) return;
+  if (!_vaultAddr) return;
+
+  const payRaw = ($('vaultSalePayInput').value || '').trim();
+  if (!payRaw || isNaN(payRaw) || Number(payRaw) <= 0) return;
+
+  const btn = $('vaultBuyBtn');
+  const quoteEl = $('vaultSaleQuote');
+  btn.textContent = 'Confirm in wallet...';
+  btn.disabled = true;
+
+  try {
+    const vault = new ethers.Contract(_vaultAddr, COLLECTOR_VAULT_ABI, s);
+    const payAmt = ethers.parseEther(payRaw);
+
+    const tx = await vault.buy({ value: payAmt });
+    btn.innerHTML = `Confirming... <a href="https://etherscan.io/tx/${tx.hash}" target="_blank" style="font-size:11px;color:inherit;opacity:0.7">View tx</a>`;
+    await tx.wait();
+
+    if (quoteEl) quoteEl.innerHTML = `<span style="color:var(--green)">Purchase confirmed!</span> <a href="https://etherscan.io/tx/${tx.hash}" target="_blank" style="font-size:11px">View tx</a>`;
+    $('vaultSalePayInput').value = '';
+    $('vaultSaleReceiveInput').value = '';
+
+    const daoAddr = $('app').dataset.dao;
+    setTimeout(() => renderCoinPage(daoAddr), 2000);
+  } catch(e) {
+    console.error('Vault buy error:', e);
+    if (e.code === 'ACTION_REJECTED' || (e.message||'').includes('user rejected')) {
+      if (quoteEl) quoteEl.textContent = 'Cancelled';
+    } else {
+      const raw = (e.shortMessage || e.reason || e.message || '').split('\n')[0];
+      let msg = raw;
+      if (/insufficient funds/i.test(raw)) msg = 'Insufficient ETH balance';
+      else if (/BuyDisabled/i.test(raw)) msg = 'Sale is disabled';
+      else if (raw.length > 80) msg = 'Transaction failed';
+      if (quoteEl) quoteEl.innerHTML = `<span style="color:var(--red)">Buy failed:</span> ${escText(msg)}`;
+    }
+  } finally {
+    btn.textContent = 'Buy';
+    btn.disabled = false;
+  }
+}
+
+async function onVaultFillBtn() {
+  if (!_signer) { await connectWallet(); return; }
+  if (!_vaultAddr || !_vaultData || _vaultData.mode !== 1 || _vaultData.filled) return;
+
+  const btn = $('vaultFillBtn');
+  const status = $('vaultFillStatus');
+  const vd = _vaultData;
+  btn.textContent = 'Checking...';
+  btn.disabled = true;
+
+  try {
+    const addr = await _signer.getAddress();
+    const isNFT = vd.specificId;
+    const tokenAddr = vd.token;
+    const amount = vd.minBalance;
+
+    // Pre-flight: verify caller owns the token
+    if (isNFT) {
+      const nft = new ethers.Contract(tokenAddr, ERC721_ABI, _signer);
+      const owner = await nft.ownerOf(amount);
+      if (owner.toLowerCase() !== addr.toLowerCase()) {
+        if (status) status.innerHTML = `<span style="color:var(--red)">You don't own NFT #${amount.toString()}</span>`;
+        return;
+      }
+      // Check approval
+      btn.textContent = 'Checking approval...';
+      const approved = await nft.getApproved(amount);
+      if (approved.toLowerCase() !== _vaultAddr.toLowerCase()) {
+        btn.textContent = 'Approving NFT...';
+        const appTx = await nft.approve(_vaultAddr, amount);
+        btn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${appTx.hash}" target="_blank" style="font-size:11px;color:inherit;opacity:0.7">View tx</a>`;
+        await appTx.wait();
+      }
+    } else {
+      const token = new ethers.Contract(tokenAddr, ERC20_ABI, _signer);
+      const bal = await token.balanceOf(addr);
+      if (bal < amount) {
+        if (status) status.innerHTML = `<span style="color:var(--red)">Insufficient token balance (need ${fmtShares(amount)}, have ${fmtShares(bal)})</span>`;
+        return;
+      }
+      // Check approval
+      btn.textContent = 'Checking approval...';
+      const allow = await token.allowance(addr, _vaultAddr);
+      if (allow < amount) {
+        btn.textContent = 'Approving...';
+        const appTx = await token.approve(_vaultAddr, ethers.MaxUint256);
+        btn.innerHTML = `Approving... <a href="https://etherscan.io/tx/${appTx.hash}" target="_blank" style="font-size:11px;color:inherit;opacity:0.7">View tx</a>`;
+        await appTx.wait();
+      }
+    }
+
+    // Execute fill
+    btn.textContent = 'Confirm in wallet...';
+    const vault = new ethers.Contract(_vaultAddr, COLLECTOR_VAULT_ABI, _signer);
+    const tx = await vault.fill();
+    btn.innerHTML = `Confirming... <a href="https://etherscan.io/tx/${tx.hash}" target="_blank" style="font-size:11px;color:inherit;opacity:0.7">View tx</a>`;
+    await tx.wait();
+
+    if (status) status.innerHTML = `<span style="color:var(--green)">Bounty filled!</span> <a href="https://etherscan.io/tx/${tx.hash}" target="_blank" style="font-size:11px">View tx</a>`;
+    _vaultData.filled = true;
+    const fillSec = $('vaultFillSection');
+    if (fillSec) fillSec.style.display = 'none';
+
+    const daoAddr = $('app').dataset.dao;
+    setTimeout(() => renderCoinPage(daoAddr), 2000);
+  } catch(e) {
+    console.error('Vault fill error:', e);
+    if (e.code === 'ACTION_REJECTED' || (e.message||'').includes('user rejected')) {
+      if (status) status.textContent = 'Cancelled';
+    } else {
+      const raw = (e.shortMessage || e.reason || e.message || '').split('\n')[0];
+      let msg = raw;
+      if (/AlreadyFilled/i.test(raw)) msg = 'Bounty already filled';
+      else if (/NoFunds/i.test(raw)) msg = 'No ETH in vault';
+      else if (raw.length > 80) msg = 'Transaction failed';
+      if (status) status.innerHTML = `<span style="color:var(--red)">Fill failed:</span> ${escText(msg)}`;
+    }
+  } finally {
+    if (!_vaultData.filled) {
+      const ethIco = `<svg width="10" height="10" viewBox="0 0 256 417" fill="currentColor" opacity="0.5" style="vertical-align:-1px"><path d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/><path d="M127.962 0L0 212.32l127.962 75.639V154.158z"/><path d="M127.961 312.187l-1.575 1.92V414.55l1.575 4.6L256 236.587z"/><path d="M127.962 419.15V312.187L0 236.587z"/></svg>`;
+      btn.innerHTML = `Fill Bounty &mdash; Claim ${fmtETH(_vaultData.balance)} ETH`;
+      btn.disabled = false;
+    }
+  }
+}
+
+async function refreshVaultStats() {
+  if (!_vaultAddr || !_vaultData) return;
+  const gen = _renderGen;
+  try {
+    const vaultIface = new ethers.Interface(COLLECTOR_VAULT_ABI);
+    const mc3i = new ethers.Interface(MC3_ABI);
+    const calls = [
+      { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('callsMade') },
+      { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('filled') },
+      { target: MC3, allowFailure: false, callData: mc3i.encodeFunctionData('getEthBalance', [_vaultAddr]) },
+      { target: _vaultAddr, allowFailure: true, callData: vaultIface.encodeFunctionData('isFilled') }
+    ];
+    const results = await withRPC(async rpc => {
+      const mc = new ethers.Contract(MC3, MC3_ABI, rpc);
+      return await mc.aggregate3(calls);
+    });
+    if (gen !== _renderGen) return;
+
+    const callsMade = results[0].success ? vaultIface.decodeFunctionResult('callsMade', results[0].returnData)[0] : _vaultData.callsMade;
+    const filledFlag = results[1].success ? vaultIface.decodeFunctionResult('filled', results[1].returnData)[0] : _vaultData.filled;
+    const isFilledLive = results[3].success ? vaultIface.decodeFunctionResult('isFilled', results[3].returnData)[0] : false;
+    const filled = filledFlag || isFilledLive;
+    const balance = mc3i.decodeFunctionResult('getEthBalance', results[2].returnData)[0];
+
+    _vaultData.callsMade = callsMade;
+    _vaultData.filled = filled;
+    _vaultData.balance = balance;
+
+    // Hide fill section if bounty is now filled
+    if (filled) {
+      const fillSec = $('vaultFillSection');
+      if (fillSec) fillSec.style.display = 'none';
+    }
+
+    const ethIco = `<svg width="10" height="10" viewBox="0 0 256 417" fill="currentColor" opacity="0.5" style="vertical-align:-1px"><path d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/><path d="M127.962 0L0 212.32l127.962 75.639V154.158z"/><path d="M127.961 312.187l-1.575 1.92V414.55l1.575 4.6L256 236.587z"/><path d="M127.962 419.15V312.187L0 236.587z"/></svg>`;
+
+    // Update info card
+    const balEl = $('vaultBalVal');
+    if (balEl) balEl.innerHTML = `${fmtETH(balance)} ${ethIco}`;
+
+    const callsEl = $('vaultCallsVal');
+    if (callsEl) callsEl.innerHTML = `${Number(callsMade)} / ${_vaultData.maxCalls > 0n ? Number(_vaultData.maxCalls) : '&infin;'}`;
+
+    // Update progress bar
+    let vaultPct = 0;
+    if (_vaultData.mode === 0 && _vaultData.ethPerCall > 0n) {
+      const needed = _vaultData.maxCalls > 0n ? _vaultData.ethPerCall * (_vaultData.maxCalls - callsMade) : _vaultData.ethPerCall;
+      vaultPct = needed > 0n ? Math.min(100, Number(balance * 10000n / needed) / 100) : 0;
+    }
+    const barEl = $('vaultPctBar');
+    if (barEl) barEl.innerHTML = pctBar(vaultPct, 'var(--green)');
+
+    // Check if sale ended
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const pastDeadline = _vaultData.deadline > 0n && now >= _vaultData.deadline;
+    const callsRemain = _vaultData.maxCalls === 0n || callsMade < _vaultData.maxCalls;
+    const stillActive = _vaultData.shareRate > 0n && !pastDeadline &&
+      (_vaultData.mode === 0 ? callsRemain : !filled);
+    if (!stillActive && _vaultSaleActive) {
+      _vaultSaleActive = false;
+      if (_vaultRefreshInterval) { clearInterval(_vaultRefreshInterval); _vaultRefreshInterval = null; }
+    }
+
+    loadBalances();
+  } catch (e) { console.error('Vault stats refresh failed:', e); }
 }
 
 // ==================== RAGEQUIT ====================

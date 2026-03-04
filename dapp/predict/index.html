@@ -2029,6 +2029,7 @@ const ACCOUNT_NAMES = {
   '0x5e58ba0e06ed0f5558f83be732a4b899a674053e': 'zOrg DAO',
   '0xbc10f2e862ed4502144c7d632a3459f49dfcdb5e': 'Chainlink Reserve',
   '0x9a709b7b69ea42d5eeb1cebc48674c69e1569ec6': 'RBACTimelock',
+  '0x000000000044bfe6c2bbfed8862973e0612f07c0': 'pAMM',
 };
 
 // Token logos (copied from ethPM.html)
@@ -4770,7 +4771,7 @@ function buildConditionDetails(marketId, data) {
       decimals = 18;
       prefix = '';
       suffix = ' ETH';
-      const shortAccount = `${oracleAddr.slice(0,6)}...${oracleAddr.slice(-4)}`;
+      const shortAccount = ACCOUNT_NAMES[oracleAddr.toLowerCase()] || `${oracleAddr.slice(0,6)}...${oracleAddr.slice(-4)}`;
       const ethLogo = TOKEN_LOGOS['eth'] || '';
       oracleHtml = `<a href="https://etherscan.io/address/${oracleAddr}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;text-decoration-color:#627EEA" title="${oracleAddr}">${shortAccount}</a> <span style="opacity:0.5">${ethLogo}ETH bal</span>`;
     }

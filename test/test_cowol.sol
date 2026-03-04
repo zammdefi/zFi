@@ -97,7 +97,9 @@ contract TestCowol is Test {
         // Fund LESS than sellAmount + feeAmount
         _fundCowol(USDC, 500e6);
 
-        bytes memory data = abi.encode(WETH, address(0xBEEF), sellAmount, uint256(0.3 ether), uint32(block.timestamp + 300), bytes32(0), feeAmount);
+        bytes memory data = abi.encode(
+            WETH, address(0xBEEF), sellAmount, uint256(0.3 ether), uint32(block.timestamp + 300), bytes32(0), feeAmount
+        );
 
         vm.expectRevert();
         cowol.swap(address(0), USDC, address(0), address(0), data);
@@ -107,7 +109,15 @@ contract TestCowol is Test {
     //  5. Zero-balance call reverts (attacker with no deposit)
     // ---------------------------------------------------------------
     function test_swap_reverts_no_deposit() public {
-        bytes memory data = abi.encode(WETH, address(0xBEEF), uint256(1000e6), uint256(0.3 ether), uint32(block.timestamp + 300), bytes32(0), uint256(1e6));
+        bytes memory data = abi.encode(
+            WETH,
+            address(0xBEEF),
+            uint256(1000e6),
+            uint256(0.3 ether),
+            uint32(block.timestamp + 300),
+            bytes32(0),
+            uint256(1e6)
+        );
 
         vm.expectRevert();
         cowol.swap(address(0), USDC, address(0), address(0), data);
@@ -130,15 +140,18 @@ contract TestCowol is Test {
         _fundCowol(USDC, total);
 
         // Legitimate user calls swap
-        bytes memory legData = abi.encode(WETH, legitimateReceiver, sellAmount, uint256(0.3 ether), validTo, appData, feeAmount);
+        bytes memory legData =
+            abi.encode(WETH, legitimateReceiver, sellAmount, uint256(0.3 ether), validTo, appData, feeAmount);
         cowol.swap(address(0), USDC, address(0), address(0), legData);
 
         // Legitimate digest is approved
-        bytes32 legDigest = _computeDigest(USDC, WETH, legitimateReceiver, sellAmount, 0.3 ether, validTo, appData, feeAmount);
+        bytes32 legDigest =
+            _computeDigest(USDC, WETH, legitimateReceiver, sellAmount, 0.3 ether, validTo, appData, feeAmount);
         assertTrue(cowol.validDigests(legDigest), "legitimate digest should be approved");
 
         // Attacker's digest (different receiver) is NOT approved
-        bytes32 attackDigest = _computeDigest(USDC, WETH, attackerReceiver, sellAmount, 0.3 ether, validTo, appData, feeAmount);
+        bytes32 attackDigest =
+            _computeDigest(USDC, WETH, attackerReceiver, sellAmount, 0.3 ether, validTo, appData, feeAmount);
         assertFalse(cowol.validDigests(attackDigest), "attacker digest should NOT be approved");
 
         // If attacker tries to call swap again with their receiver, it reverts
@@ -156,7 +169,8 @@ contract TestCowol is Test {
         // order sends output to attackerReceiver, but still uses the SAME input
         // tokens that the legitimate user deposited. This is the residual race
         // condition documented as MEDIUM risk.
-        bytes memory atkData = abi.encode(WETH, attackerReceiver, sellAmount, uint256(0.3 ether), validTo, appData, feeAmount);
+        bytes memory atkData =
+            abi.encode(WETH, attackerReceiver, sellAmount, uint256(0.3 ether), validTo, appData, feeAmount);
         cowol.swap(address(0), USDC, address(0), address(0), atkData);
         assertTrue(cowol.validDigests(attackDigest), "attacker CAN approve digest when balance still present");
     }
@@ -175,8 +189,11 @@ contract TestCowol is Test {
         bytes32 appData = bytes32(0);
         uint256 feeAmount = 1000000;
 
-        bytes32 digest = _computeDigest(sellToken, buyToken, receiver, sellAmount, buyAmount, validTo, appData, feeAmount);
-        assertEq(digest, 0x7c30e8ff90679d770b266375d7051130f68bb98e1ba4ec65d2b47067bda6fb15, "digest mismatch with frontend");
+        bytes32 digest =
+            _computeDigest(sellToken, buyToken, receiver, sellAmount, buyAmount, validTo, appData, feeAmount);
+        assertEq(
+            digest, 0x7c30e8ff90679d770b266375d7051130f68bb98e1ba4ec65d2b47067bda6fb15, "digest mismatch with frontend"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -188,7 +205,15 @@ contract TestCowol is Test {
 
         // First order
         _fundCowol(USDC, total1);
-        bytes memory data1 = abi.encode(WETH, address(0xBEEF), uint256(499e6), uint256(0.1 ether), uint32(block.timestamp + 300), bytes32(0), uint256(1e6));
+        bytes memory data1 = abi.encode(
+            WETH,
+            address(0xBEEF),
+            uint256(499e6),
+            uint256(0.1 ether),
+            uint32(block.timestamp + 300),
+            bytes32(0),
+            uint256(1e6)
+        );
         cowol.swap(address(0), USDC, address(0), address(0), data1);
 
         // Simulate settlement draining tokens
@@ -198,10 +223,20 @@ contract TestCowol is Test {
 
         // Second order
         _fundCowol(USDC, total2);
-        bytes memory data2 = abi.encode(WETH, address(0xCAFE), uint256(699e6), uint256(0.2 ether), uint32(block.timestamp + 600), bytes32(0), uint256(1e6));
+        bytes memory data2 = abi.encode(
+            WETH,
+            address(0xCAFE),
+            uint256(699e6),
+            uint256(0.2 ether),
+            uint32(block.timestamp + 600),
+            bytes32(0),
+            uint256(1e6)
+        );
         cowol.swap(address(0), USDC, address(0), address(0), data2);
 
-        bytes32 digest2 = _computeDigest(USDC, WETH, address(0xCAFE), 699e6, 0.2 ether, uint32(block.timestamp + 600), bytes32(0), 1e6);
+        bytes32 digest2 = _computeDigest(
+            USDC, WETH, address(0xCAFE), 699e6, 0.2 ether, uint32(block.timestamp + 600), bytes32(0), 1e6
+        );
         assertTrue(cowol.validDigests(digest2), "second digest should be approved");
     }
 
@@ -215,7 +250,8 @@ contract TestCowol is Test {
 
         // validTo = now + 1201 seconds (exceeds 1200 cap)
         uint32 validTo = uint32(block.timestamp + 1201);
-        bytes memory data = abi.encode(WETH, address(0xBEEF), sellAmount, uint256(0.3 ether), validTo, bytes32(0), feeAmount);
+        bytes memory data =
+            abi.encode(WETH, address(0xBEEF), sellAmount, uint256(0.3 ether), validTo, bytes32(0), feeAmount);
 
         vm.expectRevert();
         cowol.swap(address(0), USDC, address(0), address(0), data);
@@ -267,29 +303,36 @@ contract TestCowol is Test {
     }
 
     function _computeDigest(
-        address sellToken, address buyToken, address receiver,
-        uint256 sellAmount, uint256 buyAmount, uint32 validTo,
-        bytes32 appData, uint256 feeAmount
+        address sellToken,
+        address buyToken,
+        address receiver,
+        uint256 sellAmount,
+        uint256 buyAmount,
+        uint32 validTo,
+        bytes32 appData,
+        uint256 feeAmount
     ) internal pure returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(
-            ORDER_TYPE_HASH,
-            sellToken,
-            buyToken,
-            receiver,
-            sellAmount,
-            buyAmount,
-            validTo,
-            appData,
-            feeAmount,
-            KIND_SELL,
-            false,
-            BALANCE_ERC20,
-            BALANCE_ERC20
-        ));
-        return keccak256(abi.encodePacked(
-            bytes2(0x1901),
-            bytes32(0xc078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943),
-            structHash
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                ORDER_TYPE_HASH,
+                sellToken,
+                buyToken,
+                receiver,
+                sellAmount,
+                buyAmount,
+                validTo,
+                appData,
+                feeAmount,
+                KIND_SELL,
+                false,
+                BALANCE_ERC20,
+                BALANCE_ERC20
+            )
+        );
+        return keccak256(
+            abi.encodePacked(
+                bytes2(0x1901), bytes32(0xc078f884a2676e1345748b1feace7b0abee5d00ecadb6e574dcdd109a63e8943), structHash
+            )
+        );
     }
 }
