@@ -375,6 +375,10 @@ button.secondary:hover { background: var(--surface-hover); }
 .impact-danger { color: #e74c3c; font-weight: 600; }
 .quote-info.impact-high { background: rgba(231,76,60,0.06); }
 .dark .quote-info.impact-high { background: rgba(231,76,60,0.1); }
+/* Simulation status */
+.sim-ok { color: #27ae60; }
+.sim-warn { color: #e67e22; }
+.sim-fail { color: #e74c3c; font-weight: 600; }
 
 /* All routes collapsible */
 .routes-toggle {
@@ -1021,6 +1025,9 @@ body.modal-open { overflow: hidden; }
   <div class="quote-row" id="impactRow">
     <span>Impact:</span><span id="impactInfo">--</span>
   </div>
+  <div class="quote-row" id="simRow" style="display:none">
+    <span>Simulation:</span><span id="simInfo">--</span>
+  </div>
   <div class="quote-row" id="slippageRow">
     <span>Slippage:</span>
     <span class="slip-inline">
@@ -1461,7 +1468,7 @@ body.modal-open { overflow: hidden; }
         <div id="collectNftLoading" style="display:none;font-size:12px;color:var(--fg-dim)">Loading NFT...</div>
         <div id="collectNftError" style="display:none;font-size:12px;color:var(--remove-fg,#c0392b)"></div>
         <div id="collectNftCard" style="display:none;border:1px solid var(--border-muted);border-radius:10px;overflow:hidden;max-width:240px;margin:0 auto">
-          <img id="collectNftImg" src="" alt="NFT" style="width:100%;display:block" onerror="collectNftImgError()">
+          <img id="collectNftImg" alt="NFT" style="width:100%;display:block" onerror="if(typeof collectNftImgError==='function')collectNftImgError()">
           <div id="collectNftMeta" style="padding:8px;font-size:12px;text-align:left;line-height:1.5"></div>
         </div>
       </div>
@@ -3340,6 +3347,7 @@ async function handleAmountChange() {
       setShown('impactRow', true);
       setShown('slippageRow', false);
       setShown('refreshRow', false);
+      setShown('simRow', false);
       setShown(quoteInfoEl, true);
       updateCalldataLink(null);
       stopQuoteRefresh(); // No refresh needed for 1:1
@@ -3495,6 +3503,74 @@ async function handleAmountChange() {
     setShown('refreshRow', !isDirectPath);
     setShown(quoteInfoEl, true);
     updateCalldataLink(quote.multicall);
+
+    // Simulation status display
+    const simEl = $('simInfo');
+    const sim = quote._sim;
+    let _simBlocked = false;
+    if (sim && !isDirectPath) {
+      setShown('simRow', true);
+      if (sim.ok) {
+        if (sim.drift != null && sim.drift > 1) {
+          // Quote overstates output by >1% vs simulation
+          simEl.textContent = `Quoted output ~${sim.drift.toFixed(1)}% above simulated`;
+          simEl.className = 'sim-warn';
+        } else {
+          simEl.textContent = 'Verified';
+          simEl.className = 'sim-ok';
+        }
+      } else if (sim.expected) {
+        // Allowance/balance error — expected before approval, not a routing issue
+        simEl.textContent = 'Pending approval';
+        simEl.className = '';
+      } else {
+        // Real routing failure
+        simEl.textContent = 'Route would revert';
+        simEl.className = 'sim-fail';
+        _simBlocked = true;
+      }
+    } else if (sim && isDirectPath) {
+      setShown('simRow', false);
+    } else {
+      // Aggregator winner — fire async sim from firm quote
+      if (quote._firmQuoteP) {
+        setShown('simRow', true);
+        simEl.textContent = 'Simulating...';
+        simEl.className = '';
+        const _aggSeq = seq;
+        const _aggFromAddr = fromData.address;
+        const _aggToAddr = toData.address;
+        const _aggAmountIn = isExactOut ? quote.requiredInput : safeParseUnits(amtStr, fromData.decimals);
+        const _aggReceiver = getReceiver();
+        _simulateAggregator(quote, _aggFromAddr, _aggToAddr, _aggAmountIn, _aggReceiver)
+          .then(aggSim => {
+            if (_aggSeq !== _quoteSeq) return; // stale — new quote handles simRow
+            if (!aggSim) { setShown('simRow', false); return; } // firm quote failed
+            setShown('simRow', true);
+            if (aggSim.ok) {
+              if (aggSim.drift != null && aggSim.drift > 1) {
+                simEl.textContent = `Quoted output ~${aggSim.drift.toFixed(1)}% above simulated`;
+                simEl.className = 'sim-warn';
+              } else {
+                simEl.textContent = 'Verified';
+                simEl.className = 'sim-ok';
+              }
+            } else if (aggSim.expected) {
+              simEl.textContent = 'Pending approval';
+              simEl.className = '';
+            } else {
+              // Aggregator sim revert is non-blocking — firm quote data may be
+              // stale/expired (RFQ signatures, PMM expiry). Execution re-fetches
+              // fresh calldata, so a sim revert here is not reliable.
+              simEl.textContent = 'Sim inconclusive';
+              simEl.className = 'sim-warn';
+            }
+          }).catch(() => setShown('simRow', false));
+      } else {
+        setShown('simRow', false);
+      }
+    }
+
     const _stableSet = new Set(['USDC', 'DAI', 'USDT', 'LUSD', 'BOLD', 'crvUSD']);
     const _lstSet = new Set(['ETH', 'WETH', 'stETH', 'wstETH', 'rETH']);
     _isStableQuote = (_stableSet.has(fromSnap) && _stableSet.has(toSnap))
@@ -3549,8 +3625,13 @@ async function handleAmountChange() {
       }
     }
 
-    setText(swapBtn, btnLabel);
-    setDisabled(swapBtn, false);
+    if (_simBlocked) {
+      setText(swapBtn, "Swap would revert — try another route");
+      setDisabled(swapBtn, true);
+    } else {
+      setText(swapBtn, btnLabel);
+      setDisabled(swapBtn, false);
+    }
   } catch (e) {
     console.error("Quote error:", e);
     dstEl.value = "";
@@ -4719,6 +4800,119 @@ async function postCowOrder(q) {
   return resp.json(); // returns orderUid string
 }
 
+// ---- Simulation helper: decode swap output from multicall return ----
+// Selectors hoisted to module scope — avoids repeated Interface.getFunction() lookups per quote.
+const _SEL_SWAP_VZ = ROUTER_IFACE.getFunction('swapVZ').selector;
+const _SEL_SWAP_V4 = ROUTER_IFACE.getFunction('swapV4').selector;
+const _SEL_SNWAP = ROUTER_IFACE.getFunction('snwap').selector;
+const _SEL_SWAP_CURVE = ROUTER_IFACE.getFunction('swapCurve').selector;
+const _SEL_LIDO_STETH = ROUTER_IFACE.getFunction('exactETHToSTETH').selector;
+const _SEL_LIDO_WSTETH = ROUTER_IFACE.getFunction('exactETHToWSTETH').selector;
+
+// For split routes (isSplit=true), output = sum of all legs.
+// For multi-hop routes (isSplit=false), only the last swap's output is the user's received amount.
+function _decodeSimOutput(mcReturn, calls, isSplit) {
+  let simOutput = null;
+  for (let i = 0; i < calls.length && i < mcReturn.length; i++) {
+    try {
+      const sel = calls[i].slice(0, 10);
+      let out = null;
+      if (sel === _SEL_SWAP_VZ || sel === _SEL_SWAP_V4 || sel === _SEL_SWAP_CURVE) {
+        out = ROUTER_IFACE.decodeFunctionResult('swapVZ', mcReturn[i])[1];
+      } else if (sel === _SEL_SNWAP) {
+        out = ROUTER_IFACE.decodeFunctionResult('snwap', mcReturn[i])[0];
+      } else if (sel === _SEL_LIDO_STETH) {
+        out = ROUTER_IFACE.decodeFunctionResult('exactETHToSTETH', mcReturn[i])[0];
+      } else if (sel === _SEL_LIDO_WSTETH) {
+        out = ROUTER_IFACE.decodeFunctionResult('exactETHToWSTETH', mcReturn[i])[0];
+      }
+      if (out != null) {
+        // Split routes: sum all legs. Multi-hop: last swap wins (intermediates are consumed).
+        simOutput = isSplit ? (simOutput ? simOutput + out : out) : out;
+      }
+    } catch (_) { /* non-swap sub-call (sweep, permit, wrap, execute), skip */ }
+  }
+  return simOutput;
+}
+
+async function _simulateRoute(provider, multicall, msgValue, calls, isSplit) {
+  try {
+    const tx = {
+      from: _connectedAddress,
+      to: ZROUTER_ADDRESS,
+      data: multicall,
+      value: msgValue || 0n,
+    };
+    // Timeout: don't let a slow sim block the quote
+    const raw = await Promise.race([
+      provider.call(tx),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("sim_timeout")), 5000)),
+    ]);
+    const mcReturn = ROUTER_IFACE.decodeFunctionResult('multicall', raw)[0];
+    const decodedCalls = calls || decodeMulticallCalls(multicall);
+    const simOutput = _decodeSimOutput(mcReturn, decodedCalls, isSplit);
+    return { ok: true, simOutput };
+  } catch (e) {
+    // Combine all error fields — e.data is hex (won't match text), e.reason/e.message have human text
+    const msg = [e?.reason, e?.shortMessage, e?.message, e?.data].filter(Boolean).map(String).join(' ');
+    if (/sim_timeout/i.test(msg)) return { ok: true, simOutput: null }; // timed out — don't block
+    const isAllowanceErr = /STF|TRANSFER_FROM_FAILED|insufficient allowance|ERC20.*exceeds/i.test(msg);
+    const isBalanceErr = /insufficient funds|gas required exceeds|insufficient balance/i.test(msg);
+    return { ok: false, reason: msg, expected: isAllowanceErr || isBalanceErr };
+  }
+}
+
+// ---- Aggregator simulation: build snwap from firm quote and simulate ----
+const _AGG_CONFIG = {
+  is0x:        { addr: MATCHA_ADDRESS,      iface: MATCHA_IFACE,      tx: q => q?.transaction },
+  isParaswap:  { addr: PARASOL_ADDRESS,     iface: PARASOL_IFACE,     tx: q => ({ to: q?.to, data: q?.data }) },
+  isKyber:     { addr: KYBEROL_ADDRESS,     iface: KYBEROL_IFACE,     tx: q => ({ to: q?.routerAddress, data: q?.data }) },
+  is1inch:     { addr: ONEINCHOL_ADDRESS,   iface: ONEINCHOL_IFACE,   tx: q => q?.tx },
+  isOdos:      { addr: ODOSOL_ADDRESS,      iface: ODOSOL_IFACE,      tx: q => q?.transaction },
+  isOkx:       { addr: OKXOL_ADDRESS,       iface: OKXOL_IFACE,       tx: q => q?.tx },
+  isBebop:     { addr: BEBOPOL_ADDRESS,     iface: BEBOPOL_IFACE,     tx: q => q?.tx },
+  isEnso:      { addr: ENSOL_ADDRESS,       iface: ENSOL_IFACE,       tx: q => q?.tx },
+  isOpenOcean: { addr: OPENOCEANOL_ADDRESS, iface: OPENOCEANOL_IFACE, tx: q => q?.tx },
+};
+
+function _buildAggregatorSnwap(firmQuote, quote, fromAddr, toAddr, amountIn, receiver) {
+  for (const [flag, cfg] of Object.entries(_AGG_CONFIG)) {
+    if (!quote[flag]) continue;
+    const txInfo = cfg.tx(firmQuote);
+    if (!txInfo?.to || !txInfo?.data) return null;
+    const adapterData = cfg.iface.encodeFunctionData('swap', [
+      txInfo.to, fromAddr, toAddr, receiver, txInfo.data,
+    ]);
+    const isEthIn = fromAddr === ZERO_ADDRESS;
+    const snwapCall = ROUTER_IFACE.encodeFunctionData('snwap', [
+      fromAddr, isEthIn ? 0n : amountIn, receiver, toAddr,
+      1n, // minBuy=1 for sim — we decode actual output ourselves
+      cfg.addr, adapterData,
+    ]);
+    const multicall = ROUTER_IFACE.encodeFunctionData('multicall', [[snwapCall]]);
+    return { multicall, calls: [snwapCall], msgValue: isEthIn ? amountIn : 0n };
+  }
+  return null;
+}
+
+async function _simulateAggregator(quote, fromAddr, toAddr, amountIn, receiver) {
+  if (!quote._firmQuoteP) return null;
+  try {
+    const firmQuote = await quote._firmQuoteP;
+    if (!firmQuote) return null;
+    const built = _buildAggregatorSnwap(firmQuote, quote, fromAddr, toAddr, amountIn, receiver);
+    if (!built) return null;
+    const sim = await quoteRPC.call(async (rpc) =>
+      _simulateRoute(rpc, built.multicall, built.msgValue, built.calls, false)
+    );
+    if (sim.ok && sim.simOutput != null && sim.simOutput > 0n) {
+      const drift = Number(quote.expectedOutput - sim.simOutput) * 100 / Number(quote.expectedOutput);
+      sim.drift = drift;
+    }
+    return sim;
+  } catch (_) { return null; }
+}
+
 async function getQuote(fromAmountStr, fromSym, toSym) {
   if (!_connectedAddress) throw new Error("Connect wallet to get a quote");
   const fromData = tokens[fromSym], toData = tokens[toSym];
@@ -5228,6 +5422,18 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
       sourceB: result.sourceB,
     };
 
+    // Fire on-chain route simulation in parallel with external API resolution.
+    // Direct eth_call to the router preserves msg.sender & msg.value context.
+    // Skip sim when we know the user lacks approval (would just revert with STF).
+    // ETH sells have no approval requirement. Token sells check cached allowance.
+    const _skipSim = fromData.address !== ZERO_ADDRESS && (() => {
+      const cached = cacheGetAllowance(fromData.address, _connectedAddress, ZROUTER_ADDRESS);
+      return cached != null && cached < amountIn; // known insufficient
+    })();
+    const _simP = _skipSim
+      ? Promise.resolve({ ok: false, reason: 'no_approval', expected: true })
+      : _simulateRoute(rpc, result.multicall, result.msgValue, result.calls, result.isSplit);
+
     // External APIs: resolve all in parallel
     const [oxPrice, psPrice, ksPrice, cowPrice, inchPrice, odosPrice, okxPrice, bebopPrice, ensoPrice, ooPrice] = await Promise.all([ox0xPriceP, psPriceP, ksPriceP, cowPriceP, inchPriceP, odosPriceP, okxPriceP, bebopPriceP, ensoPriceP, ooPriceP]);
 
@@ -5395,6 +5601,28 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     } else if (result.isOpenOcean) {
       result._firmQuoteP = cachedFetch(`oo-firm:${_cacheKey}:${_slippage}`,
         () => getOpenOceanQuote(fromData.address, toData.address, amountIn, _slippage)).catch(() => null);
+    }
+
+    // Await simulation result (fired in parallel with external APIs above)
+    const isOnChainWinner = !result.is0x && !result.isParaswap && !result.isKyber
+      && !result.isCow && !result.is1inch && !result.isOdos && !result.isOkx
+      && !result.isBebop && !result.isEnso && !result.isOpenOcean;
+    try {
+      const sim = await _simP;
+      if (isOnChainWinner) {
+        // Simulation applies directly to the winning route
+        result._sim = sim;
+        if (sim.ok && sim.simOutput != null && sim.simOutput > 0n) {
+          // Compare simulated output vs quoted output
+          const drift = Number(result.expectedOutput - sim.simOutput) * 100 / Number(result.expectedOutput);
+          result._sim.drift = drift; // positive = quote overstates
+        }
+      } else {
+        // Aggregator won; simulation validates the on-chain fallback
+        result._simFallback = sim;
+      }
+    } catch (_) {
+      // Simulation failed entirely — non-blocking, quote is still usable
     }
 
     return result;
@@ -5678,6 +5906,15 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
       sourceB: result.sourceB,
     };
 
+    // Fire on-chain route simulation (parallel with ParaSwap resolution)
+    const _skipSim = fromData.address !== ZERO_ADDRESS && (() => {
+      const cached = cacheGetAllowance(fromData.address, _connectedAddress, ZROUTER_ADDRESS);
+      return cached != null && cached < result.requiredInput;
+    })();
+    const _simP = _skipSim
+      ? Promise.resolve({ ok: false, reason: 'no_approval', expected: true })
+      : _simulateRoute(rpc, result.multicall, result.msgValue, result.calls, result.isSplit);
+
     // ParaSwap exact-out: compare srcAmount (lower wins)
     const psPrice = await psPriceP;
     if (psPrice && psPrice.srcAmount) {
@@ -5703,6 +5940,21 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
         result.splitLegs = null;
       }
     }
+
+    // Await simulation result
+    const isOnChainWinner = !result.isParaswap;
+    try {
+      const sim = await _simP;
+      if (isOnChainWinner) {
+        result._sim = sim;
+        if (sim.ok && sim.simOutput != null && sim.simOutput > 0n) {
+          const drift = Number(result.expectedOutput - sim.simOutput) * 100 / Number(result.expectedOutput);
+          result._sim.drift = drift;
+        }
+      } else {
+        result._simFallback = sim;
+      }
+    } catch (_) {}
 
     return result;
   });
@@ -5823,6 +6075,9 @@ function _selectRoute(idx) {
   q._manualIdx = idx;
   // Clear prefetched firm quote (will re-fetch at swap time)
   q._firmQuoteP = null;
+  // Clear sim state — route changed, previous sim no longer applies
+  q._sim = undefined;
+  q._simFallback = undefined;
 
   // Re-render UI
   const toSym = toToken;
@@ -5849,6 +6104,109 @@ function _selectRoute(idx) {
 
   // Re-render routes list with new selection
   displayAllRoutes(q, toSym, isExactOut, isExactOut ? fromSym : null);
+
+  // Simulate the manually selected route
+  const simEl = $('simInfo');
+  const swapBtn = $('swapBtn');
+  if (!fromData || !toData || !_connectedAddress) { setShown('simRow', false); return; }
+
+  const amtStr = isExactOut ? $('toAmount').value.trim() : $('fromAmount').value.trim();
+  const amountIn = isExactOut ? (q.requiredInput || safeParseUnits(amtStr, fromData.decimals))
+    : safeParseUnits(amtStr, fromData.decimals);
+  const isAggregator = picked._winnerArgs;
+
+  if (isAggregator) {
+    // Aggregator: fetch firm quote → build snwap → simulate (async, non-blocking)
+    setShown('simRow', true);
+    simEl.textContent = 'Simulating...';
+    simEl.className = '';
+    const _selSeq = _quoteSeq;
+    const _selIdx = idx;
+    const receiver = getReceiver();
+    const slippage = readSlippage();
+    // Identify which aggregator and fetch its firm quote
+    const [flag] = picked._winnerArgs;
+    const _firmFetchers = {
+      is0x:        () => get0xQuote(fromData.address, toData.address, amountIn, slippage),
+      isParaswap:  () => getParaswapQuote(q.psPriceRoute, fromData.address, toData.address, slippage),
+      isKyber:     () => getKyberQuote(q.ksRouteSummary, slippage),
+      is1inch:     () => get1inchQuote(fromData.address, toData.address, amountIn, slippage),
+      isOdos:      () => getOdosQuote(q.odosPathId, slippage),
+      isOkx:       () => getOkxQuote(fromData.address, toData.address, amountIn, slippage),
+      isBebop:     () => getBebopQuote(fromData.address, toData.address, amountIn, slippage),
+      isEnso:      () => getEnsoQuote(fromData.address, toData.address, amountIn, slippage),
+      isOpenOcean: () => getOpenOceanQuote(fromData.address, toData.address, amountIn, slippage),
+    };
+    const fetcher = _firmFetchers[flag];
+    if (fetcher) {
+      q._firmQuoteP = fetcher().catch(() => null);
+      _simulateAggregator(q, fromData.address, toData.address, amountIn, receiver)
+        .then(aggSim => {
+          if (_selSeq !== _quoteSeq || q._manualIdx !== _selIdx || !aggSim) {
+            setShown('simRow', false); return;
+          }
+          setShown('simRow', true);
+          if (aggSim.ok) {
+            if (aggSim.drift != null && aggSim.drift > 1) {
+              simEl.textContent = `Quoted output ~${aggSim.drift.toFixed(1)}% above simulated`;
+              simEl.className = 'sim-warn';
+            } else {
+              simEl.textContent = 'Verified';
+              simEl.className = 'sim-ok';
+            }
+          } else if (aggSim.expected) {
+            simEl.textContent = 'Pending approval';
+            simEl.className = '';
+          } else {
+            simEl.textContent = 'Sim inconclusive';
+            simEl.className = 'sim-warn';
+          }
+        }).catch(() => setShown('simRow', false));
+    } else {
+      setShown('simRow', false);
+    }
+  } else if (q._onChainState && q._onChainState.multicall) {
+    // On-chain route: simulate the multicall directly
+    setShown('simRow', true);
+    simEl.textContent = 'Simulating...';
+    simEl.className = '';
+    const _selSeq = _quoteSeq;
+    const _selIdx = idx;
+    const st = q._onChainState;
+    quoteRPC.call(async (rpc) => _simulateRoute(rpc, st.multicall, st.msgValue, st.calls, st.isSplit))
+      .then(sim => {
+        if (_selSeq !== _quoteSeq || q._manualIdx !== _selIdx) {
+          setShown('simRow', false); return;
+        }
+        q._sim = sim;
+        if (sim.ok && sim.simOutput != null && sim.simOutput > 0n) {
+          const drift = Number(q.expectedOutput - sim.simOutput) * 100 / Number(q.expectedOutput);
+          sim.drift = drift;
+        }
+        setShown('simRow', true);
+        if (sim.ok) {
+          if (sim.drift != null && sim.drift > 1) {
+            simEl.textContent = `Quoted output ~${sim.drift.toFixed(1)}% above simulated`;
+            simEl.className = 'sim-warn';
+          } else {
+            simEl.textContent = 'Verified';
+            simEl.className = 'sim-ok';
+          }
+        } else if (sim.expected) {
+          simEl.textContent = 'Pending approval';
+          simEl.className = '';
+        } else {
+          simEl.textContent = 'Route would revert';
+          simEl.className = 'sim-fail';
+          if (_selSeq === _quoteSeq && q._manualIdx === _selIdx && swapBtn) {
+            setText(swapBtn, "Swap would revert — try another route");
+            setDisabled(swapBtn, true);
+          }
+        }
+      }).catch(() => setShown('simRow', false));
+  } else {
+    setShown('simRow', false);
+  }
 }
 
 // ---- Price impact via spot rate ----
