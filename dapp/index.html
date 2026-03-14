@@ -10998,26 +10998,29 @@ async function ppwLoadDeposits() {
 
       // If cache is up-to-date, skip fetch
       if (cached && fromBlock > latestBlock) {
-        return Promise.resolve({ asset, depositLogs: cached.depositLogs, withdrawnLogs: cached.withdrawnLogs });
+        return Promise.resolve({ asset, depositLogs: cached.depositLogs, withdrawnLogs: cached.withdrawnLogs, leafLogs: cached.leafLogs || [] });
       }
 
       const dFilter = { address: poolAddress, topics: [PP_POOL_EVENTS.getEvent('Deposited').topicHash], fromBlock, toBlock: latestBlock };
       const wFilter = { address: poolAddress, topics: [PP_POOL_EVENTS.getEvent('Withdrawn').topicHash], fromBlock, toBlock: latestBlock };
+      const lFilter = { address: poolAddress, topics: [PP_POOL_EVENTS.getEvent('LeafInserted').topicHash], fromBlock, toBlock: latestBlock };
       return Promise.all([
         ppGetLogsChunked(rpc, dFilter, fromBlock, latestBlock),
-        ppGetLogsChunked(rpc, wFilter, fromBlock, latestBlock)
-      ]).then(([newDLogs, newWLogs]) => {
+        ppGetLogsChunked(rpc, wFilter, fromBlock, latestBlock),
+        ppGetLogsChunked(rpc, lFilter, fromBlock, latestBlock)
+      ]).then(([newDLogs, newWLogs, newLLogs]) => {
         // Merge with cached logs
         const depositLogs = cached ? cached.depositLogs.concat(newDLogs) : newDLogs;
         const withdrawnLogs = cached ? cached.withdrawnLogs.concat(newWLogs) : newWLogs;
+        const leafLogs = cached ? (cached.leafLogs || []).concat(newLLogs) : newLLogs;
         // Update cache
-        _ppwEventCache[asset] = { depositLogs, withdrawnLogs, upToBlock: latestBlock };
-        return { asset, depositLogs, withdrawnLogs };
+        _ppwEventCache[asset] = { depositLogs, withdrawnLogs, leafLogs, upToBlock: latestBlock };
+        return { asset, depositLogs, withdrawnLogs, leafLogs };
       }).catch(e => {
         console.warn(`Load: failed to fetch ${asset} events:`, e);
         // Fall back to cached data if available
-        if (cached) return { asset, depositLogs: cached.depositLogs, withdrawnLogs: cached.withdrawnLogs };
-        return { asset, depositLogs: [], withdrawnLogs: [] };
+        if (cached) return { asset, depositLogs: cached.depositLogs, withdrawnLogs: cached.withdrawnLogs, leafLogs: cached.leafLogs || [] };
+        return { asset, depositLogs: [], withdrawnLogs: [], leafLogs: [] };
       });
     });
 
@@ -11025,13 +11028,24 @@ async function ppwLoadDeposits() {
     if (_ppwLoadAbort.signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
     // Step 3: process each asset's events and build Pool Accounts
-    for (const { asset, depositLogs, withdrawnLogs } of allEvents) {
+    for (const { asset, depositLogs, withdrawnLogs, leafLogs } of allEvents) {
       if (_ppwLoadAbort.signal.aborted) break;
 
       const scope = ppComputeScope(asset);
       const poolAddress = ppGetPoolAddress(asset);
 
       if (refreshLink) refreshLink.textContent = `Processing ${asset}\u2026 (Cancel)`;
+
+      // Build set of inserted leaves (commitments that have been vetted and added to the tree)
+      const insertedLeaves = new Set();
+      for (const log of leafLogs) {
+        try {
+          const parsed = PP_POOL_EVENTS.parseLog({ topics: log.topics, data: log.data });
+          if (parsed.name === 'LeafInserted') {
+            insertedLeaves.add('0x' + BigInt(parsed.args._leaf).toString(16).padStart(64, '0'));
+          }
+        } catch { /* skip unparseable */ }
+      }
 
       // Build deposit events map
       const depositEvents = new Map();
@@ -11124,8 +11138,11 @@ async function ppwLoadDeposits() {
         }
 
         if (current) {
+          // Determine vetting status: check if the current commitment is in the tree
+          // Change notes (from partial withdrawals) are always in the tree; only initial deposits may be pending
+          const pending = current.source === 'deposit' && current.commitment && !insertedLeaves.has(current.commitment);
           _ppwLoadResults.push({
-            asset, depositIndex: index, poolAddress, ...current,
+            asset, depositIndex: index, poolAddress, pending, ...current,
           });
         }
       }
@@ -11160,20 +11177,29 @@ function ppwRenderPoolAccounts() {
     return;
   }
 
-  // Compute total balances per asset
+  // Compute total balances per asset (available vs pending)
   const totals = {};
+  const pendingTotals = {};
   for (const r of _ppwLoadResults) {
-    if (r.value) {
+    if (r.value && r.source !== 'spent') {
       const amt = BigInt(r.value);
-      totals[r.asset] = (totals[r.asset] || 0n) + amt;
+      if (r.pending) {
+        pendingTotals[r.asset] = (pendingTotals[r.asset] || 0n) + amt;
+      } else {
+        totals[r.asset] = (totals[r.asset] || 0n) + amt;
+      }
     }
   }
   const totalStr = Object.entries(totals).map(([a, v]) => escText(fmt(ppFormatAmountWei(v, a))) + ' ' + escText(a)).join(', ');
+  const pendingStr = Object.entries(pendingTotals).map(([a, v]) => escText(fmt(ppFormatAmountWei(v, a))) + ' ' + escText(a)).join(', ');
 
   let html = '<div style="border:1px solid var(--border-muted);background:var(--surface);padding:8px">';
   html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">';
   html += '<div style="font-size:12px;font-weight:600">Pool Accounts</div>';
-  if (totalStr) html += '<div style="font-size:11px;color:var(--fg-muted)">Total: ' + totalStr + '</div>';
+  let summaryParts = [];
+  if (totalStr) summaryParts.push(totalStr);
+  if (pendingStr) summaryParts.push('<span style="color:var(--fg-dim)">' + pendingStr + ' pending</span>');
+  if (summaryParts.length) html += '<div style="font-size:11px;color:var(--fg-muted)">' + summaryParts.join(' · ') + '</div>';
   html += '</div>';
 
   for (let i = 0; i < _ppwLoadResults.length; i++) {
@@ -11190,6 +11216,16 @@ function ppwRenderPoolAccounts() {
         <div>
           <div style="font-size:12px"><span style="font-weight:600">${escText(paLabel)}</span> <span style="color:var(--fg-dim)">&middot;</span> ${origStr}${txLink}</div>
           <div style="font-size:10px;color:var(--fg-muted);font-weight:600;margin-top:2px">Spent</div>
+        </div>
+      </div>`;
+    } else if (r.pending) {
+      const amtStr = r.value ? escText(fmt(ppFormatAmountWei(BigInt(r.value), r.asset))) + ' ' + escText(r.asset) : escText(r.asset);
+      html += `<div style="padding:8px 0;${border}">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div style="min-width:0">
+            <div style="font-size:12px"><span style="font-weight:600">${escText(paLabel)}</span> <span style="color:var(--fg-dim)">&middot;</span> ${amtStr}${txLink}</div>
+            <div style="font-size:10px;color:var(--fg-muted);font-weight:600;margin-top:2px">Pending\u2026</div>
+          </div>
         </div>
       </div>`;
     } else {
