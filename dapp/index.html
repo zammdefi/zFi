@@ -1190,17 +1190,6 @@ body.modal-open { overflow: hidden; }
     </div>
   </div>
 
-  <details style="margin-top:12px;font-size:11px;color:var(--fg-muted)">
-    <summary style="cursor:pointer;opacity:0.6">Manual recovery (import deposit slip)</summary>
-    <div style="margin-top:8px">
-      <textarea id="ppwManualNote" rows="3" placeholder='Paste deposit slip JSON or {"nullifier":"0x...","secret":"0x...",...}' style="width:100%;box-sizing:border-box;font-family:monospace;font-size:10px;background:var(--surface);color:var(--fg);border:1px solid var(--border-muted);padding:8px;resize:vertical"></textarea>
-      <div style="display:flex;gap:8px;margin-top:6px">
-        <button onclick="ppwImportNote()" class="swap-btn" style="flex:1;padding:6px;font-size:11px;margin:0">Parse &amp; Load</button>
-        <button class="swap-btn" style="flex:1;padding:6px;font-size:11px;margin:0" onclick="this.querySelector('input').click()">Upload JSON<input type="file" accept=".json" onchange="ppwUploadNote(event)" style="display:none"></button>
-      </div>
-    </div>
-  </details>
-
   <div id="ppwParsed" style="display:none">
     <div style="border-top:1px solid var(--border-muted);margin:16px 0 0"></div>
     <div id="ppwSelectedLabel" style="font-size:14px;font-weight:400;letter-spacing:0.1em;text-transform:uppercase;margin:16px 0;color:var(--fg)"></div>
@@ -11278,75 +11267,6 @@ function ppwSelectAccount(index) {
   // Scroll to withdrawal form below the Pool Accounts list
   const form = $('ppwParsed');
   if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-async function ppwImportNote() {
-  const raw = $('ppwManualNote').value.trim();
-  if (!raw) { showStatus('Paste a deposit slip or note JSON', 'error'); return; }
-  let note;
-  try { note = JSON.parse(raw); } catch { showStatus('Invalid JSON', 'error'); return; }
-  if (!note.nullifier || !note.secret) { showStatus('JSON must contain nullifier and secret', 'error'); return; }
-
-  let nullifier, secret;
-  try { nullifier = BigInt(note.nullifier); secret = BigInt(note.secret); } catch { showStatus('Invalid nullifier or secret value', 'error'); return; }
-  const precommitment = poseidon2([nullifier, secret]);
-
-  const rawAsset = (note.asset || 'ETH').trim();
-  const rawUpper = rawAsset.toUpperCase();
-  const noteAsset = rawUpper === 'BOLD' ? 'BOLD' : rawUpper === 'WSTETH' ? 'wstETH' : 'ETH';
-
-  // Start with whatever the note/slip provides
-  let value = note.value != null ? BigInt(note.value) : null;
-  let label = note.label != null ? BigInt(note.label) : null;
-  let leafIndex = note.leafIndex != null ? Number(note.leafIndex) : null;
-  let commitment = note.commitment ?? null;
-
-  // If value/label missing but txHash present, resolve from on-chain receipt
-  if ((value == null || label == null) && note.txHash) {
-    try {
-      showStatus('Looking up deposit receipt on-chain...', 'success');
-      const rpc = await quoteRPC.call(r => r);
-      const receipt = await rpc.getTransactionReceipt(note.txHash);
-      if (receipt) {
-        const info = parsePPDepositReceipt(receipt);
-        if (info.value != null && value == null) value = BigInt(info.value);
-        if (info.label != null && label == null) label = BigInt(info.label);
-        if (info.leafIndex != null && leafIndex == null) leafIndex = Number(info.leafIndex);
-        if (info.commitment != null && commitment == null) commitment = '0x' + BigInt(info.commitment).toString(16).padStart(64, '0');
-      }
-    } catch (e) {
-      console.warn('Could not resolve deposit receipt:', e);
-    }
-  }
-
-  _ppwNote = {
-    nullifier, secret, precommitment, asset: noteAsset,
-    withdrawalIndex: note.withdrawalIndex ?? null,
-    leafIndex, value, label, commitment,
-  };
-  _ppwSelectedAccountLabel = 'Imported';
-
-  const valStr = _ppwNote.value != null ? ppFormatAmountWei(_ppwNote.value, noteAsset) : '';
-  setText('ppwSelectedLabel', 'Imported' + (valStr ? ' \u00b7 ' + valStr + ' ' + noteAsset : ' \u00b7 ' + noteAsset));
-  setText('ppwWithdrawAmtLabel', 'Withdraw Amount (' + noteAsset + ')');
-  setShown('ppwParsed', true);
-  ppwSyncWithdrawButtonState();
-  if (_ppwMode === 'relay') {
-    const egEl = $('ppwExtraGas');
-    if (noteAsset === 'ETH') { egEl.checked = false; egEl.disabled = true; }
-    else { egEl.disabled = false; }
-  }
-  ppwUpdatePreview();
-  $('ppwParsed').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  showStatus('Note imported. Fill in withdrawal details below.', 'success');
-}
-
-function ppwUploadNote(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => { $('ppwManualNote').value = e.target.result; ppwImportNote(); };
-  reader.readAsText(file);
 }
 
 function ppwCloseWithdrawForm() {
