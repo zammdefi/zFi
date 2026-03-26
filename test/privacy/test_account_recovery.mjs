@@ -171,6 +171,17 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
   return { rows: nextRows, missingLabels: Array.from(missingLabels) };
 }
 
+function ppGetRecoveredSafeDepositIndex(migratedCount, safeRows) {
+  let nextIndex = Number.isFinite(Number(migratedCount)) ? Number(migratedCount) : 0;
+  for (const row of Array.isArray(safeRows) ? safeRows : []) {
+    const depositIndex = Number(row?.depositIndex);
+    if (Number.isInteger(depositIndex) && depositIndex >= nextIndex) {
+      nextIndex = depositIndex + 1;
+    }
+  }
+  return nextIndex;
+}
+
 function ppGetLoadedAccountStatus(row) {
   if (row?.ragequit) return PP_REVIEW_STATUS.EXITED;
   if (row?.source === 'spent') return PP_REVIEW_STATUS.SPENT;
@@ -179,6 +190,7 @@ function ppGetLoadedAccountStatus(row) {
 }
 
 const PP_PENDING_DEPOSIT_RESERVATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES = 25;
 
 function ppNormalizePendingDepositReservations(entries, minDepositIndex = 0, now = Date.now()) {
   const seen = new Set();
@@ -330,7 +342,7 @@ function ppCollectWalletAccountsForDerivation({
   let migratedCount = 0;
   let consecutiveMisses = 0;
 
-  for (let index = startIndex; consecutiveMisses < 10; index++) {
+  for (let index = startIndex; consecutiveMisses < PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES; index++) {
     const dk = ppDeriveDepositKeys(keyset.masterNullifier, keyset.masterSecret, scope, index);
     const pch = ppHashHex(dk.precommitment);
     const ev = depositEvents.get(pch);
@@ -613,6 +625,29 @@ test('approved account requires ASP leaf before becoming withdrawable', () => {
   assert.equal(approvedRows[0].timestamp, 111);
 });
 
+test('missing ASP deposit metadata is surfaced for inserted accounts', () => {
+  const label = poseidon2([46n, 47n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 11, label, 3n, 128n, '0xdep-missing');
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'ETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 11,
+  });
+
+  const applied = ppApplyLoadedAccountReviewStatuses(results, [label], []);
+  assert.deepEqual(applied.missingLabels, [label.toString()]);
+  assert.equal(applied.rows[0].reviewStatus, PP_REVIEW_STATUS.PENDING);
+});
+
 test('declined and poi-required accounts stay non-withdrawable', () => {
   const declinedLabel = poseidon2([15n, 16n]);
   const poiLabel = poseidon2([17n, 18n]);
@@ -843,6 +878,27 @@ test('failed ASP status fetch keeps inserted accounts fail-closed as pending', (
   assert.equal(ppRowShowsWithdrawButton(applied[0]), false);
 });
 
+test('account recovery tolerates sparse gaps before later deposits', () => {
+  const label = poseidon2([48n, 49n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 24, label, 4n, 155n, '0xdep-gap');
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'ETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].depositIndex, 24);
+});
+
 test('next safe deposit index still counts ragequitted safe slots after legacy migration', () => {
   const legacyLabel = poseidon2([9n, 10n]);
   const safeLabel = poseidon2([11n, 12n]);
@@ -894,7 +950,15 @@ test('next safe deposit index still counts ragequitted safe slots after legacy m
 
   assert.equal(legacyScan.migratedCount, 1);
   assert.equal(safeScan.results.length, 1);
-  assert.equal(legacyScan.migratedCount + safeScan.results.length, 2);
+  assert.equal(ppGetRecoveredSafeDepositIndex(legacyScan.migratedCount, safeScan.results), 2);
+});
+
+test('next safe deposit index uses the highest recovered safe slot', () => {
+  const nextIndex = ppGetRecoveredSafeDepositIndex(2, [
+    { depositIndex: 2 },
+    { depositIndex: 5 },
+  ]);
+  assert.equal(nextIndex, 6);
 });
 
 test('mixed legacy and safe accounts stay ordered by deposit chronology, not derivation', () => {

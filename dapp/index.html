@@ -8940,7 +8940,9 @@ function ppHashHex(value) {
   return '0x' + BigInt(value).toString(16).padStart(64, '0');
 }
 
-const PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES = 10;
+// Keep this comfortably above sparse-account gaps so recovery does not stop
+// before reaching later safe deposits or post-withdraw change notes.
+const PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES = 25;
 const PP_PENDING_DEPOSIT_STORAGE_KEY = 'zfi_pp_pending_privacy_deposits_v1';
 const PP_PENDING_DEPOSIT_RESERVATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PP_PENDING_DEPOSIT_UNKNOWN_TTL_MS = 2 * 60 * 60 * 1000;
@@ -9113,7 +9115,9 @@ async function ppResolvePendingDepositReservations(address, scope, recoveredInde
           const tx = await ppReadWithRpc(async (rpc) => await rpc.getTransaction(reservation.txHash)).catch(() => null);
           if (!tx && (now - reservation.createdAt) > PP_PENDING_DEPOSIT_UNKNOWN_TTL_MS) continue;
         }
-      } catch {}
+      } catch (err) {
+        console.warn('Privacy: could not verify pending deposit reservation', reservation.txHash, err);
+      }
     }
 
     updated.push({ ...reservation, status });
@@ -9121,6 +9125,17 @@ async function ppResolvePendingDepositReservations(address, scope, recoveredInde
 
   const persisted = ppWritePendingDepositReservations(address, scope, updated, recoveredIndex);
   return ppResolveReservedSafeDepositIndex(recoveredIndex, persisted);
+}
+
+function ppGetRecoveredSafeDepositIndex(migratedCount, safeRows) {
+  let nextIndex = Number.isFinite(Number(migratedCount)) ? Number(migratedCount) : 0;
+  for (const row of Array.isArray(safeRows) ? safeRows : []) {
+    const depositIndex = Number(row?.depositIndex);
+    if (Number.isInteger(depositIndex) && depositIndex >= nextIndex) {
+      nextIndex = depositIndex + 1;
+    }
+  }
+  return nextIndex;
 }
 
 function ppTraceLoadedAccountChain(initial, withdrawnMap, legacyKeys, safeKeys) {
@@ -9490,7 +9505,7 @@ async function ppResolveNextSafeDepositIndex(asset, scope, keys, address = _conn
       safeKeys: keys.safe,
       startIndex: legacyScan.migratedCount,
     });
-    const recoveredIndex = legacyScan.migratedCount + safeScan.results.length;
+    const recoveredIndex = ppGetRecoveredSafeDepositIndex(legacyScan.migratedCount, safeScan.results);
     const reservationState = await ppResolvePendingDepositReservations(address, scope, recoveredIndex);
     return reservationState.nextIndex;
   } catch (err) {
@@ -9604,6 +9619,8 @@ async function ppReadWithRpc(work) {
   return await quoteRPC.call(async (rpc) => await work(rpc));
 }
 
+const PP_LOG_CHUNK_MAX_DEPTH = 12;
+
 async function ppProviderGetLogsWithRetry(provider, request, attempts = 3) {
   let lastErr;
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -9624,28 +9641,33 @@ async function ppProviderGetLogsWithRetry(provider, request, attempts = 3) {
 function ppIsRangeLimitedLogsError(err) {
   const msg = String(err?.message || err || '').toLowerCase();
   return (
-    msg.includes('range') ||
-    msg.includes('limit') ||
-    msg.includes('10000') ||
-    msg.includes('too many') ||
-    msg.includes('max block range') ||
+    msg.includes('block range') ||
+      msg.includes('maximum block range') ||
+      msg.includes('max block range') ||
     msg.includes('query exceeds') ||
-    msg.includes('exceeded max allowed range')
+    msg.includes('exceeded max allowed range') ||
+    msg.includes('too many results') ||
+    /limited to 0\s*-\s*\d+\s*blocks range/.test(msg) ||
+    /ranges? over \d+.*not supported/.test(msg)
   );
 }
 
-async function ppGetLogsChunked(provider, filter, fromBlock, toBlock, chunkSize = 1250000) {
+async function ppGetLogsChunked(provider, filter, fromBlock, toBlock, chunkSize = 1250000, depth = 0) {
   try {
     return await ppProviderGetLogsWithRetry(provider, { ...filter, fromBlock, toBlock });
   } catch (e) {
     if (!ppIsRangeLimitedLogsError(e)) throw e;
     if (fromBlock >= toBlock) throw e;
+    if (depth >= PP_LOG_CHUNK_MAX_DEPTH) {
+      throw new Error('RPC log range limit persisted after maximum subdivision: ' + String(e?.message || e || 'unknown error'));
+    }
     const logs = [];
     const span = toBlock - fromBlock + 1;
-    const nextChunkSize = Math.max(1, Math.floor(Math.min(chunkSize, span - 1) / 4));
+    const nextChunkSize = Math.max(1, Math.floor(Math.min(chunkSize, span - 1) / 2));
+    if (nextChunkSize >= span) throw e;
     for (let start = fromBlock; start <= toBlock; start += nextChunkSize) {
       const end = Math.min(start + nextChunkSize - 1, toBlock);
-      logs.push(...await ppGetLogsChunked(provider, filter, start, end, nextChunkSize));
+      logs.push(...await ppGetLogsChunked(provider, filter, start, end, nextChunkSize, depth + 1));
     }
     return logs;
   }
@@ -10604,6 +10626,12 @@ async function ppDeposit() {
     const amount = ppParseAmountToWei(amtStr, _ppZapMode ? 'ETH' : _ppSelectedAsset);
 
     // Zap mode: ETH → wstETH → PP deposit in one tx
+    let tx;
+    let depositIdx = null;
+    let nullifier, secret, precommitment;
+    let depositScope = null;
+    let hasPendingDepositReservation = false;
+
     if (_ppZapMode) {
       const zapCfg = _ppConfigWstETH;
       if (!_signer) { connectWallet(); return; }
@@ -10668,16 +10696,15 @@ async function ppDeposit() {
       setText(btn, 'Deriving keys...');
       const ppKeys = await ppEnsureMasterKeys();
       const { masterNullifier, masterSecret } = ppKeys.safe;
-      const scope = ppComputeScope('wstETH');
-      let depositIdx, nullifier, secret, precommitment;
-      await ppWithPendingDepositLock(_connectedAddress, scope, async () => {
-        const startDepositIdx = await ppResolveNextSafeDepositIndex('wstETH', scope, ppKeys, _connectedAddress);
-        depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, scope, startDepositIdx);
-        ({ nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, scope, depositIdx));
-        ppReservePendingDepositIndex(_connectedAddress, scope, depositIdx);
+      depositScope = ppComputeScope('wstETH');
+      await ppWithPendingDepositLock(_connectedAddress, depositScope, async () => {
+        const startDepositIdx = await ppResolveNextSafeDepositIndex('wstETH', depositScope, ppKeys, _connectedAddress);
+        depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, depositScope, startDepositIdx);
+        ({ nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, depositScope, depositIdx));
+        ppReservePendingDepositIndex(_connectedAddress, depositScope, depositIdx);
+        hasPendingDepositReservation = true;
       });
 
-      let tx;
       try {
         const depositCalldata = PP_DEPOSIT_IFACE.encodeFunctionData('deposit(address,uint256,uint256)', [WSTETH_ADDRESS, depositAmount, precommitment]);
         const executeCall = ROUTER_IFACE.encodeFunctionData('execute', [PP_ENTRYPOINT, 0, depositCalldata]);
@@ -10693,11 +10720,11 @@ async function ppDeposit() {
           'Confirm ETH \u2192 wstETH \u2192 Privacy Pools deposit'
         );
       } catch (err) {
-        ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+        ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
         throw err;
       }
-      ppReservePendingDepositIndex(_connectedAddress, scope, depositIdx, tx.hash);
-      ppBuildDepositSlip({ asset: 'wstETH', amount: depositAmount, scope, depositIndex: depositIdx, nullifier, secret, precommitment, txHash: tx.hash, depositor: _connectedAddress });
+      ppReservePendingDepositIndex(_connectedAddress, depositScope, depositIdx, tx.hash);
+      ppBuildDepositSlip({ asset: 'wstETH', amount: depositAmount, scope: depositScope, depositIndex: depositIdx, nullifier, secret, precommitment, txHash: tx.hash, depositor: _connectedAddress });
 
       setShown('ppNoteBox', true);
 
@@ -10707,17 +10734,17 @@ async function ppDeposit() {
         receipt = await waitForTx(tx);
       } catch (waitErr) {
         if (ppIsFinalFailedDepositError(waitErr)) {
-          ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+          ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
         }
         throw waitErr;
       }
 
       if (receipt && receipt.status === 1) {
-        ppConfirmPendingDepositIndex(_connectedAddress, scope, depositIdx, tx.hash);
+        ppConfirmPendingDepositIndex(_connectedAddress, depositScope, depositIdx, tx.hash);
         const routeLabel = useLido ? 'Lido' : 'DEX';
         showStatus(`Zap complete! ETH staked via ${routeLabel} \u2192 wstETH deposited to Privacy Pools.`, 'success');
       } else if (receipt && receipt.status === 0) {
-        ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+        ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
         showStatus('Transaction may have failed. Check Etherscan.', 'error');
       } else {
         showStatus('Transaction may have failed. Check Etherscan.', 'error');
@@ -10757,16 +10784,21 @@ async function ppDeposit() {
 
     const ppKeys = await ppEnsureMasterKeys();
     const { masterNullifier, masterSecret } = ppKeys.safe;
-    const scope = ppComputeScope(_ppSelectedAsset);
-    let depositIdx, nullifier, secret, precommitment;
-
-    let tx;
+    depositScope = ppComputeScope(_ppSelectedAsset);
     if (isERC20PP) {
       // ERC20 (BOLD/wstETH): use zRouter multicall for single-tx atomic deposit
       // permit(token) → router.deposit(token,0,amt) → execute(PP, deposit(token,amt,precom))
       const tokenAddr = isWSTETH ? WSTETH_ADDRESS : BOLD_ADDRESS;
       const tokenLabel = isWSTETH ? 'wstETH' : 'BOLD';
       const routerPull = ROUTER_IFACE.encodeFunctionData('deposit', [tokenAddr, 0, amount]);
+
+      await ppWithPendingDepositLock(_connectedAddress, depositScope, async () => {
+        const startDepositIdx = await ppResolveNextSafeDepositIndex(_ppSelectedAsset, depositScope, ppKeys, _connectedAddress);
+        depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, depositScope, startDepositIdx);
+        ({ nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, depositScope, depositIdx));
+        ppReservePendingDepositIndex(_connectedAddress, depositScope, depositIdx);
+        hasPendingDepositReservation = true;
+      });
 
       let permitPrefix = [];
       let approved = false;
@@ -10831,16 +10863,10 @@ async function ppDeposit() {
         return await tokenPreflight.allowance(ZROUTER_ADDRESS, PP_ENTRYPOINT);
       });
       if (routerToEPAllowance < amount) {
+        ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
         showStatus(`Router lacks ${tokenLabel} allowance to the Privacy Pools entrypoint. Contact the zFi team to configure router approval.`, 'error');
         return;
       }
-
-      await ppWithPendingDepositLock(_connectedAddress, scope, async () => {
-        const startDepositIdx = await ppResolveNextSafeDepositIndex(_ppSelectedAsset, scope, ppKeys, _connectedAddress);
-        depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, scope, startDepositIdx);
-        ({ nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, scope, depositIdx));
-        ppReservePendingDepositIndex(_connectedAddress, scope, depositIdx);
-      });
 
       try {
         const ppDepositData = PP_DEPOSIT_IFACE.encodeFunctionData('deposit(address,uint256,uint256)', [tokenAddr, amount, precommitment]);
@@ -10854,16 +10880,17 @@ async function ppDeposit() {
           `Confirm ${tokenLabel} Privacy Pools deposit`
         );
       } catch (err) {
-        ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+        ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
         throw err;
       }
     } else {
       const ep = new ethers.Contract(PP_ENTRYPOINT, PP_ENTRYPOINT_ABI, _signer);
-      await ppWithPendingDepositLock(_connectedAddress, scope, async () => {
-        const startDepositIdx = await ppResolveNextSafeDepositIndex(_ppSelectedAsset, scope, ppKeys, _connectedAddress);
-        depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, scope, startDepositIdx);
-        ({ nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, scope, depositIdx));
-        ppReservePendingDepositIndex(_connectedAddress, scope, depositIdx);
+      await ppWithPendingDepositLock(_connectedAddress, depositScope, async () => {
+        const startDepositIdx = await ppResolveNextSafeDepositIndex(_ppSelectedAsset, depositScope, ppKeys, _connectedAddress);
+        depositIdx = await ppFindUnusedDepositIndex(masterNullifier, masterSecret, depositScope, startDepositIdx);
+        ({ nullifier, secret, precommitment } = ppDeriveDepositKeys(masterNullifier, masterSecret, depositScope, depositIdx));
+        ppReservePendingDepositIndex(_connectedAddress, depositScope, depositIdx);
+        hasPendingDepositReservation = true;
       });
       try {
         setText(btn, 'Confirm in wallet...');
@@ -10872,12 +10899,12 @@ async function ppDeposit() {
           'Confirm Privacy Pools deposit'
         );
       } catch (err) {
-        ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+        ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
         throw err;
       }
     }
-    ppReservePendingDepositIndex(_connectedAddress, scope, depositIdx, tx.hash);
-    ppBuildDepositSlip({ asset: _ppSelectedAsset, amount, scope, depositIndex: depositIdx, nullifier, secret, precommitment, txHash: tx.hash, depositor: _connectedAddress });
+    ppReservePendingDepositIndex(_connectedAddress, depositScope, depositIdx, tx.hash);
+    ppBuildDepositSlip({ asset: _ppSelectedAsset, amount, scope: depositScope, depositIndex: depositIdx, nullifier, secret, precommitment, txHash: tx.hash, depositor: _connectedAddress });
 
     setShown('ppNoteBox', true);
 
@@ -10887,22 +10914,25 @@ async function ppDeposit() {
       receipt = await waitForTx(tx);
     } catch (waitErr) {
       if (ppIsFinalFailedDepositError(waitErr)) {
-        ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+        ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
       }
       throw waitErr;
     }
 
     if (receipt && receipt.status === 1) {
-      ppConfirmPendingDepositIndex(_connectedAddress, scope, depositIdx, tx.hash);
+      ppConfirmPendingDepositIndex(_connectedAddress, depositScope, depositIdx, tx.hash);
       showStatus('Deposit confirmed!', 'success');
     } else if (receipt && receipt.status === 0) {
-      ppClearPendingDepositIndex(_connectedAddress, scope, depositIdx);
+      ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
       showStatus('Transaction may have failed. Check Etherscan.', 'error');
     } else {
       showStatus('Transaction may have failed. Check Etherscan.', 'error');
     }
     updatePPBalance();
   } catch (e) {
+    if (hasPendingDepositReservation && depositScope != null && depositIdx != null && !tx?.hash) {
+      ppClearPendingDepositIndex(_connectedAddress, depositScope, depositIdx);
+    }
     console.error('ppDeposit error:', e);
     const errStr = String(e?.data || e?.message || e?.reason || e || '');
     const _ppInputAsset = _ppZapMode ? 'ETH' : _ppSelectedAsset;
@@ -10980,6 +11010,7 @@ const PP_MT_LEAVES_API = PP_ASP_API_BASE + '/mt-leaves';
 const PP_DEPOSITS_BY_LABEL_API = PP_ASP_API_BASE + '/deposits-by-label';
 const PP_MT_LEAVES_CACHE_TTL_MS = 30_000;
 const PP_RELAYER_DETAILS_CACHE_TTL_MS = 60_000;
+const PP_ASP_FETCH_TIMEOUT_MS = 12_000;
 const PP_REVIEW_STATUS = Object.freeze({
   PENDING: 'pending',
   APPROVED: 'approved',
@@ -11020,6 +11051,47 @@ function ppScheduleIdle(fn, timeout = 2000) {
   return setTimeout(fn, Math.min(timeout, 500));
 }
 
+function ppCreateTimedAbortContext(timeoutMs = PP_ASP_FETCH_TIMEOUT_MS, abortSignal = null) {
+  const controller = new AbortController();
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, timeoutMs);
+  const forwardAbort = () => controller.abort();
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      controller.abort();
+    } else {
+      abortSignal.addEventListener('abort', forwardAbort, { once: true });
+    }
+  }
+  return {
+    signal: controller.signal,
+    didTimeout: () => didTimeout,
+    cleanup() {
+      clearTimeout(timeoutId);
+      if (abortSignal) abortSignal.removeEventListener('abort', forwardAbort);
+    },
+  };
+}
+
+async function ppFetchJson(url, { headers = {}, abortSignal = null, timeoutMs = PP_ASP_FETCH_TIMEOUT_MS } = {}) {
+  const abortCtx = ppCreateTimedAbortContext(timeoutMs, abortSignal);
+  try {
+    const resp = await fetch(url, { headers, signal: abortCtx.signal });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return await resp.json();
+  } catch (err) {
+    if (abortCtx.didTimeout()) {
+      throw new Error('Privacy Pools API request timed out');
+    }
+    throw err;
+  } finally {
+    abortCtx.cleanup();
+  }
+}
+
 async function ppFetchMtLeaves(scope, forceRefresh = false) {
   const cacheKey = String(scope);
   const now = Date.now();
@@ -11033,11 +11105,9 @@ async function ppFetchMtLeaves(scope, forceRefresh = false) {
   }
 
   const pending = (async () => {
-    const resp = await fetch(PP_MT_LEAVES_API, {
+    const apiData = await ppFetchJson(PP_MT_LEAVES_API, {
       headers: { 'X-Pool-Scope': cacheKey }
     });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const apiData = await resp.json();
     if (!apiData.aspLeaves || !Array.isArray(apiData.aspLeaves) || apiData.aspLeaves.length === 0) {
       throw new Error('No ASP leaves returned');
     }
@@ -11070,21 +11140,20 @@ async function ppFetchMtLeaves(scope, forceRefresh = false) {
   }
 }
 
-async function ppFetchDepositsByLabel(scope, labels) {
+async function ppFetchDepositsByLabel(scope, labels, abortSignal = null) {
   const scopeKey = String(scope);
   const uniqueLabels = Array.from(new Set((Array.isArray(labels) ? labels : [])
     .filter(label => label != null)
     .map(label => String(label))));
   if (!uniqueLabels.length) return [];
 
-  const resp = await fetch(PP_DEPOSITS_BY_LABEL_API, {
+  const apiData = await ppFetchJson(PP_DEPOSITS_BY_LABEL_API, {
+    abortSignal,
     headers: {
       'X-Pool-Scope': scopeKey,
       'X-Labels': uniqueLabels.join(','),
     }
   });
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  const apiData = await resp.json();
   if (!Array.isArray(apiData)) {
     throw new Error('Invalid deposits-by-label response');
   }
@@ -11979,12 +12048,13 @@ async function ppwLoadDeposits() {
           if (labels.length) {
             const [mtData, depositData] = await Promise.all([
               ppFetchMtLeaves(scope),
-              ppFetchDepositsByLabel(scope, labels),
+              ppFetchDepositsByLabel(scope, labels, _ppwLoadAbort.signal),
             ]);
             aspLeaves = mtData?.aspLeaves || [];
             depositsByLabel = Array.isArray(depositData) ? depositData : [];
           }
         } catch (statusErr) {
+          if (statusErr?.name === 'AbortError' && _ppwLoadAbort?.signal?.aborted) throw statusErr;
           statusFetchFailed = true;
           _ppwLoadWarnings.push({ asset, kind: 'review-status' });
           console.warn(`Load: failed to fetch ${asset} review status data:`, statusErr);
@@ -12361,7 +12431,7 @@ async function ppwWithdraw() {
         // R-4: Protocol accepts a window of recent roots, not only currentRoot().
         // Warn but allow proceed — the on-chain verifier will reject if truly invalid.
         log('<b>Warning:</b> State tree root differs from onchain currentRoot (local 0x' + stateTree.root.toString(16).slice(0, 16) + '... vs onchain 0x' + onChainStateRoot.toString(16).slice(0, 16) + '...). This may still be accepted if within the recent root window.');
-        showStatus('State root slightly behind onchain. This is normal — withdrawal will likely succeed. If not, retry in a few minutes.', 'error');
+        showStatus('State root slightly behind onchain. This is normal — withdrawal will likely succeed. If not, retry in a few minutes.', '');
       } else {
         log('State root verified against onchain pool.currentRoot().');
       }

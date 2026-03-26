@@ -46,31 +46,38 @@ async function ppProviderGetLogsWithRetry(provider, request, attempts = 3) {
   throw lastErr;
 }
 
+const PP_LOG_CHUNK_MAX_DEPTH = 12;
+
 function ppIsRangeLimitedLogsError(err) {
   const msg = String(err?.message || err || '').toLowerCase();
   return (
-    msg.includes('range') ||
-    msg.includes('limit') ||
-    msg.includes('10000') ||
-    msg.includes('too many') ||
+    msg.includes('block range') ||
+    msg.includes('maximum block range') ||
     msg.includes('max block range') ||
     msg.includes('query exceeds') ||
-    msg.includes('exceeded max allowed range')
+    msg.includes('exceeded max allowed range') ||
+    msg.includes('too many results') ||
+    /limited to 0\s*-\s*\d+\s*blocks range/.test(msg) ||
+    /ranges? over \d+.*not supported/.test(msg)
   );
 }
 
-async function ppGetLogsChunked(provider, filter, fromBlock, toBlock, chunkSize = 1250000) {
+async function ppGetLogsChunked(provider, filter, fromBlock, toBlock, chunkSize = 1250000, depth = 0, maxDepth = PP_LOG_CHUNK_MAX_DEPTH) {
   try {
     return await ppProviderGetLogsWithRetry(provider, { ...filter, fromBlock, toBlock });
   } catch (e) {
     if (!ppIsRangeLimitedLogsError(e)) throw e;
     if (fromBlock >= toBlock) throw e;
+    if (depth >= maxDepth) {
+      throw new Error('RPC log range limit persisted after maximum subdivision: ' + String(e?.message || e || 'unknown error'));
+    }
     const logs = [];
     const span = toBlock - fromBlock + 1;
-    const nextChunkSize = Math.max(1, Math.floor(Math.min(chunkSize, span - 1) / 4));
+    const nextChunkSize = Math.max(1, Math.floor(Math.min(chunkSize, span - 1) / 2));
+    if (nextChunkSize >= span) throw e;
     for (let start = fromBlock; start <= toBlock; start += nextChunkSize) {
       const end = Math.min(start + nextChunkSize - 1, toBlock);
-      logs.push(...await ppGetLogsChunked(provider, filter, start, end, nextChunkSize));
+      logs.push(...await ppGetLogsChunked(provider, filter, start, end, nextChunkSize, depth + 1, maxDepth));
     }
     return logs;
   }
@@ -256,6 +263,17 @@ await test('transient timeouts are retried before range subdivision', async () =
   assert.equal(provider.calls.length, 2);
 });
 
+await test('transient retries still fail after the third timeout', async () => {
+  quoteRPC = null;
+  const transientFailures = new Map([['100:1099', 3]]);
+  const provider = makeRangeLimitedProvider({ maxRange: 10_000, transientFailures });
+  await assert.rejects(
+    () => ppGetLogsChunked(provider, { address: '0xpool' }, 100, 1099),
+    /timeout while fetching logs/
+  );
+  assert.equal(provider.calls.length, 3);
+});
+
 await test('non-range errors still fail closed', async () => {
   quoteRPC = null;
   const provider = makeRangeLimitedProvider({ maxRange: 50_000, nonRangeFailure: 'execution reverted' });
@@ -265,12 +283,31 @@ await test('non-range errors still fail closed', async () => {
   );
 });
 
+await test('rate-limit errors are not misclassified as range limits', async () => {
+  quoteRPC = null;
+  const provider = makeRangeLimitedProvider({ maxRange: 50_000, nonRangeFailure: 'rate limit exceeded' });
+  await assert.rejects(
+    () => ppGetLogsChunked(provider, { address: '0xpool' }, 1, 100),
+    /rate limit exceeded/
+  );
+  assert.equal(provider.calls.length, 3);
+});
+
 await test('single-block range-limit errors bubble when no smaller split exists', async () => {
   quoteRPC = null;
   const provider = makeRangeLimitedProvider({ maxRange: 0 });
   await assert.rejects(
     () => ppGetLogsChunked(provider, { address: '0xpool' }, 42, 42),
     /exceed maximum block range/
+  );
+});
+
+await test('range-limited recursion stops at the maximum subdivision depth', async () => {
+  quoteRPC = null;
+  const provider = makeRangeLimitedProvider({ maxRange: 0 });
+  await assert.rejects(
+    () => ppGetLogsChunked(provider, { address: '0xpool' }, 1, 1_250_000, 1_250_000, 0, 2),
+    /maximum subdivision/
   );
 });
 
