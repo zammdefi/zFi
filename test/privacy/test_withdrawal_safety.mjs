@@ -8,7 +8,6 @@
 //   - Leaf index 0-based vs 1-based fallback logic
 //   - Relay fee cap enforcement (fee <= maxRelayFeeBPS)
 //   - Change note index resolution (3-tier fallback)
-//   - Note parsing & asset normalization
 //   - Commitment formula verification
 //   - LeanIMT (Merkle tree) build & proof correctness
 //   - Sibling padding to circuit tree depth (32)
@@ -84,10 +83,14 @@ function ppInferDepositNoteIndex(masterNullifier, scope, noteNullifier, maxIndex
   return null;
 }
 
-function ppResolveNextWithdrawalIndex(masterNullifier, scope, label, noteNullifier, noteWithdrawalIndex) {
+function ppResolveNextWithdrawalIndex(masterNullifier, scope, label, noteNullifier, noteWithdrawalIndex, noteDepositIndex = null) {
   const explicitIdx = ppParseNonNegativeInt(noteWithdrawalIndex);
   if (explicitIdx != null) {
     return { nextIndex: explicitIdx + 1, source: 'note', currentIndex: explicitIdx };
+  }
+  const explicitDepositIdx = ppParseNonNegativeInt(noteDepositIndex);
+  if (explicitDepositIdx != null) {
+    return { nextIndex: 0, source: 'loaded-deposit', currentIndex: null, depositIndex: explicitDepositIdx };
   }
   const inferredWithdrawalCurrent = ppInferWithdrawalNoteIndex(masterNullifier, label, noteNullifier);
   if (inferredWithdrawalCurrent != null) {
@@ -449,6 +452,18 @@ test('tier 3: deposit at index 0', () => {
   assert.equal(r.nextIndex, 0);
 });
 
+test('loaded pool account depositIndex bypasses inference scan limits', () => {
+  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 5000);
+  const label = dk.precommitment;
+  const inferred = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, null);
+  assert.equal(inferred.source, 'unknown');
+
+  const loaded = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, null, 5000);
+  assert.equal(loaded.source, 'loaded-deposit');
+  assert.equal(loaded.depositIndex, 5000);
+  assert.equal(loaded.nextIndex, 0);
+});
+
 test('unknown: unrecognized nullifier → nextIndex is null (blocks partial withdrawal)', () => {
   const bogusNullifier = poseidon1([999999n]);
   const label = poseidon2([1n, 2n]);
@@ -487,6 +502,31 @@ test('chained partial withdrawals: index monotonically increases', () => {
   }
   // Indices should be 0, 1, 2 (monotonically increasing)
   assert.deepEqual(indices, [0, 1, 2]);
+});
+
+test('full withdrawal can use arbitrary fresh secrets for a zero-value change commitment', () => {
+  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 4);
+  const label = dk.precommitment;
+  const randomNullifier = poseidon1([901n]);
+  const randomSecret = poseidon1([902n]);
+  const zeroCommitment = computeCommitment(0n, label, poseidon2([randomNullifier, randomSecret]));
+
+  assert.notEqual(randomNullifier, dk.nullifier);
+  assert.notEqual(randomSecret, dk.secret);
+  assert(zeroCommitment > 0n && zeroCommitment < SNARK_SCALAR_FIELD);
+});
+
+test('full withdrawal does not require deterministic lineage resolution', () => {
+  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 1);
+  const label = dk.precommitment;
+  const unresolved = ppResolveNextWithdrawalIndex(MN, SCOPE, label, 123456789n, null);
+  assert.equal(unresolved.nextIndex, null);
+
+  const randomNullifier = poseidon1([903n]);
+  const randomSecret = poseidon1([904n]);
+  const zeroCommitment = computeCommitment(0n, label, poseidon2([randomNullifier, randomSecret]));
+
+  assert(zeroCommitment > 0n && zeroCommitment < SNARK_SCALAR_FIELD);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -908,7 +948,6 @@ test('context hash: zero scope still produces valid context', () => {
 // tier-2 inference. Missing `nullifier` or `secret` means total fund loss.
 
 function buildChangeNote({ newNullifier, newSecret, changeValue, label, changeIdx, changeLeafIndex, changeCommitment, wAsset }) {
-  // Mirrors lines 10282-10291 of index.html
   return {
     nullifier: '0x' + newNullifier.toString(16).padStart(64, '0'),
     secret: '0x' + newSecret.toString(16).padStart(64, '0'),
@@ -935,8 +974,7 @@ test('change note: contains all required fields for ETH', () => {
   assert.equal(typeof note.leafIndex, 'number');
   assert.equal(typeof note.commitment, 'string');
   assert.equal(note.asset, undefined, 'ETH notes omit asset field');
-  // Verify hex-padded to 64 chars (32 bytes)
-  assert.equal(note.nullifier.length, 66); // 0x + 64
+  assert.equal(note.nullifier.length, 66);
   assert.equal(note.secret.length, 66);
   assert.equal(note.label.length, 66);
 });
@@ -957,7 +995,6 @@ test('change note: withdrawalIndex is preserved (prevents tier-2 fallback)', () 
     changeCommitment: '0xaa', wAsset: 'ETH',
   });
   assert.equal(note.withdrawalIndex, 3);
-  // Parsing it back should yield tier-1 resolution
   const resolved = ppResolveNextWithdrawalIndex(0n, 0n, 0n, 0n, note.withdrawalIndex);
   assert.equal(resolved.source, 'note');
   assert.equal(resolved.nextIndex, 4);
@@ -970,7 +1007,6 @@ test('change note: value is string representation of BigInt', () => {
     changeCommitment: '0x01', wAsset: 'ETH',
   });
   assert.equal(note.value, '999999999999999999');
-  // Must survive JSON round-trip without precision loss
   const parsed = JSON.parse(JSON.stringify(note));
   assert.equal(BigInt(parsed.value), 999999999999999999n);
 });
@@ -993,12 +1029,7 @@ test('change note: missing leafIndex is null (not undefined)', () => {
     label: 3n, changeIdx: 0, changeLeafIndex: undefined,
     changeCommitment: '0x01', wAsset: 'ETH',
   });
-  // leafIndex is undefined in the object, but that's what happens when
-  // the receipt doesn't emit LeafInserted. The user can still resolve
-  // it later via stateTreeLeaves scan.
   assert.equal(note.leafIndex, undefined);
-  // But the note is still valid for withdrawal (leafIndex is resolved at
-  // withdrawal time from the API tree data, not from the note).
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
