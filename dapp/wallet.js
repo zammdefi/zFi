@@ -21,6 +21,7 @@ window._signer = null;
 window._connectedAddress = null;
 window._isWalletConnect = false;
 window._wcDeepLink = null;
+window._walletSendCalls = false; // ERC-5792 wallet_sendCalls support
 window.eip6963Providers = new Map();
 
 window._connectedWalletProvider = null;
@@ -180,6 +181,11 @@ async function connectWithWallet(walletKey) {
     document.getElementById('walletBtn').classList.add('connected');
     resolveWeiName(_connectedAddress);
     updateWcBanner();
+    // ERC-5792: probe wallet_sendCalls support (non-blocking, no delay to connect)
+    _walletSendCalls = false;
+    walletProvider.request({ method: 'wallet_getCapabilities', params: [_connectedAddress] }).then(caps => {
+      if (caps && (caps['0x1']?.atomicBatch?.supported || caps['0x1']?.['atomic-batch']?.supported)) _walletSendCalls = true;
+    }).catch(() => {});
     if (oldWP && _walletEventHandlers) { try { oldWP.removeListener('accountsChanged', _walletEventHandlers.accountsChanged); oldWP.removeListener('chainChanged', _walletEventHandlers.chainChanged); } catch (e) {} }
     _walletEventHandlers = { accountsChanged: () => window.location.reload(), chainChanged: () => window.location.reload() };
     walletProvider.on('accountsChanged', _walletEventHandlers.accountsChanged);
@@ -196,7 +202,7 @@ window.disconnectWallet = function() {
   if (_connectedWalletProvider && _walletEventHandlers) { try { _connectedWalletProvider.removeListener('accountsChanged', _walletEventHandlers.accountsChanged); _connectedWalletProvider.removeListener('chainChanged', _walletEventHandlers.chainChanged); } catch (e) {} }
   _walletEventHandlers = null;
   if (_walletConnectProvider) { try { _walletConnectProvider.disconnect(); } catch (e) {} _walletConnectProvider = null; }
-  _walletProvider = null; _signer = null; _connectedAddress = null; _connectedWalletProvider = null; _isWalletConnect = false; _wcDeepLink = null;
+  _walletProvider = null; _signer = null; _connectedAddress = null; _connectedWalletProvider = null; _isWalletConnect = false; _wcDeepLink = null; _walletSendCalls = false;
   document.getElementById('walletBtn').textContent = 'connect';
   document.getElementById('walletBtn').classList.remove('connected');
   updateWcBanner();

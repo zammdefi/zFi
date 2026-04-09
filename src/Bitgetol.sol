@@ -2,7 +2,7 @@
 pragma solidity ^0.8.33;
 
 contract Bitgetol {
-    address constant BK_SWAP_ROUTER = 0xD1ca1F4dBB645710f5D5a9917AA984a47524f49A; // BKSwapRouter v2
+    address constant BK_SWAP_ROUTER = 0xBc1D9760bd6ca468CA9fB5Ff2CFbEAC35d86c973;
 
     function swap(address router, address tokenIn, address tokenOut, address recipient, bytes calldata data)
         public
