@@ -54,8 +54,8 @@ body.modal-open { overflow:hidden; }
 
 /* Mobile */
 @media (max-width: 600px) {
-  .wallet { top:16px; right:16px; }
-  .wallet button { font-size:11px; }
+  .wallet { top:12px; right:16px; }
+  .wallet button { font-size:12px; padding:12px 0; }
   .wallet-modal-overlay { padding:0; padding-top:0; align-items:flex-end; }
   .wallet-modal { max-width:100%; margin:0; border-left:none; border-right:none; border-bottom:none; max-height:85vh; max-height:85dvh; padding:16px; padding-bottom:max(16px, env(safe-area-inset-bottom)); }
   .wallet-option { padding:14px 16px; }

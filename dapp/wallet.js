@@ -138,10 +138,19 @@ window.closeWalletModal = function() {
 window.toggleWallet = function() { showWalletModal(); };
 window.showWalletModal = showWalletModal;
 
+function readWalletConnectRedirect(metadata) {
+  try {
+    if (metadata?.redirect?.native && /^https?:\/\//i.test(metadata.redirect.native)) return metadata.redirect.native;
+    if (metadata?.redirect?.universal && /^https?:\/\//i.test(metadata.redirect.universal)) return metadata.redirect.universal;
+  } catch (e) {}
+  return null;
+}
+
 // --- Connect ---
-async function connectWithWallet(walletKey) {
+async function connectWithWallet(walletKey, options = {}) {
   if (_isConnecting) return;
   _isConnecting = true;
+  const silent = !!options.silent;
   try {
     closeWalletModal();
     let walletProvider;
@@ -150,12 +159,12 @@ async function connectWithWallet(walletKey) {
       const WCProvider = wcModule?.EthereumProvider;
       if (!WCProvider?.init) throw new Error('WalletConnect not available');
       if (_walletConnectProvider) { try { await _walletConnectProvider.disconnect?.(); } catch (e) {} _walletConnectProvider = null; }
-      _walletConnectProvider = await WCProvider.init({ projectId: WC_PROJECT_ID, chains: [1], showQrModal: true, rpcMap: { 1: 'https://1rpc.io/eth' }, metadata: { name: _appName, description: _appName, url: window.location.origin, icons: [] } });
-      _walletConnectProvider.on('display_uri', () => { try { const s = _walletConnectProvider.session?.peer?.metadata; if (s?.redirect?.native && /^https?:\/\//i.test(s.redirect.native)) _wcDeepLink = s.redirect.native; else if (s?.redirect?.universal && /^https?:\/\//i.test(s.redirect.universal)) _wcDeepLink = s.redirect.universal; } catch (e) {} });
+      _walletConnectProvider = await WCProvider.init({ projectId: WC_PROJECT_ID, chains: [1], showQrModal: !silent, rpcMap: { 1: 'https://1rpc.io/eth' }, metadata: { name: _appName, description: _appName, url: window.location.origin, icons: [] } });
+      if (!silent) _walletConnectProvider.on('display_uri', () => { _wcDeepLink = readWalletConnectRedirect(_walletConnectProvider.session?.peer?.metadata); });
       await _walletConnectProvider.enable();
       walletProvider = _walletConnectProvider;
       _isWalletConnect = true;
-      try { const s = _walletConnectProvider.session?.peer?.metadata; if (s?.redirect?.native && /^https?:\/\//i.test(s.redirect.native)) _wcDeepLink = s.redirect.native; else if (s?.redirect?.universal && /^https?:\/\//i.test(s.redirect.universal)) _wcDeepLink = s.redirect.universal; } catch (e) {}
+      _wcDeepLink = readWalletConnectRedirect(_walletConnectProvider.session?.peer?.metadata);
     } else if (walletKey.startsWith('eip6963_')) {
       const uuid = walletKey.replace('eip6963_', '');
       walletProvider = eip6963Providers.get(uuid)?.provider;
@@ -170,7 +179,7 @@ async function connectWithWallet(walletKey) {
     const chainId = await walletProvider.request({ method: 'eth_chainId' });
     if (BigInt(chainId) !== 1n) {
       try { await walletProvider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x1' }] }); const nc = await walletProvider.request({ method: 'eth_chainId' }); if (BigInt(nc) !== 1n) throw new Error('Chain switch failed'); }
-      catch (switchErr) { console.error('Chain switch failed:', switchErr); document.getElementById('walletBtn').textContent = 'connect'; if (walletKey === 'walletconnect') { try { _walletConnectProvider?.disconnect(); } catch (e) {} _walletConnectProvider = null; } _isWalletConnect = false; _wcDeepLink = null; return; }
+      catch (switchErr) { if (!silent) console.error('Chain switch failed:', switchErr); document.getElementById('walletBtn').textContent = 'connect'; if (!silent && typeof showStatus === 'function') showStatus('Please switch to Ethereum mainnet in your wallet.', 'error'); if (walletKey === 'walletconnect') { try { _walletConnectProvider?.disconnect(); } catch (e) {} _walletConnectProvider = null; } _isWalletConnect = false; _wcDeepLink = null; if (silent) { try { localStorage.removeItem('zfi_wallet'); localStorage.removeItem('zfi_wallet_name'); } catch (_) {} } return; }
     }
     _walletProvider = new ethers.BrowserProvider(walletProvider);
     _signer = await _walletProvider.getSigner();
@@ -187,14 +196,71 @@ async function connectWithWallet(walletKey) {
       if (caps) { const c = caps['0x1']; if (c?.atomicBatch?.supported || c?.['atomic-batch']?.supported || c?.atomic?.status === 'supported' || c?.atomic?.status === 'ready') _walletSendCalls = true; }
     }).catch(() => {});
     if (oldWP && _walletEventHandlers) { try { oldWP.removeListener('accountsChanged', _walletEventHandlers.accountsChanged); oldWP.removeListener('chainChanged', _walletEventHandlers.chainChanged); } catch (e) {} }
-    _walletEventHandlers = { accountsChanged: () => window.location.reload(), chainChanged: () => window.location.reload() };
+    _walletEventHandlers = {
+      accountsChanged: (accts) => {
+        if (!accts || accts.length === 0) { window.disconnectWallet(); return; }
+        // Clear previous session state (PP keys, loaded notes, proof workers)
+        // before re-deriving, so the old account's data is never accessible.
+        for (const fn of _onDisconnectCallbacks) { try { fn(); } catch (e) { console.error('onDisconnect callback error:', e); } }
+        // Re-derive signer/address from the new account without a full reload
+        (async () => {
+          try {
+            _walletProvider = new ethers.BrowserProvider(_connectedWalletProvider);
+            _signer = await _walletProvider.getSigner();
+            _connectedAddress = await _signer.getAddress();
+            document.getElementById('walletBtn').textContent = _connectedAddress.slice(0, 6) + '...' + _connectedAddress.slice(-4);
+            resolveWeiName(_connectedAddress);
+            for (const fn of _onConnectCallbacks) { try { fn(); } catch (e) { console.error('onConnect callback error:', e); } }
+          } catch (e) { console.error('Account change re-derive failed, reloading:', e); window.location.reload(); }
+        })();
+      },
+      chainChanged: (chainId) => {
+        if (BigInt(chainId) !== 1n) {
+          // Wrong chain — disconnect cleanly instead of reloading
+          window.disconnectWallet();
+          if (typeof showStatus === 'function') showStatus('Switched to an unsupported chain. Please reconnect on Ethereum mainnet.', 'error');
+        }
+      },
+    };
     walletProvider.on('accountsChanged', _walletEventHandlers.accountsChanged);
     walletProvider.on('chainChanged', _walletEventHandlers.chainChanged);
-    try { localStorage.setItem('zfi_wallet', walletKey); if (walletKey.startsWith('eip6963_')) { const uuid = walletKey.replace('eip6963_', ''); const name = eip6963Providers.get(uuid)?.info?.name; if (name) localStorage.setItem('zfi_wallet_name', name); } } catch (e) {}
+    try {
+      localStorage.setItem('zfi_wallet', walletKey);
+      if (walletKey === 'walletconnect') {
+        const name = _walletConnectProvider?.session?.peer?.metadata?.name;
+        if (name) localStorage.setItem('zfi_wallet_name', name);
+        else localStorage.removeItem('zfi_wallet_name');
+      } else if (walletKey.startsWith('eip6963_')) {
+        const uuid = walletKey.replace('eip6963_', '');
+        const name = eip6963Providers.get(uuid)?.info?.name;
+        if (name) localStorage.setItem('zfi_wallet_name', name);
+        else localStorage.removeItem('zfi_wallet_name');
+      } else {
+        localStorage.removeItem('zfi_wallet_name');
+      }
+    } catch (e) {}
     for (const fn of _onConnectCallbacks) { try { fn(); } catch (e) { console.error('onConnect callback error:', e); } }
   } catch (error) {
-    console.error('Wallet connect error:', error);
+    if (silent) console.warn('Auto-connect failed:', error?.message || error);
+    else console.error('Wallet connect error:', error);
     document.getElementById('walletBtn').textContent = 'connect';
+    if (silent) {
+      // Auto-connect failed silently — clean up WC provider if applicable
+      if (_walletConnectProvider) { try { _walletConnectProvider.disconnect(); } catch (_) {} _walletConnectProvider = null; }
+      // Only clear saved wallet for permanent failures (wallet not found),
+      // not transient ones (provider not ready, RPC timeout)
+      const errMsg = error?.message || '';
+      if (/not found|not available|unavailable/i.test(errMsg)) {
+        try { localStorage.removeItem('zfi_wallet'); localStorage.removeItem('zfi_wallet_name'); } catch (_) {}
+      }
+    } else {
+      const msg = error?.message || '';
+      if (/user rejected|user denied|user cancelled/i.test(msg)) {
+        if (typeof showStatus === 'function') showStatus('Wallet connection cancelled.', 'error');
+      } else if (typeof showStatus === 'function') {
+        showStatus('Wallet connection failed. Please try again.', 'error');
+      }
+    }
   } finally { _isConnecting = false; }
 }
 
@@ -262,7 +328,18 @@ async function tryAutoConnect() {
             }
           }
         }
-      } else if (savedWallet !== 'walletconnect') {
+      } else if (savedWallet === 'walletconnect') {
+        // Delegate entirely to connectWithWallet in silent mode.
+        // This avoids a separate probe flow that races with manual connects.
+        // _isConnecting serializes all access — if the user clicked WalletConnect
+        // manually before this fires, connectWithWallet returns immediately.
+        // If a manual connect already finished, leave the live session alone.
+        // If silent enable() fails (stale session), connectWithWallet cleans up
+        // the provider and clears localStorage without showing UI errors.
+        if (_isConnecting || _connectedAddress) return;
+        await connectWithWallet('walletconnect', { silent: true });
+        return;
+      } else {
         probe = WALLET_CONFIG[savedWallet]?.getProvider() || window.ethereum;
       }
       if (probe) {
@@ -272,12 +349,20 @@ async function tryAutoConnect() {
           return;
         }
       }
-      await connectWithWallet(savedWallet);
+      await connectWithWallet(savedWallet, { silent: true });
     } catch (e) {
       console.error('Auto-reconnect failed:', e);
       document.getElementById('walletBtn').textContent = 'connect';
     }
   }, 100);
+}
+
+// __WALLET_TEST_API__ is a gated test-only seam for PP wallet tests.
+// Runtime behavior must never depend on it.
+if (globalThis.__WALLET_ENABLE_TEST_API__ === true) {
+  globalThis.__WALLET_TEST_API__ = Object.freeze({
+    connectWithWallet,
+  });
 }
 
 // --- Public init ---
