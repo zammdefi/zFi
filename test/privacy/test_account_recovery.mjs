@@ -14,65 +14,40 @@
 // Usage: node test/privacy/test_account_recovery.mjs
 //
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { createPoseidonContext, createKeyDerivation, createTestRunner, loadPrivacyTestApi } from './_app_source_utils.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT = path.resolve(__dirname, '../..');
+const { poseidon1, poseidon2, poseidon3 } = createPoseidonContext();
+const { ppDeriveDepositKeys, ppDeriveWithdrawalKeys } = createKeyDerivation(poseidon2, poseidon3);
+const { test, done } = createTestRunner();
+const TEST_CONSOLE = { log() {}, warn() {}, error() {} };
 
-const ctx = vm.createContext({
-  window: {},
-  atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-  Uint8Array,
-  Array,
-  BigInt,
-});
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon1.min.js'), 'utf8'), ctx);
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon2.min.js'), 'utf8'), ctx);
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon3.min.js'), 'utf8'), ctx);
+const { api } = loadPrivacyTestApi();
 
-const { poseidon1, poseidon2, poseidon3 } = ctx.window;
-
-function ppDeriveDepositKeys(masterNullifier, masterSecret, scope, index) {
-  const nullifier = poseidon3([masterNullifier, scope, BigInt(index)]);
-  const secret = poseidon3([masterSecret, scope, BigInt(index)]);
-  const precommitment = poseidon2([nullifier, secret]);
-  return { nullifier, secret, precommitment };
+function createPrivacyTestContext({ globals = {}, statePatch = null } = {}) {
+  return loadPrivacyTestApi({
+    globals: {
+      console: TEST_CONSOLE,
+      ...globals,
+    },
+    statePatch,
+  });
 }
 
-function ppDeriveWithdrawalKeys(masterNullifier, masterSecret, label, withdrawalIndex) {
-  const nullifier = poseidon3([masterNullifier, label, BigInt(withdrawalIndex)]);
-  const secret = poseidon3([masterSecret, label, BigInt(withdrawalIndex)]);
-  const precommitment = poseidon2([nullifier, secret]);
-  return { nullifier, secret, precommitment };
-}
+const { ppHashHex } = api.shared;
+const {
+  ppBuildWalletSeedVersionOrder,
+  ppShouldRetryWalletSeedVersion,
+} = api.wallet;
+const {
+  ppCompareLoadedAccounts,
+  ppGetRecoveredSafeDepositIndex,
+  ppTraceLoadedAccountChain,
+  ppNormalizePendingDepositReservations,
+  ppResolveReservedSafeDepositIndex,
+} = api.load;
 
-function ppHashHex(value) {
-  return '0x' + BigInt(value).toString(16).padStart(64, '0');
-}
-
-function ppCompareLoadedAccounts(a, b) {
-  const assetOrder = { ETH: 0, BOLD: 1, wstETH: 2 };
-  const assetDelta = (assetOrder[a.asset] ?? 99) - (assetOrder[b.asset] ?? 99);
-  if (assetDelta !== 0) return assetDelta;
-
-  const aDepositBlock = a.depositBlockNumber == null ? Number.MAX_SAFE_INTEGER : Number(a.depositBlockNumber);
-  const bDepositBlock = b.depositBlockNumber == null ? Number.MAX_SAFE_INTEGER : Number(b.depositBlockNumber);
-  if (aDepositBlock !== bDepositBlock) return aDepositBlock - bDepositBlock;
-
-  const aDepositIdx = a.depositIndex == null ? Number.MAX_SAFE_INTEGER : Number(a.depositIndex);
-  const bDepositIdx = b.depositIndex == null ? Number.MAX_SAFE_INTEGER : Number(b.depositIndex);
-  if (aDepositIdx !== bDepositIdx) return aDepositIdx - bDepositIdx;
-
-  const aBlock = a.blockNumber == null ? Number.MAX_SAFE_INTEGER : Number(a.blockNumber);
-  const bBlock = b.blockNumber == null ? Number.MAX_SAFE_INTEGER : Number(b.blockNumber);
-  if (aBlock !== bBlock) return aBlock - bBlock;
-
-  return String(a.txHash || '').localeCompare(String(b.txHash || ''));
-}
+const CONNECTED_ADDRESS = '0x1111111111111111111111111111111111111111';
+const ROUTER_ADDRESS = '0x9999999999999999999999999999999999999999';
 
 const PP_REVIEW_STATUS = {
   PENDING: 'pending',
@@ -105,7 +80,11 @@ function ppLoadedAccountLabelKey(label) {
   return label == null ? null : BigInt(label).toString();
 }
 
-function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { statusFetchFailed = false } = {}) {
+function ppNormalizeAddressLower(address) {
+  return String(address || '').trim().toLowerCase();
+}
+
+function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { statusFetchFailed = false, aspRootVerified = true, connectedAddress = CONNECTED_ADDRESS } = {}) {
   const aspLeafSet = new Set((Array.isArray(aspLeaves) ? aspLeaves : []).map((leaf) => BigInt(leaf).toString()));
   const depositMap = new Map();
   for (const deposit of Array.isArray(depositsByLabel) ? depositsByLabel : []) {
@@ -116,8 +95,12 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
   const missingLabels = new Set();
   const nextRows = (Array.isArray(rows) ? rows : []).map((row) => {
     const labelKey = ppLoadedAccountLabelKey(row.label);
-    const deposit = labelKey ? depositMap.get(labelKey) : null;
+    const deposit = labelKey != null ? depositMap.get(labelKey) : null;
     const timestamp = deposit?.timestamp ?? null;
+    const amount = row.value != null ? BigInt(row.value) : 0n;
+    const depositor = row?.depositor ? ppNormalizeAddressLower(row.depositor) : '';
+    const normalizedConnected = connectedAddress ? ppNormalizeAddressLower(connectedAddress) : '';
+    const isOriginalDepositor = !!(depositor && normalizedConnected && depositor === normalizedConnected);
 
     if (row.ragequit) {
       return {
@@ -126,6 +109,8 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
         reviewStatus: PP_REVIEW_STATUS.EXITED,
         isValid: false,
         isWithdrawable: false,
+        isOriginalDepositor,
+        isRagequittable: false,
         timestamp,
       };
     }
@@ -137,6 +122,8 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
         reviewStatus: PP_REVIEW_STATUS.SPENT,
         isValid: false,
         isWithdrawable: false,
+        isOriginalDepositor,
+        isRagequittable: false,
         timestamp,
       };
     }
@@ -144,19 +131,18 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
     let reviewStatus = PP_REVIEW_STATUS.PENDING;
     if (row.currentCommitmentInserted !== true) {
       reviewStatus = PP_REVIEW_STATUS.PENDING;
-    } else if (statusFetchFailed) {
+    } else if (statusFetchFailed || !aspRootVerified) {
       reviewStatus = PP_REVIEW_STATUS.PENDING;
     } else if (!deposit) {
-      if (labelKey) missingLabels.add(labelKey);
+      if (labelKey != null) missingLabels.add(labelKey);
       reviewStatus = PP_REVIEW_STATUS.PENDING;
     } else {
       reviewStatus = ppNormalizeReviewStatus(deposit.reviewStatus);
-      if (reviewStatus === PP_REVIEW_STATUS.APPROVED && (!labelKey || !aspLeafSet.has(labelKey))) {
+      if (reviewStatus === PP_REVIEW_STATUS.APPROVED && (labelKey == null || !aspLeafSet.has(labelKey))) {
         reviewStatus = PP_REVIEW_STATUS.PENDING;
       }
     }
 
-    const amount = row.value != null ? BigInt(row.value) : 0n;
     const isValid = reviewStatus === PP_REVIEW_STATUS.APPROVED;
     return {
       ...row,
@@ -164,6 +150,8 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
       reviewStatus,
       isValid,
       isWithdrawable: isValid && amount > 0n,
+      isOriginalDepositor,
+      isRagequittable: amount > 0n && isOriginalDepositor,
       timestamp,
     };
   });
@@ -171,15 +159,48 @@ function ppApplyLoadedAccountReviewStatuses(rows, aspLeaves, depositsByLabel, { 
   return { rows: nextRows, missingLabels: Array.from(missingLabels) };
 }
 
-function ppGetRecoveredSafeDepositIndex(migratedCount, safeRows) {
-  let nextIndex = Number.isFinite(Number(migratedCount)) ? Number(migratedCount) : 0;
-  for (const row of Array.isArray(safeRows) ? safeRows : []) {
-    const depositIndex = Number(row?.depositIndex);
-    if (Number.isInteger(depositIndex) && depositIndex >= nextIndex) {
-      nextIndex = depositIndex + 1;
-    }
+
+function ppwHasReusableMasterKeys(masterKeys, connectedAddress = null) {
+  if (!masterKeys || (connectedAddress && masterKeys.address !== connectedAddress)) return false;
+  return Object.keys(masterKeys.versions || {}).length > 0;
+}
+
+function ppwFindSelectedAccountIndex(note, rows) {
+  if (!note) return -1;
+  return (Array.isArray(rows) ? rows : []).findIndex((row) => {
+    if (!row) return false;
+    if (note.commitment && row.commitment && row.commitment === note.commitment) return true;
+    return row.nullifier === note.nullifier && row.secret === note.secret;
+  });
+}
+
+function ppwReconcileSelectedAccount(note, rows) {
+  const selectedIndex = ppwFindSelectedAccountIndex(note, rows);
+  if (selectedIndex < 0) {
+    return { selectedIndex, label: null, note: null };
   }
-  return nextIndex;
+  const row = rows[selectedIndex];
+  const asset = row.asset || note.asset || 'ETH';
+  return {
+    selectedIndex,
+    label: 'PA-' + (selectedIndex + 1),
+    note: {
+      ...note,
+      asset,
+      derivation: row.derivation || note.derivation || 'safe',
+      walletSeedVersion: row.walletSeedVersion || note.walletSeedVersion || null,
+      depositIndex: row.depositIndex != null ? Number(row.depositIndex) : note.depositIndex,
+      withdrawalIndex: row.withdrawalIndex ?? note.withdrawalIndex,
+      leafIndex: row.leafIndex != null ? Number(row.leafIndex) : note.leafIndex,
+      value: row.value != null ? BigInt(row.value) : note.value,
+      label: row.label != null ? BigInt(row.label) : note.label,
+      commitment: row.commitment ?? note.commitment,
+      reviewStatus: ppNormalizeReviewStatus(row.reviewStatus),
+      isValid: !!row.isValid,
+      isWithdrawable: !!row.isWithdrawable,
+      timestamp: row.timestamp ?? null,
+    },
+  };
 }
 
 function ppGetLoadedAccountStatus(row) {
@@ -190,138 +211,12 @@ function ppGetLoadedAccountStatus(row) {
 }
 
 const PP_PENDING_DEPOSIT_RESERVATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES = 25;
+const PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES = 128;
 
-function ppNormalizePendingDepositReservations(entries, minDepositIndex = 0, now = Date.now()) {
-  const seen = new Set();
-  return (Array.isArray(entries) ? entries : [])
-    .map(entry => ({
-      depositIndex: Number(entry?.depositIndex),
-      txHash: entry?.txHash ? String(entry.txHash) : null,
-      createdAt: Number(entry?.createdAt),
-      status: entry?.status === 'confirmed' ? 'confirmed' : 'pending',
-    }))
-    .filter(entry => Number.isInteger(entry.depositIndex) && entry.depositIndex >= minDepositIndex)
-    .filter(entry => Number.isFinite(entry.createdAt) && (now - entry.createdAt) < PP_PENDING_DEPOSIT_RESERVATION_TTL_MS)
-    .sort((a, b) => a.depositIndex - b.depositIndex || b.createdAt - a.createdAt)
-    .filter(entry => {
-      const key = String(entry.depositIndex);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function ppResolveReservedSafeDepositIndex(recoveredIndex, reservations) {
-  const byIndex = new Map((Array.isArray(reservations) ? reservations : []).map(entry => [Number(entry.depositIndex), entry]));
-  let nextIndex = recoveredIndex;
-  while (true) {
-    const reservation = byIndex.get(nextIndex);
-    if (!reservation) return { nextIndex, pendingIndex: null };
-    nextIndex++;
-  }
-}
-
-function ppTraceLoadedAccountChain(initial, withdrawnMap, legacyKeys, safeKeys) {
-  const depositTxHash = initial.depositTxHash;
-  const depositBlockNumber = initial.depositBlockNumber;
-  const initialValue = initial.value;
-  let current = initial;
-  let migrated = false;
-
-  while (current && current.source !== 'spent') {
-    const nullHashHex = ppHashHex(poseidon1([current.nullifier]));
-    const w = withdrawnMap.get(nullHashHex);
-    if (!w) break;
-
-    const changeValue = BigInt(current.value) - BigInt(w.value);
-    if (changeValue <= 0n) {
-      if (changeValue === 0n && current.derivation === 'legacy') {
-        const migratedKeys = ppDeriveWithdrawalKeys(
-          safeKeys.masterNullifier,
-          safeKeys.masterSecret,
-          BigInt(current.label),
-          0,
-        );
-        const expectedMigratedCommitment = poseidon3([changeValue, BigInt(current.label), migratedKeys.precommitment]);
-        if (w.newCommitment && expectedMigratedCommitment === BigInt(w.newCommitment)) {
-          migrated = true;
-        }
-      }
-      current = {
-        value: '0',
-        source: 'spent',
-        depositTxHash,
-        depositBlockNumber,
-        originalValue: initialValue,
-        derivation: current.derivation,
-      };
-      break;
-    }
-
-    const nextIndex = current.withdrawalIndex == null ? 0 : Number(current.withdrawalIndex) + 1;
-    const keyset = current.derivation === 'legacy' ? legacyKeys : safeKeys;
-    const changeKeys = ppDeriveWithdrawalKeys(
-      keyset.masterNullifier,
-      keyset.masterSecret,
-      BigInt(current.label),
-      nextIndex,
-    );
-    const expectedCommitment = poseidon3([changeValue, BigInt(current.label), changeKeys.precommitment]);
-    if (w.newCommitment && expectedCommitment === BigInt(w.newCommitment)) {
-      current = {
-        nullifier: changeKeys.nullifier,
-        secret: changeKeys.secret,
-        precommitment: changeKeys.precommitment,
-        value: changeValue.toString(),
-        label: current.label,
-        commitment: ppHashHex(expectedCommitment),
-        txHash: w.txHash,
-        blockNumber: w.blockNumber,
-        depositTxHash,
-        depositBlockNumber,
-        withdrawalIndex: nextIndex,
-        source: 'change',
-        derivation: current.derivation,
-      };
-      continue;
-    }
-
-    if (current.derivation === 'legacy') {
-      const migratedIndex = 0;
-      const migratedKeys = ppDeriveWithdrawalKeys(
-        safeKeys.masterNullifier,
-        safeKeys.masterSecret,
-        BigInt(current.label),
-        migratedIndex,
-      );
-      const expectedMigratedCommitment = poseidon3([changeValue, BigInt(current.label), migratedKeys.precommitment]);
-      if (w.newCommitment && expectedMigratedCommitment === BigInt(w.newCommitment)) {
-        migrated = true;
-        current = {
-          nullifier: migratedKeys.nullifier,
-          secret: migratedKeys.secret,
-          precommitment: migratedKeys.precommitment,
-          value: changeValue.toString(),
-          label: current.label,
-          commitment: ppHashHex(expectedMigratedCommitment),
-          txHash: w.txHash,
-          blockNumber: w.blockNumber,
-          depositTxHash,
-          depositBlockNumber,
-          withdrawalIndex: migratedIndex,
-          source: 'change',
-          derivation: 'safe',
-          migratedFrom: 'legacy',
-        };
-        continue;
-      }
-    }
-
-    current = null;
-  }
-
-  return { current, migrated };
+function ppResolvePendingDepositReservations(address, scope, recoveredIndex, reservationsByScope = new Map()) {
+  if (!address) return { nextIndex: recoveredIndex };
+  const reservations = reservationsByScope.get(String(scope)) || [];
+  return ppResolveReservedSafeDepositIndex(recoveredIndex, reservations);
 }
 
 function ppCollectWalletAccountsForDerivation({
@@ -336,13 +231,15 @@ function ppCollectWalletAccountsForDerivation({
   keyset,
   legacyKeys,
   safeKeys,
+  walletSeedVersion = null,
   startIndex = 0,
+  maxConsecutiveMisses = PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES,
 }) {
   const results = [];
   let migratedCount = 0;
   let consecutiveMisses = 0;
 
-  for (let index = startIndex; consecutiveMisses < PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES; index++) {
+  for (let index = startIndex; consecutiveMisses <= maxConsecutiveMisses; index++) {
     const dk = ppDeriveDepositKeys(keyset.masterNullifier, keyset.masterSecret, scope, index);
     const pch = ppHashHex(dk.precommitment);
     const ev = depositEvents.get(pch);
@@ -360,6 +257,7 @@ function ppCollectWalletAccountsForDerivation({
       value: ev.value,
       label: ev.label,
       commitment: ev.commitment,
+      depositor: ev.depositor,
       txHash: ev.txHash,
       blockNumber: ev.blockNumber,
       depositTxHash: ev.txHash,
@@ -384,6 +282,7 @@ function ppCollectWalletAccountsForDerivation({
         asset,
         depositIndex: index,
         poolAddress,
+        walletSeedVersion,
         pending: false,
         value: '0',
         label: ragequitLabel,
@@ -393,6 +292,7 @@ function ppCollectWalletAccountsForDerivation({
         depositBlockNumber: initial.depositBlockNumber,
         originalValue: String(originalValue),
         source: 'spent',
+        depositor: initial.depositor,
         derivation: current.derivation,
         ragequit: true,
       });
@@ -402,20 +302,64 @@ function ppCollectWalletAccountsForDerivation({
     const currentCommitment = current.commitment == null
       ? null
       : (typeof current.commitment === 'string' ? current.commitment : ppHashHex(current.commitment));
-    const currentCommitmentInserted = !!currentCommitment && insertedLeaves.has(currentCommitment);
-    const pending = current.source !== 'spent' && currentCommitment && !currentCommitmentInserted;
+    const currentCommitmentInserted = currentCommitment != null && insertedLeaves.has(currentCommitment);
+    const pending = current.source !== 'spent' && currentCommitment != null && !currentCommitmentInserted;
     results.push({
       asset,
       depositIndex: index,
       poolAddress,
+      walletSeedVersion,
       currentCommitment,
       currentCommitmentInserted,
       pending,
+      depositor: initial.depositor,
       ...current,
     });
   }
 
   return { results, migratedCount };
+}
+
+function ppResolveNextSafeDepositIndex({
+  address,
+  asset,
+  scope,
+  keys,
+  depositEvents,
+  withdrawnMap,
+  ragequitMap,
+  reservationsByScope = new Map(),
+}) {
+  const legacyScan = ppCollectWalletAccountsForDerivation({
+    asset,
+    scope,
+    poolAddress: '0xpool',
+    depositEvents,
+    withdrawnMap,
+    ragequitMap,
+    insertedLeaves: new Set(),
+    derivation: 'legacy',
+    keyset: keys.legacy,
+    legacyKeys: keys.legacy,
+    safeKeys: keys.safe,
+  });
+  const safeScan = ppCollectWalletAccountsForDerivation({
+    asset,
+    scope,
+    poolAddress: '0xpool',
+    depositEvents,
+    withdrawnMap,
+    ragequitMap,
+    insertedLeaves: new Set(),
+    derivation: 'safe',
+    keyset: keys.safe,
+    legacyKeys: keys.legacy,
+    safeKeys: keys.safe,
+    startIndex: legacyScan.migratedCount,
+  });
+  const recoveredIndex = ppGetRecoveredSafeDepositIndex(legacyScan.migratedCount, safeScan.results);
+  const reservationState = ppResolvePendingDepositReservations(address, scope, recoveredIndex, reservationsByScope);
+  return reservationState.nextIndex;
 }
 
 function ppAggregatePoolAccountTotals(rows) {
@@ -440,12 +384,13 @@ function ppRowShowsWithdrawButton(row) {
   );
 }
 
-function makeDepositEvent(keys, scope, index, label, value, blockNumber, txHash) {
+function makeDepositEvent(keys, scope, index, label, value, blockNumber, txHash, depositor = CONNECTED_ADDRESS) {
   const dk = ppDeriveDepositKeys(keys.masterNullifier, keys.masterSecret, scope, index);
   return {
     dk,
     event: {
       commitment: ppHashHex(poseidon3([value, label, dk.precommitment])),
+      depositor,
       label,
       value,
       txHash,
@@ -464,21 +409,6 @@ function makeWithdrawalEvent(currentNullifier, withdrawn, newCommitment, blockNu
       blockNumber,
     },
   };
-}
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  \x1b[32mPASS\x1b[0m ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`  \x1b[31mFAIL\x1b[0m ${name}`);
-    console.log(`       ${e.message}`);
-  }
 }
 
 const SCOPE = 0xF241d57C6DebAe225c0F2e6eA1529373C9A9C9fBn;
@@ -623,6 +553,58 @@ test('approved account requires ASP leaf before becoming withdrawable', () => {
   assert.equal(approvedRows[0].isValid, true);
   assert.equal(approvedRows[0].isWithdrawable, true);
   assert.equal(approvedRows[0].timestamp, 111);
+});
+
+test('zero label accounts still hydrate review status and become withdrawable', () => {
+  const zeroLabel = 0n;
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 5, zeroLabel, 8n, 125n, '0xdep-zero-label');
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'ETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 5,
+  });
+
+  const applied = ppApplyLoadedAccountReviewStatuses(results, [zeroLabel], [
+    { label: zeroLabel.toString(), reviewStatus: PP_REVIEW_STATUS.APPROVED, timestamp: 777 },
+  ]).rows;
+  assert.equal(applied[0].label, zeroLabel);
+  assert.equal(applied[0].reviewStatus, PP_REVIEW_STATUS.APPROVED);
+  assert.equal(applied[0].isWithdrawable, true);
+  assert.equal(applied[0].timestamp, 777);
+});
+
+test('approved account stays pending when the ASP root is stale', () => {
+  const label = poseidon2([13n, 99n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 4, label, 8n, 126n, '0xdep-stale-root');
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'ETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 4,
+  });
+
+  const applied = ppApplyLoadedAccountReviewStatuses(results, [label], [
+    { label: label.toString(), reviewStatus: PP_REVIEW_STATUS.APPROVED, timestamp: 112 },
+  ], { aspRootVerified: false }).rows;
+  assert.equal(applied[0].reviewStatus, PP_REVIEW_STATUS.PENDING);
+  assert.equal(applied[0].isWithdrawable, false);
 });
 
 test('missing ASP deposit metadata is surfaced for inserted accounts', () => {
@@ -778,6 +760,31 @@ test('loaded change accounts retain depositIndex and withdrawalIndex', () => {
   assert.equal(results[0].withdrawalIndex, 0);
 });
 
+test('zero change-commitment hashes still reconstruct zero-value change chains', () => {
+  const label = poseidon2([41n, 42n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 6, label, 5n, 135n, '0xdep-zero-change');
+  const { key, event: withdrawalEvent } = makeWithdrawalEvent(dk.nullifier, 5n, 0n, 136n, '0xwd-zero-change');
+
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'ETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map([[key, withdrawalEvent]]),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set(),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 6,
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].source, 'spent');
+  assert.equal(results[0].originalValue, 5n);
+});
+
 test('partial-withdrawal change notes stay pending until the new leaf is inserted', () => {
   const label = poseidon2([40n, 41n]);
   const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 5, label, 10n, 150n, '0xdep9');
@@ -878,6 +885,117 @@ test('failed ASP status fetch keeps inserted accounts fail-closed as pending', (
   assert.equal(ppRowShowsWithdrawButton(applied[0]), false);
 });
 
+test('deposits-by-label validation rejects non-object rows', async () => {
+  const { api: scopedApi, context } = createPrivacyTestContext();
+  context.ppFetchJson = async () => ['not-an-object'];
+
+  await assert.rejects(
+    scopedApi.load.ppFetchDepositsByLabel('scope-non-object', ['101']),
+    /row 0: expected object/,
+  );
+});
+
+test('deposits-by-label validation rejects non-BigInt labels', async () => {
+  const { api: scopedApi, context } = createPrivacyTestContext();
+  context.ppFetchJson = async () => [{
+    label: 'not-a-bigint',
+    reviewStatus: PP_REVIEW_STATUS.APPROVED,
+    timestamp: 1700000000,
+  }];
+
+  await assert.rejects(
+    scopedApi.load.ppFetchDepositsByLabel('scope-bad-label', ['102']),
+    /label must be BigInt-coercible/,
+  );
+});
+
+test('deposits-by-label validation rejects invalid reviewStatus fields', async () => {
+  const { api: scopedApi, context } = createPrivacyTestContext();
+  context.ppFetchJson = async () => [{
+    label: '103',
+    reviewStatus: null,
+    timestamp: 1700000000,
+  }];
+
+  await assert.rejects(
+    scopedApi.load.ppFetchDepositsByLabel('scope-bad-status', ['103']),
+    /reviewStatus must be a string/,
+  );
+});
+
+test('deposits-by-label validation rejects invalid timestamps', async () => {
+  const { api: scopedApi, context } = createPrivacyTestContext();
+  context.ppFetchJson = async () => [{
+    label: '104',
+    reviewStatus: PP_REVIEW_STATUS.APPROVED,
+    timestamp: '1700000000',
+  }];
+
+  await assert.rejects(
+    scopedApi.load.ppFetchDepositsByLabel('scope-bad-timestamp', ['104']),
+    /timestamp must be a finite number/,
+  );
+});
+
+test('malformed deposits-by-label responses keep loaded accounts fail-closed', async () => {
+  const { api: scopedApi, context } = createPrivacyTestContext({
+    globals: {
+      _ppConfig: {
+        pool: '0x1111111111111111111111111111111111111111',
+        minimumDepositAmount: 1n,
+        vettingFeeBPS: 0n,
+        maxRelayFeeBPS: 50n,
+      },
+    },
+  });
+  const label = poseidon2([60n, 61n]);
+  const baseRow = {
+    asset: 'ETH',
+    label,
+    value: '1000000000000000000',
+    source: 'deposit',
+    pending: false,
+    currentCommitmentInserted: true,
+    reviewStatus: PP_REVIEW_STATUS.PENDING,
+    isWithdrawable: false,
+    isValid: false,
+  };
+  context.ppCollectWalletAccountsForDerivation = ({ derivation }) => ({
+    migratedCount: 0,
+    results: derivation === 'safe' ? [baseRow] : [],
+  });
+  context.ppFetchMtLeaves = async () => ({
+    aspLeaves: [label.toString()],
+    stateTreeLeaves: [],
+  });
+  context.ppFetchJson = async () => [{
+    label: label.toString(),
+    reviewStatus: PP_REVIEW_STATUS.APPROVED,
+    timestamp: 'invalid',
+  }];
+  context.ppReadEntrypoint = async (reader) => reader({
+    latestRoot: async () => 0n,
+  });
+
+  const result = await scopedApi.load.ppBuildLoadedPoolAccountsFromEvents([
+    {
+      asset: 'ETH',
+      depositLogs: [],
+      withdrawnLogs: [],
+      ragequitLogs: [],
+      leafLogs: [],
+    },
+  ], { safe: {}, legacy: {} }, 'v2');
+
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].reviewStatus, PP_REVIEW_STATUS.PENDING);
+  assert.equal(result.results[0].isWithdrawable, false);
+  assert.equal(result.results[0].pending, true);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].asset, 'ETH');
+  assert.equal(result.warnings[0].kind, 'review-status');
+});
+
 test('account recovery tolerates sparse gaps before later deposits', () => {
   const label = poseidon2([48n, 49n]);
   const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 24, label, 4n, 155n, '0xdep-gap');
@@ -897,6 +1015,301 @@ test('account recovery tolerates sparse gaps before later deposits', () => {
 
   assert.equal(results.length, 1);
   assert.equal(results[0].depositIndex, 24);
+});
+
+test('account recovery includes deposits at the miss-limit boundary', () => {
+  const label = poseidon2([50n, 51n]);
+  const boundaryIndex = PP_ACCOUNT_SCAN_MAX_CONSECUTIVE_MISSES;
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, boundaryIndex, label, 7n, 156n, '0xdep-boundary');
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'BOLD',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].depositIndex, boundaryIndex);
+});
+
+test('migrated safe recovery reaches the first live note after 25 migrated slots', () => {
+  const label = poseidon2([54n, 55n]);
+  const migratedCount = 25;
+  const firstRecoverableIndex = 50;
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, firstRecoverableIndex, label, 50n, 156n, '0xdep-main-gap');
+  const depositEvents = new Map([[ppHashHex(dk.precommitment), event]]);
+  const baseArgs = {
+    asset: 'BOLD',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents,
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: migratedCount,
+  };
+
+  const mainScan = ppCollectWalletAccountsForDerivation({
+    ...baseArgs,
+    maxConsecutiveMisses: 24,
+  });
+  const currentScan = ppCollectWalletAccountsForDerivation(baseArgs);
+
+  assert.equal(mainScan.results.length, 0, 'main branch stops before the first post-migration safe note');
+  assert.equal(currentScan.results.length, 1, 'current recovery still reaches the first post-migration safe note');
+  assert.equal(currentScan.results[0].depositIndex, firstRecoverableIndex);
+  assert.equal(BigInt(currentScan.results[0].value), 50n);
+});
+
+test('wallet seed version order prefers explicit, active, then stored values', () => {
+  assert.deepEqual(
+    Array.from(ppBuildWalletSeedVersionOrder('v1', 'v2', 'v2')),
+    ['v1', 'v2'],
+  );
+  assert.deepEqual(
+    Array.from(ppBuildWalletSeedVersionOrder(null, 'v2', 'v1')),
+    ['v2', 'v1'],
+  );
+});
+
+test('wallet seed version fallback only retries after a clean empty scan', () => {
+  assert.equal(
+    ppShouldRetryWalletSeedVersion({ results: [], warnings: [] }, true),
+    true,
+  );
+  assert.equal(
+    ppShouldRetryWalletSeedVersion({ results: [], warnings: [{ asset: 'BOLD' }] }, true),
+    false,
+  );
+  assert.equal(
+    ppShouldRetryWalletSeedVersion({ results: [{}], warnings: [] }, true),
+    false,
+  );
+});
+
+test('recovered rows retain wallet seed version for later withdrawals', () => {
+  const label = poseidon2([52n, 53n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 3, label, 9n, 157n, '0xdep-version');
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'BOLD',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    walletSeedVersion: 'v1',
+    startIndex: 3,
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].walletSeedVersion, 'v1');
+});
+
+
+test('router-mediated deposits still recover by derived commitment', () => {
+  const label = poseidon2([61n, 62n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 12, label, 50n, 200n, '0xdep-router', ROUTER_ADDRESS);
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'BOLD',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 12,
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].depositIndex, 12);
+  assert.equal(BigInt(results[0].value), 50n);
+  assert.equal(results[0].depositor, ROUTER_ADDRESS);
+});
+
+test('router-mediated deposits are recoverable but not ragequittable from the wallet', () => {
+  const label = poseidon2([71n, 72n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 13, label, 25n, 205n, '0xdep-router-rq', ROUTER_ADDRESS);
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'wstETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 13,
+  });
+  const { api: runtimeApi } = createPrivacyTestContext({
+    globals: { _connectedAddress: CONNECTED_ADDRESS },
+  });
+  const applied = runtimeApi.load.ppApplyLoadedAccountReviewStatuses(results, [label], [
+    { label: String(label), reviewStatus: 'approved', timestamp: 123 },
+  ]).rows;
+
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].isWithdrawable, true);
+  assert.equal(applied[0].isOriginalDepositor, false);
+  assert.equal(applied[0].isRagequittable, false);
+});
+
+test('declined accounts stay ragequittable for the original depositor wallet', () => {
+  const label = poseidon2([81n, 82n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 14, label, 18n, 206n, '0xdep-declined-rq', CONNECTED_ADDRESS);
+  const { results } = ppCollectWalletAccountsForDerivation({
+    asset: 'ETH',
+    scope: SCOPE,
+    poolAddress: '0xpool',
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    insertedLeaves: new Set([event.commitment]),
+    derivation: 'safe',
+    keyset: SAFE_KEYS,
+    legacyKeys: LEGACY_KEYS,
+    safeKeys: SAFE_KEYS,
+    startIndex: 14,
+  });
+  const { api: runtimeApi } = createPrivacyTestContext({
+    globals: { _connectedAddress: CONNECTED_ADDRESS },
+  });
+  const applied = runtimeApi.load.ppApplyLoadedAccountReviewStatuses(results, [label], [
+    { label: String(label), reviewStatus: 'declined', timestamp: 321 },
+  ]).rows;
+
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].reviewStatus, PP_REVIEW_STATUS.DECLINED);
+  assert.equal(applied[0].isWithdrawable, false);
+  assert.equal(applied[0].isOriginalDepositor, true);
+  assert.equal(applied[0].isRagequittable, true);
+});
+
+
+test('oversized event caches are dropped instead of truncating history', () => {
+  const { api: runtimeApi, context } = createPrivacyTestContext();
+  const oversizedEntry = {
+    depositLogs: [{
+      topics: ['0xaaa'],
+      data: '0x' + 'a'.repeat(1_600_000),
+      transactionHash: '0xdeposit',
+      blockNumber: 10,
+    }],
+    withdrawnLogs: [],
+    ragequitLogs: [],
+    leafLogs: [],
+    upToBlock: 100,
+    leafUpToBlock: null,
+  };
+
+  runtimeApi.load.ppSaveCachedEventLogs('ETH', oversizedEntry);
+
+  assert.equal(context.localStorage.getItem('pp-events-v2-ETH'), null);
+  assert.equal(runtimeApi.load.ppLoadCachedEventLogs('ETH'), null);
+});
+
+test('background refresh only starts after master keys are actually cached', () => {
+  assert.equal(
+    ppwHasReusableMasterKeys({ address: '0xabc', activeVersion: null, versions: {} }, '0xabc'),
+    false,
+  );
+  assert.equal(
+    ppwHasReusableMasterKeys({ address: '0xabc', activeVersion: 'v2', versions: { v2: { safe: {}, legacy: {} } } }, '0xabc'),
+    true,
+  );
+  assert.equal(
+    ppwHasReusableMasterKeys({ address: '0xabc', activeVersion: 'v2', versions: { v2: { safe: {}, legacy: {} } } }, '0xdef'),
+    false,
+  );
+});
+
+test('selected pool account is reconciled by commitment after refresh reorders rows', () => {
+  const selectedNote = {
+    asset: 'BOLD',
+    derivation: 'safe',
+    walletSeedVersion: 'v2',
+    nullifier: 11n,
+    secret: 12n,
+    commitment: '0xabc',
+    reviewStatus: PP_REVIEW_STATUS.APPROVED,
+    isValid: true,
+    isWithdrawable: true,
+    value: 50n,
+  };
+  const rows = [
+    {
+      asset: 'ETH',
+      nullifier: 1n,
+      secret: 2n,
+      commitment: '0xeth',
+      reviewStatus: PP_REVIEW_STATUS.APPROVED,
+      isValid: true,
+      isWithdrawable: true,
+      value: 1n,
+    },
+    {
+      asset: 'BOLD',
+      derivation: 'safe',
+      walletSeedVersion: 'v2',
+      nullifier: 11n,
+      secret: 12n,
+      commitment: '0xabc',
+      reviewStatus: PP_REVIEW_STATUS.PENDING,
+      isValid: false,
+      isWithdrawable: false,
+      value: 50n,
+      label: 77n,
+      depositIndex: 3,
+      withdrawalIndex: 0,
+      leafIndex: 9,
+      timestamp: 1234,
+    },
+  ];
+
+  const reconciled = ppwReconcileSelectedAccount(selectedNote, rows);
+  assert.equal(reconciled.selectedIndex, 1);
+  assert.equal(reconciled.label, 'PA-2');
+  assert.equal(reconciled.note.asset, 'BOLD');
+  assert.equal(reconciled.note.reviewStatus, PP_REVIEW_STATUS.PENDING);
+  assert.equal(reconciled.note.isWithdrawable, false);
+  assert.equal(reconciled.note.depositIndex, 3);
+  assert.equal(reconciled.note.leafIndex, 9);
+});
+
+test('selected pool account closes when refresh no longer returns it', () => {
+  const selectedNote = {
+    asset: 'BOLD',
+    nullifier: 11n,
+    secret: 12n,
+    commitment: '0xmissing',
+  };
+
+  const reconciled = ppwReconcileSelectedAccount(selectedNote, []);
+  assert.equal(reconciled.selectedIndex, -1);
+  assert.equal(reconciled.label, null);
+  assert.equal(reconciled.note, null);
 });
 
 test('next safe deposit index still counts ragequitted safe slots after legacy migration', () => {
@@ -961,6 +1374,23 @@ test('next safe deposit index uses the highest recovered safe slot', () => {
   assert.equal(nextIndex, 6);
 });
 
+test('next safe deposit index applies reservations for the connected wallet', () => {
+  const label = poseidon2([70n, 71n]);
+  const { dk, event } = makeDepositEvent(SAFE_KEYS, SCOPE, 0, label, 10n, 210n, '0xdep-safe');
+  const nextIndex = ppResolveNextSafeDepositIndex({
+    address: '0xabc',
+    asset: 'ETH',
+    scope: SCOPE,
+    keys: { legacy: LEGACY_KEYS, safe: SAFE_KEYS },
+    depositEvents: new Map([[ppHashHex(dk.precommitment), event]]),
+    withdrawnMap: new Map(),
+    ragequitMap: new Map(),
+    reservationsByScope: new Map([[String(SCOPE), [{ depositIndex: 1, status: 'pending', createdAt: Date.now() }]]]),
+  });
+
+  assert.equal(nextIndex, 2);
+});
+
 test('mixed legacy and safe accounts stay ordered by deposit chronology, not derivation', () => {
   const rows = [
     {
@@ -993,7 +1423,7 @@ test('confirmed pending-deposit reservations advance the next safe slot', () => 
   ]);
 
   assert.equal(resolved.nextIndex, 4);
-  assert.equal(resolved.pendingIndex, null);
+  assert.equal(resolved.pendingIndex, undefined);
 });
 
 test('unconfirmed pending-deposit reservations still advance the next safe slot', () => {
@@ -1003,7 +1433,7 @@ test('unconfirmed pending-deposit reservations still advance the next safe slot'
   ]);
 
   assert.equal(resolved.nextIndex, 4);
-  assert.equal(resolved.pendingIndex, null);
+  assert.equal(resolved.pendingIndex, undefined);
 });
 
 test('pending-deposit reservation normalization prunes stale and superseded entries', () => {
@@ -1024,89 +1454,5 @@ test('pending-deposit reservation normalization prunes stale and superseded entr
   );
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Event cache concurrency: leafLogs not overwritten by non-leaf call
-// ═══════════════════════════════════════════════════════════════════════════════
 
-console.log('\n── Event cache leaf preservation ──');
-
-test('non-leaf fetch preserves existing leafLogs in cache', () => {
-  // Simulates the cache merge logic from ppFetchPoolEventLogs after the await.
-  // A call with includeLeaves=false must NOT overwrite leafLogs written by a prior includeLeaves=true call.
-  const cache = {};
-
-  // First call: includeLeaves=true populates leafLogs
-  const leafLogs1 = [{ topics: ['0xleaf1'], data: '0x01' }, { topics: ['0xleaf2'], data: '0x02' }];
-  cache['ETH'] = {
-    depositLogs: [{ topics: ['0xdep'], data: '0x' }],
-    withdrawnLogs: [],
-    ragequitLogs: [],
-    leafLogs: leafLogs1,
-    upToBlock: 100,
-    leafUpToBlock: 100,
-  };
-
-  // Second call: includeLeaves=false. Re-reads live cache and must preserve leafLogs.
-  const live = cache['ETH'];
-  const includeLeaves = false;
-  const newDLogs = [{ topics: ['0xdep2'], data: '0x' }];
-  const depositLogs = (live ? live.depositLogs : []).concat(newDLogs);
-  // This is the critical line: leafLogs must come from live cache, not be reset to []
-  const leafLogs = includeLeaves
-    ? (live?.leafLogs || []).concat([])
-    : (live?.leafLogs || []);
-  cache['ETH'] = { ...cache['ETH'], depositLogs, leafLogs, upToBlock: 200 };
-
-  assert.equal(cache['ETH'].leafLogs.length, 2, 'leafLogs must not be wiped by non-leaf call');
-  assert.deepEqual(cache['ETH'].leafLogs, leafLogs1);
-  assert.equal(cache['ETH'].depositLogs.length, 2, 'deposit logs should be merged');
-});
-
-test('concurrent non-leaf call does not overwrite leaf data from parallel leaf call', () => {
-  // Simulates the race: two calls snapshot the cache, do async work, then write back.
-  // Call A: includeLeaves=true, Call B: includeLeaves=false (from ppResolveNextSafeDepositIndex)
-  // With the fix: Call B re-reads the live cache after await, preserving A's leafLogs.
-  const cache = {};
-
-  // Both calls start with empty cache
-  const snapshotA = cache['ETH']; // undefined
-  const snapshotB = cache['ETH']; // undefined
-
-  // Call A finishes first (includeLeaves=true), writes leaf data
-  const leafData = [{ topics: ['0xleaf'], data: '0xAA' }];
-  cache['ETH'] = {
-    depositLogs: [{ topics: ['0xd1'], data: '0x' }],
-    withdrawnLogs: [],
-    ragequitLogs: [],
-    leafLogs: leafData,
-    upToBlock: 100,
-    leafUpToBlock: 100,
-  };
-
-  // Call B finishes second (includeLeaves=false). With fix, re-reads live cache.
-  const live = cache['ETH']; // now has leaf data from A
-  const includeLeaves = false;
-  const mergedLeafLogs = includeLeaves
-    ? (live?.leafLogs || snapshotB?.leafLogs || []).concat([])
-    : (live?.leafLogs || snapshotB?.leafLogs || []);
-  cache['ETH'] = {
-    depositLogs: (live || snapshotB || { depositLogs: [] }).depositLogs.concat([]),
-    withdrawnLogs: [],
-    ragequitLogs: [],
-    leafLogs: mergedLeafLogs,
-    upToBlock: live?.upToBlock ?? 100,
-    leafUpToBlock: live?.leafUpToBlock ?? null,
-  };
-
-  assert.equal(cache['ETH'].leafLogs.length, 1, 'leaf data from call A must survive call B');
-  assert.deepEqual(cache['ETH'].leafLogs, leafData);
-});
-
-console.log(`\n${'═'.repeat(60)}`);
-if (failed === 0) {
-  console.log(`\x1b[32m  All ${passed} tests passed.\x1b[0m\n`);
-  process.exit(0);
-} else {
-  console.log(`\x1b[31m  ${failed} failed, ${passed} passed.\x1b[0m\n`);
-  process.exit(1);
-}
+await done();

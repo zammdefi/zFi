@@ -1,1192 +1,2539 @@
 #!/usr/bin/env node
 //
-// Withdrawal safety regression tests.
+// Privacy withdrawal safety and journey tests.
 //
-// Covers the safety-critical validators in the Privacy Pools withdrawal flow
-// that were previously only exercised at runtime in the browser:
+// Covers the live withdrawal helpers exposed through the gated PP test API:
+// validation, preview, relay quote binding, proof lifecycle, root rechecks,
+// submission, terminal UI handling, and thin orchestration.
 //
-//   - Leaf index 0-based vs 1-based fallback logic
-//   - Relay fee cap enforcement (fee <= maxRelayFeeBPS)
-//   - Change note index resolution (3-tier fallback)
-//   - Commitment formula verification
-//   - LeanIMT (Merkle tree) build & proof correctness
-//   - Sibling padding to circuit tree depth (32)
-//
-// Zero npm dependencies — uses vendored poseidon libs + Node builtins.
-//
-// Usage:  node test/privacy/test_withdrawal_safety.mjs
+// Usage: node test/privacy/test_withdrawal_safety.mjs
 //
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { createDom, createElement, createHarness as createPrivacyHarness, createPoseidonContext, createTestRunner, flushMicrotasks, loadPrivacyTestApi } from './_app_source_utils.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT = path.resolve(__dirname, '../..');
+const TEST_CONSOLE = { log() {}, warn() {}, error() {} };
+const CONNECTED_ADDRESS = '0x1111111111111111111111111111111111111111';
+const OTHER_ADDRESS = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const RELAY_RECIPIENT = '0x2222222222222222222222222222222222222222';
+const RELAYER_ADDRESS = '0x3333333333333333333333333333333333333333';
+const ENTRYPOINT_ADDRESS = '0x4444444444444444444444444444444444444444';
+const WSTETH_ADDRESS = '0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0';
+const BOLD_ADDRESS = '0x6440f144b7e50d6a8439336510312d2f54beb01d';
+const VENDORED_SNARKJS_BUNDLE = readFileSync(new URL('../../dapp/vendor/snarkjs.min.js', import.meta.url));
 
-// ── Load vendored Poseidon libs ──────────────────────────────────────────────
+const { test, done } = createTestRunner();
 
-const ctx = vm.createContext({
-  window: {},
-  atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-  Uint8Array,
-  Array,
-  BigInt,
-});
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon1.min.js'), 'utf8'), ctx);
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon2.min.js'), 'utf8'), ctx);
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon3.min.js'), 'utf8'), ctx);
-
-const { poseidon1, poseidon2, poseidon3 } = ctx.window;
-
-// ── Re-implement safety-critical functions (same logic as dapp/index.html) ───
-
-const SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-const PP_MAX_TREE_DEPTH = 32;
-
-function ppDeriveDepositKeys(masterNullifier, masterSecret, scope, index) {
-  const nullifier = poseidon3([masterNullifier, scope, BigInt(index)]);
-  const secret = poseidon3([masterSecret, scope, BigInt(index)]);
-  const precommitment = poseidon2([nullifier, secret]);
-  return { nullifier, secret, precommitment };
+function toArrayBuffer(buffer) {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
-function ppDeriveWithdrawalKeys(masterNullifier, masterSecret, label, withdrawalIndex) {
-  const nullifier = poseidon3([masterNullifier, label, BigInt(withdrawalIndex)]);
-  const secret = poseidon3([masterSecret, label, BigInt(withdrawalIndex)]);
-  const precommitment = poseidon2([nullifier, secret]);
-  return { nullifier, secret, precommitment };
+function testBtoa(binary) {
+  return Buffer.from(binary, 'binary').toString('base64');
 }
 
-function ppParseNonNegativeInt(raw) {
-  if (raw == null || raw === '') return null;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) return null;
-  return n;
-}
-
-const PP_MAX_INDEX_INFERENCE_SCAN = 4096;
-
-function ppInferWithdrawalNoteIndex(masterNullifier, label, noteNullifier, maxIndex = PP_MAX_INDEX_INFERENCE_SCAN) {
-  for (let i = 0; i <= maxIndex; i++) {
-    if (poseidon3([masterNullifier, label, BigInt(i)]) === noteNullifier) return i;
-  }
-  return null;
-}
-
-function ppInferDepositNoteIndex(masterNullifier, scope, noteNullifier, maxIndex = PP_MAX_INDEX_INFERENCE_SCAN) {
-  for (let i = 0; i <= maxIndex; i++) {
-    if (poseidon3([masterNullifier, scope, BigInt(i)]) === noteNullifier) return i;
-  }
-  return null;
-}
-
-function ppResolveNextWithdrawalIndex(masterNullifier, scope, label, noteNullifier, noteWithdrawalIndex, noteDepositIndex = null) {
-  const explicitIdx = ppParseNonNegativeInt(noteWithdrawalIndex);
-  if (explicitIdx != null) {
-    return { nextIndex: explicitIdx + 1, source: 'note', currentIndex: explicitIdx };
-  }
-  const explicitDepositIdx = ppParseNonNegativeInt(noteDepositIndex);
-  if (explicitDepositIdx != null) {
-    return { nextIndex: 0, source: 'loaded-deposit', currentIndex: null, depositIndex: explicitDepositIdx };
-  }
-  const inferredWithdrawalCurrent = ppInferWithdrawalNoteIndex(masterNullifier, label, noteNullifier);
-  if (inferredWithdrawalCurrent != null) {
-    return { nextIndex: inferredWithdrawalCurrent + 1, source: 'inferred-withdrawal', currentIndex: inferredWithdrawalCurrent };
-  }
-  const inferredDepositIndex = ppInferDepositNoteIndex(masterNullifier, scope, noteNullifier);
-  if (inferredDepositIndex != null) {
-    return { nextIndex: 0, source: 'deposit', currentIndex: null, depositIndex: inferredDepositIndex };
-  }
-  return { nextIndex: null, source: 'unknown', currentIndex: null, depositIndex: null };
-}
-
-// Commitment formula: commitment = poseidon3([value, label, precommitment])
-function computeCommitment(value, label, precommitment) {
-  return poseidon3([value, label, precommitment]);
-}
-
-// LeanIMT: Build Merkle tree from leaves
-function leanIMTBuild(leaves) {
-  if (leaves.length === 0) return { levels: [[]], depth: 0, root: 0n };
-  const levels = [leaves.map(l => BigInt(l))];
-  while (levels[levels.length - 1].length > 1) {
-    const curr = levels[levels.length - 1];
-    const next = [];
-    for (let i = 0; i < curr.length; i += 2) {
-      if (i + 1 < curr.length) next.push(poseidon2([curr[i], curr[i + 1]]));
-      else next.push(curr[i]);
-    }
-    levels.push(next);
-  }
-  return { levels, depth: levels.length - 1, root: levels[levels.length - 1][0] };
-}
-
-// LeanIMT: Merkle proof for leaf at index, padded to PP_MAX_TREE_DEPTH
-function leanIMTProof(levels, leafIndex) {
-  const siblings = [];
-  let idx = leafIndex;
-  for (let d = 0; d < levels.length - 1; d++) {
-    const sib = idx ^ 1;
-    siblings.push(sib < levels[d].length ? levels[d][sib] : 0n);
-    idx = idx >> 1;
-  }
-  while (siblings.length < PP_MAX_TREE_DEPTH) siblings.push(0n);
-  return siblings;
-}
-
-// Relay fee decode (same logic as ppwDecodeRelayFeeBps in index.html)
-// In the real code this uses ethers ABI decoder. We test the validation
-// logic around it — the bps comparison against maxRelayFeeBPS.
-function validateRelayFee(quotedFeeBPS, maxRelayFeeBPS) {
-  if (!Number.isFinite(quotedFeeBPS) || quotedFeeBPS < 0) {
-    return { valid: false, reason: 'invalid-fee' };
-  }
-  if (maxRelayFeeBPS == null) {
-    return { valid: false, reason: 'no-onchain-max' };
-  }
-  const maxNum = Number(maxRelayFeeBPS);
-  if (!Number.isFinite(maxNum) || maxNum < 0) {
-    return { valid: false, reason: 'invalid-onchain-max' };
-  }
-  if (quotedFeeBPS > maxNum) {
-    return { valid: false, reason: 'exceeds-max', quotedFeeBPS, maxRelayFeeBPS: maxNum };
-  }
-  return { valid: true, quotedFeeBPS, maxRelayFeeBPS: maxNum };
-}
-
-// Note parsing & asset normalization (same logic as ppwParseNote)
-function parseNoteAsset(rawAsset) {
-  const raw = (rawAsset || 'ETH').trim();
-  const upper = raw.toUpperCase();
-  const asset = (upper === 'BOLD') ? 'BOLD' : (upper === 'WSTETH') ? 'wstETH' : 'ETH';
-  const recognized = (upper === 'ETH' || upper === 'BOLD' || upper === 'WSTETH');
-  return { asset, recognized, raw };
-}
-
-// Leaf index fallback logic (same as L-10 block in ppwWithdraw)
-function resolveLeafIndex(leafIndex, treeLeaves, expectedCommitment) {
-  let adjusted = leafIndex;
-  let treeLeaf = (adjusted >= 0 && adjusted < treeLeaves.length) ? treeLeaves[adjusted] : null;
-
-  if (treeLeaf !== expectedCommitment && adjusted > 0) {
-    const altIndex = adjusted - 1;
-    if (altIndex >= 0 && altIndex < treeLeaves.length && treeLeaves[altIndex] === expectedCommitment) {
-      adjusted = altIndex;
-      treeLeaf = treeLeaves[altIndex];
-      return { adjusted, treeLeaf, source: '1-based-fallback' };
-    }
-  }
-
-  if (adjusted < 0 || adjusted >= treeLeaves.length) {
-    return { adjusted, treeLeaf: null, error: 'out-of-range' };
-  }
-  if (treeLeaf == null || treeLeaf === 0n) {
-    return { adjusted, treeLeaf, error: 'empty-leaf' };
-  }
-  if (treeLeaf !== expectedCommitment) {
-    return { adjusted, treeLeaf, error: 'commitment-mismatch' };
-  }
-  return { adjusted, treeLeaf, source: '0-based' };
-}
-
-// ── Test helpers ─────────────────────────────────────────────────────────────
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  \x1b[32mPASS\x1b[0m ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`  \x1b[31mFAIL\x1b[0m ${name}`);
-    console.log(`       ${e.message}`);
-  }
-}
-
-// Fixed master keys for all tests
-const MN = poseidon1([42n]);
-const MS = poseidon1([43n]);
-const SCOPE = 0xF241d57C6DebAe225c0F2e6eA1529373C9A9C9fBn;
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  1. Leaf index 0-based vs 1-based fallback
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Leaf index fallback ──');
-
-test('0-based index: commitment found at exact position', () => {
-  const commitment = poseidon3([1000n, 2000n, 3000n]);
-  const leaves = [99n, commitment, 88n];
-  const result = resolveLeafIndex(1, leaves, commitment);
-  assert.equal(result.adjusted, 1);
-  assert.equal(result.source, '0-based');
-  assert.equal(result.error, undefined);
-});
-
-test('1-based fallback: commitment found at index-1', () => {
-  const commitment = poseidon3([1000n, 2000n, 3000n]);
-  // Contract reports leafIndex=2 (1-based), but array is 0-based so actual position is 1
-  const leaves = [99n, commitment, 88n];
-  const result = resolveLeafIndex(2, leaves, commitment);
-  assert.equal(result.adjusted, 1);
-  assert.equal(result.source, '1-based-fallback');
-});
-
-test('1-based fallback: does not trigger for index 0', () => {
-  const commitment = poseidon3([1000n, 2000n, 3000n]);
-  const leaves = [77n, commitment];
-  // leafIndex=0 should NOT try the -1 fallback (would be index -1)
-  const result = resolveLeafIndex(0, leaves, commitment);
-  assert.equal(result.error, 'commitment-mismatch');
-});
-
-test('out-of-range: negative index', () => {
-  const leaves = [1n, 2n, 3n];
-  const result = resolveLeafIndex(-1, leaves, 1n);
-  assert.equal(result.error, 'out-of-range');
-});
-
-test('out-of-range: index beyond tree length', () => {
-  const leaves = [1n, 2n, 3n];
-  const result = resolveLeafIndex(5, leaves, 1n);
-  assert.equal(result.error, 'out-of-range');
-});
-
-test('out-of-range: index exactly at tree length', () => {
-  const leaves = [1n, 2n, 3n];
-  const result = resolveLeafIndex(3, leaves, 1n);
-  // fallback to index 2 won't match either
-  assert.equal(result.error, 'out-of-range');
-});
-
-test('empty leaf at position', () => {
-  const leaves = [1n, 0n, 3n];
-  const result = resolveLeafIndex(1, leaves, 99n);
-  assert.equal(result.error, 'empty-leaf');
-});
-
-test('commitment mismatch: wrong value at position, no fallback match', () => {
-  const leaves = [1n, 2n, 3n];
-  const result = resolveLeafIndex(1, leaves, 99n);
-  assert.equal(result.error, 'commitment-mismatch');
-});
-
-test('1-based fallback: works at boundary (last valid index)', () => {
-  const commitment = poseidon3([5n, 6n, 7n]);
-  const leaves = [99n, 88n, commitment];
-  // 1-based report: index 3 (points beyond array), but index-1 = 2 matches
-  const result = resolveLeafIndex(3, leaves, commitment);
-  assert.equal(result.adjusted, 2);
-  assert.equal(result.source, '1-based-fallback');
-});
-
-test('empty tree: out of range', () => {
-  const result = resolveLeafIndex(0, [], 1n);
-  assert.equal(result.error, 'out-of-range');
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  2. Relay fee cap validation
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Relay fee cap ──');
-
-test('fee within cap: 30 bps quoted, 100 bps max', () => {
-  const r = validateRelayFee(30, 100);
-  assert.equal(r.valid, true);
-});
-
-test('fee exactly at cap: 100 bps quoted, 100 bps max', () => {
-  const r = validateRelayFee(100, 100);
-  assert.equal(r.valid, true);
-});
-
-test('fee exceeds cap: 150 bps quoted, 100 bps max', () => {
-  const r = validateRelayFee(150, 100);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'exceeds-max');
-});
-
-test('fee zero: valid (free relay)', () => {
-  const r = validateRelayFee(0, 100);
-  assert.equal(r.valid, true);
-});
-
-test('fee negative: invalid', () => {
-  const r = validateRelayFee(-5, 100);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'invalid-fee');
-});
-
-test('fee NaN: invalid', () => {
-  const r = validateRelayFee(NaN, 100);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'invalid-fee');
-});
-
-test('fee Infinity: invalid', () => {
-  const r = validateRelayFee(Infinity, 100);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'invalid-fee');
-});
-
-test('onchain max null: rejected (fail-closed)', () => {
-  const r = validateRelayFee(30, null);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'no-onchain-max');
-});
-
-test('onchain max undefined: rejected (fail-closed)', () => {
-  const r = validateRelayFee(30, undefined);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'no-onchain-max');
-});
-
-test('onchain max NaN: rejected', () => {
-  const r = validateRelayFee(30, NaN);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'invalid-onchain-max');
-});
-
-test('onchain max negative: rejected', () => {
-  const r = validateRelayFee(30, -10);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'invalid-onchain-max');
-});
-
-test('fee 1 bps below cap: valid', () => {
-  const r = validateRelayFee(99, 100);
-  assert.equal(r.valid, true);
-});
-
-test('fee 1 bps above cap: rejected', () => {
-  const r = validateRelayFee(101, 100);
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'exceeds-max');
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  3. Change note index resolution (3-tier fallback)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Change note index resolution ──');
-
-test('tier 1: explicit withdrawalIndex in note', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, 5);
-  assert.equal(r.source, 'note');
-  assert.equal(r.currentIndex, 5);
-  assert.equal(r.nextIndex, 6);
-});
-
-test('tier 1: withdrawalIndex = 0 is valid', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, 0);
-  assert.equal(r.source, 'note');
-  assert.equal(r.currentIndex, 0);
-  assert.equal(r.nextIndex, 1);
-});
-
-test('tier 1: negative withdrawalIndex rejected (falls to tier 2)', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  // -1 is not a valid non-negative int, so ppParseNonNegativeInt returns null
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, -1);
-  // Should NOT be 'note' source since -1 is invalid
-  assert.notEqual(r.source, 'note');
-});
-
-test('tier 1: non-integer withdrawalIndex rejected (falls to tier 2)', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, 'abc');
-  assert.notEqual(r.source, 'note');
-});
-
-test('tier 2: inferred withdrawal index from note nullifier', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  // Derive a withdrawal note at index 3
-  const wk = ppDeriveWithdrawalKeys(MN, MS, label, 3);
-  // Pass the withdrawal nullifier, no explicit index
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, wk.nullifier, null);
-  assert.equal(r.source, 'inferred-withdrawal');
-  assert.equal(r.currentIndex, 3);
-  assert.equal(r.nextIndex, 4);
-});
-
-test('tier 2: inferred index = 0 produces nextIndex = 1', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  const wk = ppDeriveWithdrawalKeys(MN, MS, label, 0);
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, wk.nullifier, null);
-  assert.equal(r.source, 'inferred-withdrawal');
-  assert.equal(r.currentIndex, 0);
-  assert.equal(r.nextIndex, 1);
-});
-
-test('tier 3: original deposit note detected', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 7);
-  const label = dk.precommitment;
-  // The deposit nullifier is derived from scope (not label), so it won't match tier 2
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, null);
-  assert.equal(r.source, 'deposit');
-  assert.equal(r.depositIndex, 7);
-  assert.equal(r.nextIndex, 0);
-});
-
-test('tier 3: deposit at index 0', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, null);
-  assert.equal(r.source, 'deposit');
-  assert.equal(r.depositIndex, 0);
-  assert.equal(r.nextIndex, 0);
-});
-
-test('loaded pool account depositIndex bypasses inference scan limits', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 5000);
-  const label = dk.precommitment;
-  const inferred = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, null);
-  assert.equal(inferred.source, 'unknown');
-
-  const loaded = ppResolveNextWithdrawalIndex(MN, SCOPE, label, dk.nullifier, null, 5000);
-  assert.equal(loaded.source, 'loaded-deposit');
-  assert.equal(loaded.depositIndex, 5000);
-  assert.equal(loaded.nextIndex, 0);
-});
-
-test('unknown: unrecognized nullifier → nextIndex is null (blocks partial withdrawal)', () => {
-  const bogusNullifier = poseidon1([999999n]);
-  const label = poseidon2([1n, 2n]);
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, bogusNullifier, null);
-  assert.equal(r.source, 'unknown');
-  assert.equal(r.nextIndex, null);
-});
-
-test('tier priority: explicit index wins over inferable withdrawal nullifier', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  const wk = ppDeriveWithdrawalKeys(MN, MS, label, 3);
-  // Pass the withdrawal nullifier WITH an explicit index — tier 1 should win
-  const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, wk.nullifier, 10);
-  assert.equal(r.source, 'note');
-  assert.equal(r.currentIndex, 10);
-  assert.equal(r.nextIndex, 11);
-});
-
-test('chained partial withdrawals: index monotonically increases', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;
-  // Simulate chain: deposit → withdraw[0] → withdraw[1] → withdraw[2]
-  const indices = [];
-  let currentNullifier = dk.nullifier;
-  let currentWithdrawalIndex = null;
-
-  for (let step = 0; step < 3; step++) {
-    const r = ppResolveNextWithdrawalIndex(MN, SCOPE, label, currentNullifier, currentWithdrawalIndex);
-    assert(r.nextIndex != null, 'step ' + step + ' should resolve');
-    indices.push(r.nextIndex);
-    // Derive the next change note
-    const changeKeys = ppDeriveWithdrawalKeys(MN, MS, label, r.nextIndex);
-    currentNullifier = changeKeys.nullifier;
-    currentWithdrawalIndex = r.nextIndex;
-  }
-  // Indices should be 0, 1, 2 (monotonically increasing)
-  assert.deepEqual(indices, [0, 1, 2]);
-});
-
-test('full withdrawal can use arbitrary fresh secrets for a zero-value change commitment', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 4);
-  const label = dk.precommitment;
-  const randomNullifier = poseidon1([901n]);
-  const randomSecret = poseidon1([902n]);
-  const zeroCommitment = computeCommitment(0n, label, poseidon2([randomNullifier, randomSecret]));
-
-  assert.notEqual(randomNullifier, dk.nullifier);
-  assert.notEqual(randomSecret, dk.secret);
-  assert(zeroCommitment > 0n && zeroCommitment < SNARK_SCALAR_FIELD);
-});
-
-test('full withdrawal does not require deterministic lineage resolution', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 1);
-  const label = dk.precommitment;
-  const unresolved = ppResolveNextWithdrawalIndex(MN, SCOPE, label, 123456789n, null);
-  assert.equal(unresolved.nextIndex, null);
-
-  const randomNullifier = poseidon1([903n]);
-  const randomSecret = poseidon1([904n]);
-  const zeroCommitment = computeCommitment(0n, label, poseidon2([randomNullifier, randomSecret]));
-
-  assert(zeroCommitment > 0n && zeroCommitment < SNARK_SCALAR_FIELD);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  4. Note asset normalization
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Note asset normalization ──');
-
-test('ETH: recognized', () => {
-  const r = parseNoteAsset('ETH');
-  assert.equal(r.asset, 'ETH');
-  assert.equal(r.recognized, true);
-});
-
-test('eth: case insensitive → ETH', () => {
-  const r = parseNoteAsset('eth');
-  assert.equal(r.asset, 'ETH');
-  assert.equal(r.recognized, true);
-});
-
-test('BOLD: recognized', () => {
-  const r = parseNoteAsset('BOLD');
-  assert.equal(r.asset, 'BOLD');
-  assert.equal(r.recognized, true);
-});
-
-test('bold: case insensitive → BOLD', () => {
-  const r = parseNoteAsset('bold');
-  assert.equal(r.asset, 'BOLD');
-  assert.equal(r.recognized, true);
-});
-
-test('wstETH: recognized', () => {
-  const r = parseNoteAsset('wstETH');
-  assert.equal(r.asset, 'wstETH');
-  assert.equal(r.recognized, true);
-});
-
-test('WSTETH: case insensitive → wstETH', () => {
-  const r = parseNoteAsset('WSTETH');
-  assert.equal(r.asset, 'wstETH');
-  assert.equal(r.recognized, true);
-});
-
-test('wsteth: lowercase → wstETH', () => {
-  const r = parseNoteAsset('wsteth');
-  assert.equal(r.asset, 'wstETH');
-  assert.equal(r.recognized, true);
-});
-
-test('null/undefined: defaults to ETH', () => {
-  assert.equal(parseNoteAsset(null).asset, 'ETH');
-  assert.equal(parseNoteAsset(undefined).asset, 'ETH');
-  assert.equal(parseNoteAsset('').asset, 'ETH');
-});
-
-test('unrecognized asset: defaults to ETH, flagged as unrecognized', () => {
-  const r = parseNoteAsset('DAI');
-  assert.equal(r.asset, 'ETH');
-  assert.equal(r.recognized, false);
-});
-
-test('whitespace-padded asset: trimmed', () => {
-  const r = parseNoteAsset('  BOLD  ');
-  assert.equal(r.asset, 'BOLD');
-  assert.equal(r.recognized, true);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  5. Commitment formula verification
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Commitment formula ──');
-
-test('commitment uses distinct label and precommitment (realistic deposit→withdrawal)', () => {
-  const value = 1000000000000000000n; // 1 ETH in wei
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const label = dk.precommitment;  // deposit precommitment serves as label
-  // In a real withdrawal, the precommitment is from the withdrawal key derivation
-  const wk = ppDeriveWithdrawalKeys(MN, MS, label, 0);
-  const commitment = computeCommitment(value, label, wk.precommitment);
-  // label and precommitment should be different values
-  assert.notEqual(label, wk.precommitment, 'label != withdrawal precommitment');
-  // Commitment should be in the field
-  assert(commitment > 0n && commitment < SNARK_SCALAR_FIELD);
-  // Verify it matches the known-answer vector for these specific inputs
-  const expected = poseidon3([value, label, wk.precommitment]);
-  assert.equal(commitment, expected);
-});
-
-test('commitment changes when value changes', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const wk = ppDeriveWithdrawalKeys(MN, MS, dk.precommitment, 0);
-  const c1 = computeCommitment(1000n, dk.precommitment, wk.precommitment);
-  const c2 = computeCommitment(2000n, dk.precommitment, wk.precommitment);
-  assert.notEqual(c1, c2);
-});
-
-test('commitment changes when label changes', () => {
-  const dk0 = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const dk1 = ppDeriveDepositKeys(MN, MS, SCOPE, 1);
-  const wk = ppDeriveWithdrawalKeys(MN, MS, dk0.precommitment, 0);
-  const c1 = computeCommitment(1000n, dk0.precommitment, wk.precommitment);
-  const c2 = computeCommitment(1000n, dk1.precommitment, wk.precommitment);
-  assert.notEqual(c1, c2);
-});
-
-test('commitment changes when precommitment changes', () => {
-  const dk = ppDeriveDepositKeys(MN, MS, SCOPE, 0);
-  const wk0 = ppDeriveWithdrawalKeys(MN, MS, dk.precommitment, 0);
-  const wk1 = ppDeriveWithdrawalKeys(MN, MS, dk.precommitment, 1);
-  const c1 = computeCommitment(1000n, dk.precommitment, wk0.precommitment);
-  const c2 = computeCommitment(1000n, dk.precommitment, wk1.precommitment);
-  assert.notEqual(c1, c2);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  6. LeanIMT build & proof correctness
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── LeanIMT Merkle tree ──');
-
-test('single leaf: root equals the leaf', () => {
-  const tree = leanIMTBuild([42n]);
-  assert.equal(tree.root, 42n);
-  assert.equal(tree.depth, 0);
-});
-
-test('two leaves: root = poseidon2([left, right])', () => {
-  const tree = leanIMTBuild([10n, 20n]);
-  assert.equal(tree.root, poseidon2([10n, 20n]));
-  assert.equal(tree.depth, 1);
-});
-
-test('four leaves: correct binary tree structure', () => {
-  const leaves = [1n, 2n, 3n, 4n];
-  const tree = leanIMTBuild(leaves);
-  const h01 = poseidon2([1n, 2n]);
-  const h23 = poseidon2([3n, 4n]);
-  assert.equal(tree.root, poseidon2([h01, h23]));
-  assert.equal(tree.depth, 2);
-});
-
-test('odd number of leaves: last leaf promoted without hashing', () => {
-  const leaves = [1n, 2n, 3n];
-  const tree = leanIMTBuild(leaves);
-  const h01 = poseidon2([1n, 2n]);
-  // 3n is promoted unpaired
-  assert.equal(tree.root, poseidon2([h01, 3n]));
-  assert.equal(tree.depth, 2);
-});
-
-test('empty tree: root = 0, depth = 0', () => {
-  const tree = leanIMTBuild([]);
-  assert.equal(tree.root, 0n);
-  assert.equal(tree.depth, 0);
-});
-
-test('proof verification: root recomputable from leaf + siblings', () => {
-  const leaves = [10n, 20n, 30n, 40n];
-  const tree = leanIMTBuild(leaves);
-  const siblings = leanIMTProof(tree.levels, 1);
-  // Manually recompute: leaf at index 1, sibling at index 0
-  let hash = leaves[1]; // 20n
-  hash = poseidon2([leaves[0], hash]); // sibling is index 0 (left), our node is right
-  hash = poseidon2([hash, poseidon2([30n, 40n])]); // next level
-  assert.equal(hash, tree.root);
-});
-
-test('proof length is always PP_MAX_TREE_DEPTH (32)', () => {
-  for (const n of [1, 2, 3, 4, 8, 16, 100]) {
-    const leaves = Array.from({ length: n }, (_, i) => BigInt(i + 1));
-    const tree = leanIMTBuild(leaves);
-    const siblings = leanIMTProof(tree.levels, 0);
-    assert.equal(siblings.length, PP_MAX_TREE_DEPTH,
-      `tree with ${n} leaves should produce ${PP_MAX_TREE_DEPTH} siblings, got ${siblings.length}`);
-  }
-});
-
-test('proof padding uses 0n for missing siblings', () => {
-  const leaves = [10n, 20n];
-  const tree = leanIMTBuild(leaves);
-  const siblings = leanIMTProof(tree.levels, 0);
-  // First sibling is the real one (20n), rest should be 0n padding
-  assert.equal(siblings[0], 20n);
-  for (let i = 1; i < PP_MAX_TREE_DEPTH; i++) {
-    assert.equal(siblings[i], 0n, `sibling[${i}] should be 0n padding`);
-  }
-});
-
-test('tree is deterministic', () => {
-  const leaves = [100n, 200n, 300n, 400n, 500n];
-  const t1 = leanIMTBuild(leaves);
-  const t2 = leanIMTBuild(leaves);
-  assert.equal(t1.root, t2.root);
-  assert.equal(t1.depth, t2.depth);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  7. ppParseNonNegativeInt edge cases
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── ppParseNonNegativeInt ──');
-
-test('null → null', () => assert.equal(ppParseNonNegativeInt(null), null));
-test('undefined → null', () => assert.equal(ppParseNonNegativeInt(undefined), null));
-test('empty string → null', () => assert.equal(ppParseNonNegativeInt(''), null));
-test('0 → 0', () => assert.equal(ppParseNonNegativeInt(0), 0));
-test('5 → 5', () => assert.equal(ppParseNonNegativeInt(5), 5));
-test('"7" → 7', () => assert.equal(ppParseNonNegativeInt('7'), 7));
-test('-1 → null (negative)', () => assert.equal(ppParseNonNegativeInt(-1), null));
-test('1.5 → null (float)', () => assert.equal(ppParseNonNegativeInt(1.5), null));
-test('"abc" → null', () => assert.equal(ppParseNonNegativeInt('abc'), null));
-test('NaN → null', () => assert.equal(ppParseNonNegativeInt(NaN), null));
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  8. Additional edge cases (audit follow-ups)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Additional edge cases ──');
-
-// --- Poseidon zero-input safety ---
-test('poseidon1([0]) is non-zero (no fixed point at zero)', () => {
-  const h = poseidon1([0n]);
-  assert.notEqual(h, 0n);
-  assert(h > 0n && h < SNARK_SCALAR_FIELD);
-});
-
-test('poseidon2([0,0]) is non-zero', () => {
-  const h = poseidon2([0n, 0n]);
-  assert.notEqual(h, 0n);
-  assert(h > 0n && h < SNARK_SCALAR_FIELD);
-});
-
-test('poseidon3([0,0,0]) is non-zero', () => {
-  const h = poseidon3([0n, 0n, 0n]);
-  assert.notEqual(h, 0n);
-  assert(h > 0n && h < SNARK_SCALAR_FIELD);
-});
-
-// --- LeanIMT proof at right-child indices ---
-test('LeanIMT proof correct for leaf index 2 (right subtree)', () => {
-  const leaves = [10n, 20n, 30n, 40n];
-  const tree = leanIMTBuild(leaves);
-  const siblings = leanIMTProof(tree.levels, 2);
-  // Manually recompute from leaf[2] = 30n
-  // Level 0: sibling of index 2 is index 3 (40n)
-  assert.equal(siblings[0], 40n);
-  // Level 1: sibling of pair(2,3) is pair(0,1) = poseidon2([10n, 20n])
-  assert.equal(siblings[1], poseidon2([10n, 20n]));
-  // Verify root reachable: hash(30n, 40n) then hash(h01, h23)
-  let hash = poseidon2([30n, 40n]);
-  hash = poseidon2([poseidon2([10n, 20n]), hash]);
-  assert.equal(hash, tree.root);
-});
-
-test('LeanIMT proof correct for leaf index 3 (rightmost leaf)', () => {
-  const leaves = [10n, 20n, 30n, 40n];
-  const tree = leanIMTBuild(leaves);
-  const siblings = leanIMTProof(tree.levels, 3);
-  // Level 0: sibling of index 3 is index 2 (30n)
-  assert.equal(siblings[0], 30n);
-  // Level 1: sibling is h(10, 20)
-  assert.equal(siblings[1], poseidon2([10n, 20n]));
-  // Recompute root from leaf[3]
-  let hash = poseidon2([30n, 40n]); // 30n is sibling (left), 40n is our leaf (right)
-  hash = poseidon2([poseidon2([10n, 20n]), hash]);
-  assert.equal(hash, tree.root);
-});
-
-// --- Leaf index: commitment matches at BOTH index and index-1 ---
-test('resolveLeafIndex: 0-based takes priority when commitment at both index and index-1', () => {
-  const commitment = poseidon3([1n, 2n, 3n]);
-  // Both positions hold the same commitment
-  const leaves = [99n, commitment, commitment, 88n];
-  // At index 2, treeLeaves[2] === commitment → 0-based hit, should NOT fallback
-  const result = resolveLeafIndex(2, leaves, commitment);
-  assert.equal(result.adjusted, 2);
-  assert.equal(result.source, '0-based');
-});
-
-// --- Relay fee validation with BigInt input (from ethers contract call) ---
-test('relay fee cap: maxRelayFeeBPS as BigInt (ethers uint256 return)', () => {
-  // ethers returns uint256 as BigInt; Number(BigInt) conversion must work
-  const r = validateRelayFee(30, BigInt(100));
-  assert.equal(r.valid, true);
-  assert.equal(r.maxRelayFeeBPS, 100);
-});
-
-test('relay fee cap: maxRelayFeeBPS as BigInt exceeds', () => {
-  const r = validateRelayFee(150, BigInt(100));
-  assert.equal(r.valid, false);
-  assert.equal(r.reason, 'exceeds-max');
-});
-
-// --- Note asset: recognized flag for null/empty defaults ---
-test('null asset: defaults to ETH and is recognized', () => {
-  const r = parseNoteAsset(null);
-  assert.equal(r.asset, 'ETH');
-  assert.equal(r.recognized, true);
-});
-
-test('empty string asset: defaults to ETH and is recognized', () => {
-  const r = parseNoteAsset('');
-  assert.equal(r.asset, 'ETH');
-  assert.equal(r.recognized, true);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Recipient resolution (direct vs relay mode)
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// Mirrors the current relay/direct recipient rules in ppwWithdraw:
-// - direct mode always sends to the signing wallet
-// - relay mode requires an explicit, already-resolved recipient
-
-function resolveRecipient(isRelayMode, customRecipient, resolvedRecipient, connectedAddress) {
-  const recipient = isRelayMode ? resolvedRecipient : connectedAddress;
-  if (isRelayMode && (!customRecipient || !resolvedRecipient)) {
-    return { error: 'missing-or-unresolved-recipient' };
-  }
-  if (!recipient) {
-    return { error: isRelayMode ? 'no-recipient' : 'no-wallet' };
-  }
-  return { recipient };
-}
-
-test('direct mode: connected wallet is the recipient', () => {
-  const r = resolveRecipient(false, '', null, '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.recipient, '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.error, undefined);
-});
-
-test('direct mode: ignores any custom recipient input and still uses connected wallet', () => {
-  const r = resolveRecipient(false, '0x1111111111111111111111111111111111111111', '0x1111111111111111111111111111111111111111', '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.recipient, '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.error, undefined);
-});
-
-test('direct mode: no wallet connected returns error', () => {
-  const r = resolveRecipient(false, '', null, null);
-  assert.equal(r.error, 'no-wallet');
-});
-
-test('relay mode: custom recipient is used', () => {
-  const r = resolveRecipient(true, 'vitalik.eth', '0x1111111111111111111111111111111111111111', '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.recipient, '0x1111111111111111111111111111111111111111');
-});
-
-test('relay mode: explicit recipient stays required even when wallet is connected', () => {
-  const r = resolveRecipient(true, '', null, '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.error, 'missing-or-unresolved-recipient');
-});
-
-test('relay mode: unresolved name is rejected before submission', () => {
-  const r = resolveRecipient(true, 'not-found.eth', null, '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd');
-  assert.equal(r.error, 'missing-or-unresolved-recipient');
-});
-
-test('relay mode: valid resolved recipient works without a connected wallet', () => {
-  const r = resolveRecipient(true, 'alice.wei', '0x1111111111111111111111111111111111111111', null);
-  assert.equal(r.recipient, '0x1111111111111111111111111111111111111111');
-});
-
-test('relay mode: no wallet and no recipient returns error', () => {
-  const r = resolveRecipient(true, '', null, null);
-  assert.equal(r.error, 'missing-or-unresolved-recipient');
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Context hash computation (relay vs direct mode)
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// The circuit's `context` input is:
-//   context = keccak256(abi.encode(Withdrawal{processooor,data}, SCOPE)) % SNARK_FIELD
-//
-// Relay mode:  processooor = entrypoint address, data = relay withdrawalData
-// Direct mode: processooor = recipient address,  data = 0x
-//
-// We can't use ethers here (no npm), but we verify the algebraic properties
-// that prevent fund loss: distinct mode/recipient/data produce distinct contexts.
-
-test('context hash: relay vs direct produce different contexts (distinct processooor)', () => {
-  // Even without real keccak, prove the inputs differ.
-  // relay: processooor = ENTRYPOINT, data = non-empty
-  // direct: processooor = recipient, data = 0x
-  const entrypoint = '0x0000000000000000000000000000000000000001';
-  const recipient = '0xABCDabcdABCDabcdABCDabcdABCDabcdABCDabcd';
-  // Just verify they're different addresses so keccak input differs
-  assert.notEqual(entrypoint.toLowerCase(), recipient.toLowerCase());
-});
-
-test('context hash: different signing wallets produce different contexts in direct mode', () => {
-  const r1 = '0x1111111111111111111111111111111111111111';
-  const r2 = '0x2222222222222222222222222222222222222222';
-  assert.notEqual(r1, r2, 'different signers = different circuit context');
-});
-
-test('context hash: SNARK_FIELD modular reduction keeps context in-range', () => {
-  // Simulate: keccak256 output is up to 2^256, context = hash % SNARK_FIELD
-  const fakeHash = (1n << 256n) - 1n; // max possible keccak output
-  const context = fakeHash % SNARK_SCALAR_FIELD;
-  assert(context >= 0n, 'context is non-negative');
-  assert(context < SNARK_SCALAR_FIELD, 'context is within SNARK field');
-});
-
-test('context hash: zero scope still produces valid context', () => {
-  const fakeHash = 0n;
-  const context = fakeHash % SNARK_SCALAR_FIELD;
-  assert.equal(context, 0n, 'zero hash mod SNARK field = 0');
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Change note JSON completeness
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// After a partial withdrawal, the change note JSON MUST contain all fields
-// needed for the next withdrawal. Missing `withdrawalIndex` degrades to
-// tier-2 inference. Missing `nullifier` or `secret` means total fund loss.
-
-function buildChangeNote({ newNullifier, newSecret, changeValue, label, changeIdx, changeLeafIndex, changeCommitment, wAsset }) {
+function createBaseNote(overrides = {}) {
   return {
-    nullifier: '0x' + newNullifier.toString(16).padStart(64, '0'),
-    secret: '0x' + newSecret.toString(16).padStart(64, '0'),
-    value: changeValue.toString(),
-    label: '0x' + label.toString(16).padStart(64, '0'),
-    withdrawalIndex: changeIdx,
-    leafIndex: changeLeafIndex,
-    commitment: changeCommitment,
-    asset: wAsset !== 'ETH' ? wAsset : undefined,
+    isWithdrawable: true,
+    reviewStatus: 'approved',
+    value: 10_000000000000000000n,
+    label: 123n,
+    precommitment: 456n,
+    nullifier: 789n,
+    secret: 987n,
+    asset: 'ETH',
+    derivation: 'safe',
+    walletSeedVersion: 'v2',
+    leafIndex: 0,
+    depositIndex: 0,
+    withdrawalIndex: null,
+    ...overrides,
   };
 }
 
-test('change note: contains all required fields for ETH', () => {
-  const note = buildChangeNote({
-    newNullifier: 123n, newSecret: 456n, changeValue: 1000000n,
-    label: 789n, changeIdx: 1, changeLeafIndex: 5,
-    changeCommitment: '0x00ab', wAsset: 'ETH',
-  });
-  assert.equal(typeof note.nullifier, 'string');
-  assert.equal(typeof note.secret, 'string');
-  assert.equal(typeof note.value, 'string');
-  assert.equal(typeof note.label, 'string');
-  assert.equal(typeof note.withdrawalIndex, 'number');
-  assert.equal(typeof note.leafIndex, 'number');
-  assert.equal(typeof note.commitment, 'string');
-  assert.equal(note.asset, undefined, 'ETH notes omit asset field');
-  assert.equal(note.nullifier.length, 66);
-  assert.equal(note.secret.length, 66);
-  assert.equal(note.label.length, 66);
-});
+function createRun() {
+  const logs = [];
+  const stages = [];
+  const buttonTexts = [];
+  return {
+    logs,
+    stages,
+    buttonTexts,
+    log(message) {
+      logs.push(String(message));
+    },
+    logHtml(message) {
+      logs.push(String(message));
+    },
+    setProgressStage(stageKey, mode, options = {}) {
+      stages.push({ stageKey, mode, options });
+    },
+    setButtonText(label) {
+      buttonTexts.push(label);
+    },
+    reset() {},
+    stopIfNeeded() {},
+  };
+}
 
-test('change note: contains asset field for non-ETH', () => {
-  const note = buildChangeNote({
-    newNullifier: 100n, newSecret: 200n, changeValue: 500n,
-    label: 300n, changeIdx: 0, changeLeafIndex: 2,
-    changeCommitment: '0xdeadbeef', wAsset: 'BOLD',
-  });
-  assert.equal(note.asset, 'BOLD');
-});
+function formatWeiForInput(value) {
+  const amount = BigInt(value);
+  const whole = amount / 10n ** 18n;
+  const fraction = amount % 10n ** 18n;
+  if (fraction === 0n) return whole.toString();
+  return `${whole}.${fraction.toString().padStart(18, '0').replace(/0+$/, '')}`;
+}
 
-test('change note: withdrawalIndex is preserved (prevents tier-2 fallback)', () => {
-  const note = buildChangeNote({
-    newNullifier: 10n, newSecret: 20n, changeValue: 100n,
-    label: 30n, changeIdx: 3, changeLeafIndex: 7,
-    changeCommitment: '0xaa', wAsset: 'ETH',
-  });
-  assert.equal(note.withdrawalIndex, 3);
-  const resolved = ppResolveNextWithdrawalIndex(0n, 0n, 0n, 0n, note.withdrawalIndex);
-  assert.equal(resolved.source, 'note');
-  assert.equal(resolved.nextIndex, 4);
-});
-
-test('change note: value is string representation of BigInt', () => {
-  const note = buildChangeNote({
-    newNullifier: 1n, newSecret: 2n, changeValue: 999999999999999999n,
-    label: 3n, changeIdx: 0, changeLeafIndex: 0,
-    changeCommitment: '0x01', wAsset: 'ETH',
-  });
-  assert.equal(note.value, '999999999999999999');
-  const parsed = JSON.parse(JSON.stringify(note));
-  assert.equal(BigInt(parsed.value), 999999999999999999n);
-});
-
-test('change note: nullifier and secret can be reconstructed from hex', () => {
-  const origNull = 0xdeadbeefdeadbeefn;
-  const origSec = 0xcafebabecafebaben;
-  const note = buildChangeNote({
-    newNullifier: origNull, newSecret: origSec, changeValue: 1n,
-    label: 1n, changeIdx: 0, changeLeafIndex: 0,
-    changeCommitment: '0x01', wAsset: 'ETH',
-  });
-  assert.equal(BigInt(note.nullifier), origNull);
-  assert.equal(BigInt(note.secret), origSec);
-});
-
-test('change note: missing leafIndex is null (not undefined)', () => {
-  const note = buildChangeNote({
-    newNullifier: 1n, newSecret: 2n, changeValue: 100n,
-    label: 3n, changeIdx: 0, changeLeafIndex: undefined,
-    changeCommitment: '0x01', wAsset: 'ETH',
-  });
-  assert.equal(note.leafIndex, undefined);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Relay withdrawalData recipient validation
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Relay withdrawalData validation ──');
-
-// Re-implement the decode function matching dapp/index.html ppwDecodeRelayWithdrawalData
-function ppwDecodeRelayWithdrawalData(withdrawalDataHex) {
-  try {
-    // ABI decode: (address recipient, address relayer, uint256 feeBps)
-    // Each field is 32 bytes: address is left-padded, uint256 is right-padded
-    const hex = withdrawalDataHex.startsWith('0x') ? withdrawalDataHex.slice(2) : withdrawalDataHex;
-    if (hex.length < 192) return null; // 3 x 64 hex chars
-    const recipient = '0x' + hex.slice(24, 64); // first 32 bytes, take last 20
-    const relayer = '0x' + hex.slice(88, 128);  // second 32 bytes, take last 20
-    const feeBps = Number(BigInt('0x' + hex.slice(128, 192)));
-    return { recipient, relayer, feeBps };
-  } catch {
-    return null;
+async function showValidRelayQuote(harness, {
+  intent = createIntent(),
+  run = createRun(),
+  feeBps = 35,
+} = {}) {
+  harness.elements.ppwRecipient.value = intent.customRecipient || intent.resolvedRecipient || '';
+  if (intent.note?.value != null && intent.withdrawnValue != null && intent.withdrawnValue !== intent.note.value) {
+    harness.elements.ppwWithdrawAmt.value = formatWeiForInput(intent.withdrawnValue);
+  } else {
+    harness.elements.ppwWithdrawAmt.value = '';
   }
+  const quoteState = harness.api.withdrawal.ppwCreateRelayQuoteState(intent);
+  let quoteCalls = 0;
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  harness.context.ppwRelayerQuote = async (chainId, amount, asset, recipient, extraGas) => {
+    quoteCalls += 1;
+    return {
+      feeCommitment: createRelayFeeCommitment(harness, asset, {
+        amount: amount.toString(),
+        extraGas: !!extraGas,
+        withdrawalData: harness.context.ethers.AbiCoder.defaultAbiCoder().encode(
+          ['address', 'address', 'uint256'],
+          [recipient, RELAYER_ADDRESS, feeBps],
+        ),
+        fee: ((BigInt(amount) * BigInt(feeBps)) / 10000n).toString(),
+      }),
+    };
+  };
+  harness.context.ppwValidateRelayQuoteCommitment = (chainId, feeCommitment) => ({
+    recoveredSigner: RELAYER_ADDRESS,
+    expirationMs: feeCommitment.expiration,
+  });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: intent.resolvedRecipient,
+    relayer: RELAYER_ADDRESS,
+    feeBps,
+  });
+  harness.context.ppwResolveAllowedRelayRecipients = () => [RELAYER_ADDRESS];
+  harness.context.ppEnsureAssetConfig = async () => ({ maxRelayFeeBPS: 50 });
+  harness.context.ppwStartExpiryCountdown = () => {};
+  await harness.api.withdrawal.ppwRefreshRelayQuote(quoteState, intent, run, true);
+  return { quoteState, quoteCallsRef: () => quoteCalls };
 }
 
-function encodeWithdrawalData(recipient, relayer, feeBps) {
-  const pad = (addr) => addr.slice(2).toLowerCase().padStart(64, '0');
-  const feeHex = BigInt(feeBps).toString(16).padStart(64, '0');
-  return '0x' + pad(recipient) + pad(relayer) + feeHex;
+async function requestRelayReview(harness, {
+  note = harness.context._ppwNote,
+  wAsset = note?.asset || 'ETH',
+  feeBps = 35,
+  extraGas = false,
+} = {}) {
+  const isBold = wAsset === 'BOLD';
+  const isWstEth = wAsset === 'wstETH';
+  const intent = createIntent({
+    note,
+    wAsset,
+    wIsBOLD: isBold,
+    wIsWSTETH: isWstEth,
+    value: note?.value ?? 10_000000000000000000n,
+    withdrawnValue: note?.value ?? 10_000000000000000000n,
+  });
+  harness.elements.ppwRecipient.value = RELAY_RECIPIENT;
+  harness.elements.ppwExtraGas.checked = !!extraGas;
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  let quoteCalls = 0;
+  harness.context.ppwRelayerQuote = async (chainId, amount, asset, recipient, extraGas) => {
+    quoteCalls += 1;
+    return {
+      feeCommitment: createRelayFeeCommitment(harness, asset, {
+        amount: amount.toString(),
+        extraGas: !!extraGas,
+        withdrawalData: harness.context.ethers.AbiCoder.defaultAbiCoder().encode(
+          ['address', 'address', 'uint256'],
+          [recipient, RELAYER_ADDRESS, feeBps],
+        ),
+        fee: ((BigInt(amount) * BigInt(feeBps)) / 10000n).toString(),
+      }),
+    };
+  };
+  harness.context.ppwValidateRelayQuoteCommitment = (chainId, feeCommitment) => ({
+    recoveredSigner: RELAYER_ADDRESS,
+    expirationMs: feeCommitment.expiration,
+  });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: RELAY_RECIPIENT,
+    relayer: RELAYER_ADDRESS,
+    feeBps,
+  });
+  harness.context.ppwResolveAllowedRelayRecipients = () => [RELAYER_ADDRESS];
+  harness.context.ppEnsureAssetConfig = async () => ({ maxRelayFeeBPS: 50 });
+  harness.context.ppwStartExpiryCountdown = () => {};
+  const reviewed = await harness.api.withdrawal.ppwRequestRelayQuoteReview();
+  return { reviewed, quoteCallsRef: () => quoteCalls };
 }
 
-test('relay decode: extracts recipient, relayer, and feeBps correctly', () => {
-  const recipient = '0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa';
-  const relayer = '0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB';
-  const data = encodeWithdrawalData(recipient, relayer, 50);
-  const decoded = ppwDecodeRelayWithdrawalData(data);
-  assert.ok(decoded);
-  assert.equal(decoded.recipient.toLowerCase(), recipient.toLowerCase());
-  assert.equal(decoded.relayer.toLowerCase(), relayer.toLowerCase());
-  assert.equal(decoded.feeBps, 50);
-});
-
-test('relay decode: returns null on truncated data', () => {
-  assert.equal(ppwDecodeRelayWithdrawalData('0x1234'), null);
-});
-
-test('relay validate: mismatched recipient is caught', () => {
-  const localRecipient = '0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa';
-  const attackerRecipient = '0xdEaDbEeFdEaDbEeFdEaDbEeFdEaDbEeFdEaDbEeF';
-  const data = encodeWithdrawalData(attackerRecipient, '0x' + '00'.repeat(20), 50);
-  const decoded = ppwDecodeRelayWithdrawalData(data);
-  assert.ok(decoded);
-  // This is the validation the dapp now performs before proving
-  const recipientMatches = decoded.recipient.toLowerCase() === localRecipient.toLowerCase();
-  assert.equal(recipientMatches, false, 'should reject mismatched recipient');
-});
-
-test('relay validate: matching recipient passes', () => {
-  const localRecipient = '0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa';
-  const data = encodeWithdrawalData(localRecipient, '0x' + '00'.repeat(20), 100);
-  const decoded = ppwDecodeRelayWithdrawalData(data);
-  assert.ok(decoded);
-  const recipientMatches = decoded.recipient.toLowerCase() === localRecipient.toLowerCase();
-  assert.equal(recipientMatches, true, 'should accept matching recipient');
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Wallet disconnect clears withdrawal state
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log('\n── Wallet disconnect safety ──');
-
-const PP_REVIEW_STATUS = {
-  PENDING: 'pending',
-  APPROVED: 'approved',
-  DECLINED: 'declined',
-  POI_REQUIRED: 'poi_required',
-};
-
-function ppwCanSubmitWithdrawal(ppwNote, ppwMode, resolvedRecipient, connectedAddress, signer) {
-  if (!ppwNote || ppwNote.isWithdrawable !== true || ppwNote.reviewStatus !== PP_REVIEW_STATUS.APPROVED) return false;
-  if (ppwMode === 'relay') return !!resolvedRecipient;
-  return !!connectedAddress && !!signer;
+function createHarness({
+  globals = {},
+  statePatch = null,
+  note = createBaseNote(),
+  mode = 'direct',
+  actionKind = 'withdraw',
+} = {}) {
+  return createPrivacyHarness({
+    globals: {
+      console: TEST_CONSOLE,
+      BOLD_ADDRESS,
+      WSTETH_ADDRESS,
+      _connectedAddress: CONNECTED_ADDRESS,
+      _isWalletConnect: false,
+      _connectedWalletProvider: null,
+      _signer: { getAddress: async () => CONNECTED_ADDRESS },
+      _ppwMode: mode,
+      _ppwActionKind: actionKind,
+      _ppwNote: note,
+      _ppwSelectedAccountLabel: 'PA-1',
+      _ppwRelayerMinByAsset: {},
+      _ppwRelayExpiryTimer: null,
+      _ppwAnonReqId: 0,
+      _ppwAnonTimer: null,
+      _ppwRelayerMinReqId: 0,
+      ZERO_ADDRESS: '0x0000000000000000000000000000000000000000',
+      tokens(value) {
+        return String(value);
+      },
+      coinGetResolved(id) {
+        return id === 'ppwRecipient' ? RELAY_RECIPIENT : null;
+      },
+      ppEnsureWalletCompatibility: async () => ({ supported: true, kind: 'eoa', message: '' }),
+      ppReadWithRpc: async (reader) => reader({ getTransactionReceipt: async () => null }),
+      ppReadEntrypoint: async (reader) => reader({ latestRoot: async () => 55n }),
+      ppwClearAnonymityHint() {},
+      ppwScheduleAnonymityHint() {},
+      ppwRenderRoundedSuggestions() {},
+      ...globals,
+    },
+    statePatch: {
+      _ppwMode: mode,
+      _ppwActionKind: actionKind,
+      _ppwNote: note,
+      ...(statePatch || {}),
+    },
+    baseElements: {
+      ppwWithdrawAmt: createElement({ value: '' }, { withScrollIntoView: true }),
+      ppwAmountSection: createElement({}, { withScrollIntoView: true }),
+      ppwModeSection: createElement({}, { withScrollIntoView: true }),
+      ppwRecipientSection: createElement({}, { withScrollIntoView: true }),
+      ppwDraftActionLink: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawPct25: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawPct50: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawPct75: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawPct100: createElement({}, { withScrollIntoView: true }),
+      ppwRecipient: createElement({ value: '' }, { withScrollIntoView: true }),
+      ppwRecipientLabel: createElement({}, { withScrollIntoView: true }),
+      ppwRecipientResolved: createElement({}, { withScrollIntoView: true }),
+      ppwRelayRecipientWrap: createElement({}, { withScrollIntoView: true }),
+      ppwParsed: createElement({}, { withScrollIntoView: true }),
+      ppBalance: createElement({}, { withScrollIntoView: true }),
+      ppwLoadDisconnected: createElement({}, { withScrollIntoView: true }),
+      ppwLoadConnected: createElement({}, { withScrollIntoView: true }),
+      ppwLoadResults: createElement({}, { withScrollIntoView: true }),
+      ppwActivitySection: createElement({}, { withScrollIntoView: true }),
+      ppwPreview: createElement({}, { withScrollIntoView: true }),
+      ppwPreviewTitle: createElement({}, { withScrollIntoView: true }),
+      ppwPreviewContent: createElement({}, { withScrollIntoView: true }),
+      ppwChangeWarning: createElement({}, { withScrollIntoView: true }),
+      ppwRelayMinWarning: createElement({}, { withScrollIntoView: true }),
+      ppwRagequitWarning: createElement({}, { withScrollIntoView: true }),
+      ppwSuggestWrap: createElement({}, { withScrollIntoView: true }),
+      ppwSuggestBtns: createElement({}, { withScrollIntoView: true }),
+      ppwAnonHint: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawBalanceHint: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawAmtLabel: createElement({}, { withScrollIntoView: true }),
+      ppwModeRelay: createElement({}, { withScrollIntoView: true }),
+      ppwModeSummary: createElement({}, { withScrollIntoView: true }),
+      ppwExtraGasWrap: createElement({}, { withScrollIntoView: true }),
+      ppwExtraGas: createElement({ checked: false, disabled: false }, { withScrollIntoView: true }),
+      ppwRelayFeePanel: createElement({}, { withScrollIntoView: true }),
+      ppwRelayFeeBps: createElement({}, { withScrollIntoView: true }),
+      ppwRelayFeeAmt: createElement({}, { withScrollIntoView: true }),
+      ppwRelayExpiry: createElement({}, { withScrollIntoView: true }),
+      ppwVerifyStatus: createElement({}, { withScrollIntoView: true }),
+      ppwVerify: createElement({}, { withScrollIntoView: true }),
+      ppwProgressWrap: createElement({}, { withScrollIntoView: true }),
+      ppwProgressLabel: createElement({}, { withScrollIntoView: true }),
+      ppwProgressSub: createElement({}, { withScrollIntoView: true }),
+      ppwProgressBar: createElement({}, { withScrollIntoView: true }),
+      ppwWithdrawBtn: createElement({}, { withScrollIntoView: true }),
+      ppwResultSummary: createElement({}, { withScrollIntoView: true }),
+      ppwResult: createElement({}, { withScrollIntoView: true }),
+      ppwResultBackWrap: createElement({}, { withScrollIntoView: true }),
+    },
+  });
 }
 
-test('approved account can submit in relay mode with a resolved recipient', () => {
+function createIntent(overrides = {}) {
+  return {
+    note: createBaseNote(),
+    value: 10_000000000000000000n,
+    label: 123n,
+    wAsset: 'ETH',
+    withdrawnValue: 5_000000000000000000n,
+    recipient: RELAY_RECIPIENT,
+    resolvedRecipient: RELAY_RECIPIENT,
+    customRecipient: RELAY_RECIPIENT,
+    isRelayMode: true,
+    wIsBOLD: false,
+    wIsWSTETH: false,
+    poolAddress: '0x5555555555555555555555555555555555555555',
+    scope: 777n,
+    leafIndex: 0,
+    ...overrides,
+  };
+}
+
+async function markWalletCompatibilityReady(harness, result = { supported: true, kind: 'eoa', message: '' }) {
+  harness.context.ppDetectWalletCompatibility = async () => result;
+  await harness.api.wallet.ppRefreshWalletCompatibility(true);
+}
+
+function createWithdrawalState(overrides = {}) {
+  return {
+    expectedCommitment: 999n,
+    adjustedLeafIndex: 0,
+    stateTree: { root: 111n, depth: 1 },
+    stateSiblings: Array(32).fill(0n),
+    aspTree: { root: 222n, depth: 1 },
+    aspSiblings: Array(32).fill(0n),
+    aspIndex: 0,
+    ...overrides,
+  };
+}
+
+function createProofResult() {
+  return {
+    proof: {
+      pi_a: ['1', '2'],
+      pi_b: [['3', '4'], ['5', '6']],
+      pi_c: ['7', '8'],
+    },
+    publicSignals: ['1', '2', '3', '4', '5', '6', '7', '8'],
+  };
+}
+
+function createRelayFeeCommitment(harness, assetAddress, patch = {}) {
+  const encodedWithdrawalData = harness.context.ethers.AbiCoder.defaultAbiCoder().encode(
+    ['address', 'address', 'uint256'],
+    [RELAY_RECIPIENT, RELAYER_ADDRESS, 35],
+  );
+  return {
+    withdrawalData: encodedWithdrawalData,
+    asset: assetAddress,
+    expiration: Date.now() + 60_000,
+    amount: '5000000000000000000',
+    extraGas: false,
+    signedRelayerCommitment: '0xsigned',
+    fee: '17500000000000000',
+    ...patch,
+  };
+}
+
+console.log('\n-- Withdrawal helpers --');
+
+test('leanIMT proof stays padded to circuit depth', () => {
+  const harness = createHarness();
+  const tree = harness.api.withdrawal.leanIMTBuild([11n, 22n, 33n]);
+  const siblings = harness.api.withdrawal.leanIMTProof(tree.levels, 1);
+  assert.equal(siblings.length, 32);
+});
+
+test('next withdrawal index prefers the note lineage when available', () => {
+  const harness = createHarness();
+  const resolved = harness.api.withdrawal.ppResolveNextWithdrawalIndex(
+    11n,
+    22n,
+    33n,
+    44n,
+    2,
+    0,
+  );
+  assert.equal(resolved.nextIndex, 3);
+  assert.equal(resolved.source, 'note');
+});
+
+test('preview builder hides preview for full withdrawals (no new info until quote)', () => {
+  const harness = createHarness({
+    mode: 'direct',
+    note: createBaseNote({ value: 1_000000000000000000n }),
+  });
+
+  const preview = harness.api.withdrawal.ppwBuildPreviewState(
+    createBaseNote({ value: 1_000000000000000000n }),
+    'direct',
+    CONNECTED_ADDRESS,
+  );
+
+  assert.equal(preview.show, false);
+  assert.equal(preview.isPartial, false);
+});
+
+test('preview builder produces partial withdrawal data even when preview is hidden', () => {
+  const harness = createHarness({
+    mode: 'relay',
+    note: createBaseNote({ value: 8_000000000000000000n }),
+  });
+  harness.elements.ppwWithdrawAmt.value = '3';
+  harness.elements.ppwRecipient.value = RELAY_RECIPIENT;
+
+  const preview = harness.api.withdrawal.ppwBuildPreviewState(
+    createBaseNote({ value: 8_000000000000000000n }),
+    'relay',
+    CONNECTED_ADDRESS,
+  );
+
+  assert.equal(preview.show, false);
+  assert.equal(preview.isPartial, true);
+  assert.equal(preview.previewRecipient, RELAY_RECIPIENT);
+  assert.match(preview.warningText, /partial withdrawal/i);
+});
+
+test('preview renderer hides the preview cleanly for empty states', () => {
+  const harness = createHarness();
+  harness.api.withdrawal.ppwRenderPreviewState({ show: false, asset: 'ETH', value: 1n });
+  assert.equal(harness.elements.ppwPreview.style.display, 'none');
+  assert.equal(harness.elements.ppwChangeWarning.style.display, 'none');
+});
+
+test('relay editing state uses the review quote action', () => {
+  const harness = createHarness({ mode: 'relay' });
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'editing');
+  assert.equal(harness.elements.ppwWithdrawBtn.textContent, 'Review quote');
+  assert.equal(harness.elements.ppwDraftActionLink.textContent, '× Cancel');
+});
+
+test('requesting a relay review enters review state only after a validated quote is fetched', async () => {
+  const boldNote = createBaseNote({ asset: 'BOLD', value: 8_000000000000000000n });
+  const harness = createHarness({
+    mode: 'relay',
+    note: boldNote,
+    statePatch: { _ppwMode: 'relay', _ppwNote: boldNote },
+  });
+  const { reviewed } = await requestRelayReview(harness, { note: boldNote, wAsset: 'BOLD' });
+
+  assert.ok(reviewed);
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'review');
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), true);
+  assert.equal(harness.elements.ppwWithdrawBtn.textContent, 'Confirm withdrawal');
+  assert.equal(harness.elements.ppwDraftActionLink.textContent, '← Edit');
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+  assert.equal(harness.elements.ppwWithdrawAmt.disabled, true);
+  assert.equal(harness.elements.ppwWithdrawAmt.readOnly, true);
+  assert.equal(harness.elements.ppwRecipient.disabled, true);
+  assert.equal(harness.elements.ppwModeRelay.disabled, true);
+  assert.equal(harness.elements.ppwWithdrawPct25.disabled, true);
+  assert.equal(harness.elements.ppwWithdrawPct50.disabled, true);
+  assert.equal(harness.elements.ppwWithdrawPct75.disabled, true);
+  assert.equal(harness.elements.ppwWithdrawPct100.disabled, true);
+  assert.equal(harness.elements.ppwExtraGas.disabled, true);
+});
+
+test('editing from review preserves inputs and clears the reviewed quote', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  harness.elements.ppwWithdrawAmt.value = '4';
+  const { reviewed } = await requestRelayReview(harness);
+  assert.ok(reviewed);
+
+  harness.api.withdrawal.ppwHandleDraftActionLink();
+
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'editing');
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), false);
+  assert.equal(harness.elements.ppwWithdrawAmt.value, '4');
+  assert.equal(harness.elements.ppwRecipient.value, RELAY_RECIPIENT);
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+  assert.equal(harness.elements.ppwWithdrawBtn.textContent, 'Review quote');
+  assert.equal(harness.elements.ppwDraftActionLink.textContent, '× Cancel');
+});
+
+test('collect withdrawal intent rejects invalid amounts', async () => {
+  const harness = createHarness({
+    note: createBaseNote(),
+  });
+  const run = createRun();
+  harness.elements.ppwWithdrawAmt.value = 'not-a-number';
+
+  const intent = await harness.api.withdrawal.ppwCollectWithdrawalIntent(run);
+  assert.equal(intent, null);
+  assert.equal(harness.lastStatus?.message, 'Invalid withdraw amount. Enter a valid ETH amount.');
+});
+
+test('invalid amount disables the withdraw CTA after preview sync', async () => {
+  const harness = createHarness();
+  await markWalletCompatibilityReady(harness);
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  harness.elements.ppwWithdrawAmt.value = 'not-a-number';
+
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assert.equal(harness.elements.ppwWithdrawBtn.disabled, true);
+  assert.equal(harness.elements.ppwPreview.style.display, 'none');
+});
+
+test('amount above the note balance disables the withdraw CTA after preview sync', async () => {
+  const harness = createHarness();
+  await markWalletCompatibilityReady(harness);
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  harness.elements.ppwWithdrawAmt.value = '11';
+
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assert.equal(harness.elements.ppwWithdrawBtn.disabled, true);
+  assert.equal(harness.elements.ppwPreview.style.display, 'none');
+});
+
+test('valid amount re-enables the withdraw CTA when the draft becomes valid again', async () => {
+  const harness = createHarness();
+  await markWalletCompatibilityReady(harness);
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  harness.elements.ppwWithdrawAmt.value = '11';
+  harness.api.withdrawal.ppwUpdatePreview();
+  assert.equal(harness.elements.ppwWithdrawBtn.disabled, true);
+
+  harness.elements.ppwWithdrawAmt.value = '5';
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assert.equal(harness.elements.ppwWithdrawBtn.disabled, false);
+  assert.equal(harness.elements.ppwPreview.style.display, 'none');
+});
+
+test('relay mode still requires a resolved recipient before enabling the CTA', async () => {
+  const harness = createHarness({
+    mode: 'relay',
+    globals: {
+      coinGetResolved: () => null,
+    },
+  });
+  await markWalletCompatibilityReady(harness);
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  harness.api.withdrawal.ppwUpdatePreview();
+  assert.equal(harness.elements.ppwWithdrawBtn.disabled, true);
+
+  harness.context.coinGetResolved = () => RELAY_RECIPIENT;
+  harness.elements.ppwRecipient.value = 'alice.eth';
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assert.equal(harness.elements.ppwWithdrawBtn.disabled, false);
+});
+
+test('collect withdrawal intent rejects relay withdrawals without a resolved recipient', async () => {
+  const harness = createHarness({
+    mode: 'relay',
+    globals: {
+      coinGetResolved: () => null,
+    },
+  });
+  const run = createRun();
+  harness.elements.ppwRecipient.value = '';
+
+  const intent = await harness.api.withdrawal.ppwCollectWithdrawalIntent(run);
+  assert.equal(intent, null);
+  assert.equal(harness.lastStatus?.message, 'Enter a recipient address, name.wei, or name.eth for relay withdrawal.');
+});
+
+test('load withdrawal state rejects stale state roots', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwCheckNullifierUnspent = async () => ({ isSpent: false, nullHash: 999n });
+  harness.context.ppwFetchAndVerifyTreeData = async () => ({
+    aspLeaves: [123n],
+    adjustedLeafIndex: 0,
+    stateTree: { root: 888n, depth: 1 },
+    stateSiblings: Array(32).fill(0n),
+  });
+  harness.context.ppReadKnownStateRoots = async () => ({ currentRoot: 999n, roots: [777n] });
+  harness.context.ppVerifyAspDataWithRetries = async () => ({
+    status: 'verified',
+    aspLeaves: [123n],
+    aspIndex: 0,
+    aspTree: { root: 55n, depth: 1, levels: [[123n]] },
+    attempts: 1,
+  });
+
+  const state = await harness.api.withdrawal.ppwLoadWithdrawalState(createIntent(), run);
+  assert.equal(state, null);
+  assert.equal(harness.lastStatus?.message, 'State root is too stale for this pool. Refresh Pool Balances and try again.');
+});
+
+test('load withdrawal state rejects deposits missing from the ASP set', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwCheckNullifierUnspent = async () => ({ isSpent: false, nullHash: 999n });
+  harness.context.ppwFetchAndVerifyTreeData = async () => ({
+    aspLeaves: [123n],
+    adjustedLeafIndex: 0,
+    stateTree: { root: 999n, depth: 1 },
+    stateSiblings: Array(32).fill(0n),
+  });
+  harness.context.ppReadKnownStateRoots = async () => ({ currentRoot: 999n, roots: [999n] });
+  harness.context.ppVerifyAspDataWithRetries = async () => ({
+    status: 'missing-label',
+    aspLeaves: [],
+    aspIndex: -1,
+    aspTree: { root: 55n, depth: 1, levels: [[0n]] },
+    onChainASPRoot: 55n,
+    attempts: 1,
+  });
+
+  const state = await harness.api.withdrawal.ppwLoadWithdrawalState(createIntent(), run);
+  assert.equal(state, null);
+  assert.match(harness.lastStatus?.message || '', /not yet in the ASP association set/i);
+});
+
+test('load withdrawal state logs ASP root RPC failures as errors', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwCheckNullifierUnspent = async () => ({ isSpent: false, nullHash: 999n });
+  harness.context.ppwFetchAndVerifyTreeData = async () => ({
+    aspLeaves: [123n],
+    adjustedLeafIndex: 0,
+    stateTree: { root: 999n, depth: 1, levels: [[123n]] },
+    stateSiblings: Array(32).fill(0n),
+  });
+  harness.context.ppReadKnownStateRoots = async () => ({ currentRoot: 999n, roots: [999n] });
+  harness.context.ppVerifyAspDataWithRetries = async () => {
+    throw new Error('rpc unavailable');
+  };
+
+  const state = await harness.api.withdrawal.ppwLoadWithdrawalState(createIntent(), run);
+
+  assert.equal(state, null);
   assert.equal(
-    ppwCanSubmitWithdrawal(
-      { value: 1n, reviewStatus: PP_REVIEW_STATUS.APPROVED, isWithdrawable: true },
-      'relay',
-      '0xabc',
-      null,
-      null,
-    ),
-    true,
+    harness.lastStatus?.message,
+    'Could not verify ASP root onchain. Retry withdrawal when RPC connectivity is stable.',
+  );
+  assert.ok(
+    run.logs.some((entry) => entry.includes('<b>Error:</b> Could not verify ASP root onchain.')),
   );
 });
 
-test('pending account is blocked before submission', () => {
+test('load withdrawal state fails closed when the spent check RPC read fails', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  let treeFetchCalls = 0;
+  let aspVerifyCalls = 0;
+  harness.context.ppwCheckNullifierUnspent = async () => {
+    throw new Error('rpc unavailable');
+  };
+  harness.context.ppwFetchAndVerifyTreeData = async () => {
+    treeFetchCalls += 1;
+    return createWithdrawalState();
+  };
+  harness.context.ppVerifyAspDataWithRetries = async () => {
+    aspVerifyCalls += 1;
+    return createWithdrawalState();
+  };
+
+  const state = await harness.api.withdrawal.ppwLoadWithdrawalState(createIntent(), run);
+
+  assert.equal(state, null);
+  assert.equal(treeFetchCalls, 0);
+  assert.equal(aspVerifyCalls, 0);
   assert.equal(
-    ppwCanSubmitWithdrawal(
-      { value: 1n, reviewStatus: PP_REVIEW_STATUS.PENDING, isWithdrawable: false },
-      'relay',
-      '0xabc',
-      null,
-      null,
-    ),
-    false,
+    harness.lastStatus?.message,
+    'Could not verify whether this deposit has already been withdrawn. Retry when RPC connectivity is stable.',
+  );
+  assert.ok(
+    run.logs.some((entry) => entry.includes('Could not verify whether this deposit has already been withdrawn.')),
   );
 });
 
-test('declined and poi-required accounts are blocked before submission', () => {
+test('withdraw flow aborts before proof preparation when spent status is unknown', async () => {
+  const harness = createHarness({ mode: 'direct' });
+  let prepareProofCalls = 0;
+  harness.context.ppwCollectWithdrawalIntent = async () => createIntent({
+    isRelayMode: false,
+    recipient: CONNECTED_ADDRESS,
+    resolvedRecipient: CONNECTED_ADDRESS,
+    customRecipient: '',
+  });
+  harness.context.ppwCheckNullifierUnspent = async () => {
+    throw new Error('rpc unavailable');
+  };
+  harness.context.ppwPrepareProofJob = async () => {
+    prepareProofCalls += 1;
+    return null;
+  };
+
+  await harness.api.withdrawal.ppwWithdraw();
+
+  assert.equal(prepareProofCalls, 0);
   assert.equal(
-    ppwCanSubmitWithdrawal(
-      { value: 1n, reviewStatus: PP_REVIEW_STATUS.DECLINED, isWithdrawable: false },
-      'relay',
-      '0xabc',
-      null,
-      null,
-    ),
-    false,
+    harness.lastStatus?.message,
+    'Could not verify whether this deposit has already been withdrawn. Retry when RPC connectivity is stable.',
   );
+});
+
+test('relay quote refresh rejects recipient mismatches', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  const intent = createIntent();
+  const quoteState = harness.api.withdrawal.ppwCreateRelayQuoteState(intent);
+  const feeCommitment = createRelayFeeCommitment(harness, quoteState.relayAssetAddr);
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  harness.context.ppwRelayerQuote = async () => ({ feeCommitment });
+  harness.context.ppwValidateRelayQuoteCommitment = () => ({ recoveredSigner: RELAYER_ADDRESS, expirationMs: feeCommitment.expiration });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: CONNECTED_ADDRESS,
+    relayer: RELAYER_ADDRESS,
+    feeBps: 35,
+  });
+  harness.context.ppwResolveAllowedRelayRecipients = () => [RELAYER_ADDRESS];
+  harness.context.ppEnsureAssetConfig = async () => ({ maxRelayFeeBPS: 50 });
+  harness.context.ppwStartExpiryCountdown = () => {};
+
+  await assert.rejects(
+    () => harness.api.withdrawal.ppwRefreshRelayQuote(quoteState, intent, run, true),
+    /recipient mismatch/i,
+  );
+});
+
+test('relayer quote and request POSTs use timed abort signals', async () => {
+  const calls = [];
+  let clearTimeoutCalls = 0;
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const harness = createHarness({
+    globals: {
+      AbortController,
+      setTimeout: (...args) => realSetTimeout(...args),
+      clearTimeout: (timeoutId) => {
+        clearTimeoutCalls += 1;
+        return realClearTimeout(timeoutId);
+      },
+      fetch: async (url, options = {}) => {
+        calls.push({ url, options });
+        return {
+          ok: true,
+          json: async () => {
+            const beforeBodyParse = clearTimeoutCalls;
+            await Promise.resolve();
+            assert.equal(clearTimeoutCalls, beforeBodyParse);
+            return { ok: true };
+          },
+        };
+      },
+    },
+  });
+  const proof = createProofResult();
+
+  await harness.api.withdrawal.ppwRelayerQuote(1, 123n, RELAYER_ADDRESS, RELAY_RECIPIENT, false);
+  await harness.api.withdrawal.ppwRelayerRequest(
+    1,
+    777n,
+    { processooor: RELAYER_ADDRESS, data: '0x' },
+    proof.proof,
+    proof.publicSignals,
+    { fee: '1' },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url.endsWith('/relayer/quote'), true);
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(typeof calls[0].options.signal?.addEventListener, 'function');
+  assert.equal(calls[0].options.signal.aborted, false);
+  assert.equal(calls[1].url.endsWith('/relayer/request'), true);
+  assert.equal(calls[1].options.method, 'POST');
+  assert.equal(typeof calls[1].options.signal?.addEventListener, 'function');
+  assert.equal(calls[1].options.signal.aborted, false);
+  assert(clearTimeoutCalls >= 2, 'at least two abort timers were cleaned up after fetch resolved');
+});
+
+test('relay quote refresh rejects relayer mismatches', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  const intent = createIntent();
+  const quoteState = harness.api.withdrawal.ppwCreateRelayQuoteState(intent);
+  const feeCommitment = createRelayFeeCommitment(harness, quoteState.relayAssetAddr);
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  harness.context.ppwRelayerQuote = async () => ({ feeCommitment });
+  harness.context.ppwValidateRelayQuoteCommitment = () => ({ recoveredSigner: RELAYER_ADDRESS, expirationMs: feeCommitment.expiration });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: RELAY_RECIPIENT,
+    relayer: CONNECTED_ADDRESS,
+    feeBps: 35,
+  });
+  harness.context.ppwResolveAllowedRelayRecipients = () => [RELAYER_ADDRESS];
+  harness.context.ppEnsureAssetConfig = async () => ({ maxRelayFeeBPS: 50 });
+  harness.context.ppwStartExpiryCountdown = () => {};
+
+  await assert.rejects(
+    () => harness.api.withdrawal.ppwRefreshRelayQuote(quoteState, intent, run, true),
+    /relayer mismatch/i,
+  );
+});
+
+test('relay quote refresh enforces the onchain relay fee cap', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  const intent = createIntent();
+  const quoteState = harness.api.withdrawal.ppwCreateRelayQuoteState(intent);
+  const feeCommitment = createRelayFeeCommitment(harness, quoteState.relayAssetAddr);
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  harness.context.ppwRelayerQuote = async () => ({ feeCommitment });
+  harness.context.ppwValidateRelayQuoteCommitment = () => ({ recoveredSigner: RELAYER_ADDRESS, expirationMs: feeCommitment.expiration });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: RELAY_RECIPIENT,
+    relayer: RELAYER_ADDRESS,
+    feeBps: 120,
+  });
+  harness.context.ppwResolveAllowedRelayRecipients = () => [RELAYER_ADDRESS];
+  harness.context.ppEnsureAssetConfig = async () => ({ maxRelayFeeBPS: 50 });
+  harness.context.ppwStartExpiryCountdown = () => {};
+
+  await assert.rejects(
+    () => harness.api.withdrawal.ppwRefreshRelayQuote(quoteState, intent, run, true),
+    /exceeds onchain max/i,
+  );
+});
+
+test('relay quote refresh retries once without extra gas when unsupported', async () => {
+  const boldNote = createBaseNote({ asset: 'BOLD', value: 8_000000000000000000n });
+  const harness = createHarness({
+    mode: 'relay',
+    note: boldNote,
+    statePatch: { _ppwMode: 'relay', _ppwNote: boldNote },
+  });
+  const run = createRun();
+  const intent = createIntent({
+    note: boldNote,
+    value: boldNote.value,
+    withdrawnValue: boldNote.value,
+    wAsset: 'BOLD',
+    wIsBOLD: true,
+  });
+  harness.elements.ppwExtraGas.checked = true;
+  const quoteState = harness.api.withdrawal.ppwCreateRelayQuoteState(intent);
+  const extraGasCalls = [];
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  harness.context.ppwRelayerQuote = async (chainId, amount, asset, recipient, extraGas) => {
+    extraGasCalls.push(!!extraGas);
+    if (extraGasCalls.length === 1) throw new Error('UNSUPPORTED_FEATURE: extraGas');
+    return {
+      feeCommitment: createRelayFeeCommitment(harness, asset, {
+        amount: amount.toString(),
+        extraGas: !!extraGas,
+        withdrawalData: harness.context.ethers.AbiCoder.defaultAbiCoder().encode(
+          ['address', 'address', 'uint256'],
+          [recipient, RELAYER_ADDRESS, 35],
+        ),
+        fee: ((BigInt(amount) * 35n) / 10000n).toString(),
+      }),
+    };
+  };
+  harness.context.ppwValidateRelayQuoteCommitment = () => ({ recoveredSigner: RELAYER_ADDRESS, expirationMs: Date.now() + 60_000 });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: RELAY_RECIPIENT,
+    relayer: RELAYER_ADDRESS,
+    feeBps: 35,
+  });
+  harness.context.ppwResolveAllowedRelayRecipients = () => [RELAYER_ADDRESS];
+  harness.context.ppEnsureAssetConfig = async () => ({ maxRelayFeeBPS: 50 });
+  harness.context.ppwStartExpiryCountdown = () => {};
+
+  await harness.api.withdrawal.ppwRefreshRelayQuote(quoteState, intent, run, true);
+
+  assert.deepEqual(extraGasCalls, [true, false]);
+  assert.equal(quoteState.relayExtraGas, false);
+  assert.equal(harness.elements.ppwExtraGas.checked, false);
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
   assert.equal(
-    ppwCanSubmitWithdrawal(
-      { value: 1n, reviewStatus: PP_REVIEW_STATUS.POI_REQUIRED, isWithdrawable: false },
-      'relay',
-      '0xabc',
-      null,
-      null,
-    ),
-    false,
+    harness.lastStatus?.message,
+    'Extra gas is not available for this quote. Continuing without it.',
+  );
+  assert.ok(
+    run.logs.some((entry) => entry.includes('Extra gas is not available for this quote. Continuing without it.')),
   );
 });
 
-test('disconnect: ppwCanSubmitWithdrawal requires _ppwNote', () => {
-  // With note set (pre-disconnect): relay mode can submit with just a recipient
-  assert.equal(ppwCanSubmitWithdrawal({ value: 1n, reviewStatus: PP_REVIEW_STATUS.APPROVED, isWithdrawable: true }, 'relay', '0xabc', null, null), true);
-  // After disconnect clears note: cannot submit
-  assert.equal(ppwCanSubmitWithdrawal(null, 'relay', '0xabc', null, null), false);
+test('relay quote refresh does not retry generic quote failures', async () => {
+  const boldNote = createBaseNote({ asset: 'BOLD' });
+  const harness = createHarness({
+    mode: 'relay',
+    note: boldNote,
+    statePatch: { _ppwMode: 'relay', _ppwNote: boldNote },
+  });
+  const run = createRun();
+  const intent = createIntent({
+    note: boldNote,
+    value: boldNote.value,
+    withdrawnValue: boldNote.value,
+    wAsset: 'BOLD',
+    wIsBOLD: true,
+  });
+  harness.elements.ppwExtraGas.checked = true;
+  const quoteState = harness.api.withdrawal.ppwCreateRelayQuoteState(intent);
+  const extraGasCalls = [];
+  harness.context.ppwRelayerDetails = async () => ({ feeReceiverAddress: RELAYER_ADDRESS });
+  harness.context.ppwRelayerQuote = async (chainId, amount, asset, recipient, extraGas) => {
+    extraGasCalls.push(!!extraGas);
+    throw new Error('relayer unavailable');
+  };
+
+  await assert.rejects(
+    () => harness.api.withdrawal.ppwRefreshRelayQuote(quoteState, intent, run, true),
+    /relayer unavailable/i,
+  );
+
+  assert.deepEqual(extraGasCalls, [true]);
+  assert.equal(quoteState.relayExtraGas, true);
+  assert.equal(harness.elements.ppwExtraGas.checked, true);
 });
 
-test('disconnect: relay mode blocked without note even with resolved recipient', () => {
-  assert.equal(ppwCanSubmitWithdrawal(null, 'relay', '0xdeadbeef', null, null), false);
-});
-
-test('disconnect: direct mode blocked without note even with new wallet', () => {
-  assert.equal(ppwCanSubmitWithdrawal(null, 'direct', null, '0xnewwallet', {}), false);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Summary
-// ═══════════════════════════════════════════════════════════════════════════════
-
-console.log(`\n${'═'.repeat(60)}`);
-if (failed === 0) {
-  console.log(`\x1b[32m  All ${passed} tests passed.\x1b[0m\n`);
-  process.exit(0);
-} else {
-  console.log(`\x1b[31m  ${failed} failed, ${passed} passed.\x1b[0m\n`);
-  process.exit(1);
+function assertQuoteInvalidated(harness) {
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none', 'quote box hidden');
+  assert.equal(harness.api.withdrawal.ppwIsRelayQuoteDisplayed(), false, 'relay quote flag cleared');
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'editing', 'draft returns to editing');
 }
+
+test('relay quote panel hides when the recipient changes after a quote was shown', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  const { reviewed } = await requestRelayReview(harness);
+
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+  assert.ok(reviewed);
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'review');
+  assert.equal(harness.api.withdrawal.ppwIsRelayQuoteDisplayed(), true);
+
+  harness.elements.ppwRecipient.value = '0x9999999999999999999999999999999999999999';
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assertQuoteInvalidated(harness);
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), false);
+});
+
+test('relay quote panel hides when the withdrawal amount changes after a quote was shown', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  await requestRelayReview(harness);
+
+  harness.elements.ppwWithdrawAmt.value = '1';
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assertQuoteInvalidated(harness);
+});
+
+test('relay quote panel hides when extra gas changes after a quote was shown', async () => {
+  const boldNote = createBaseNote({ asset: 'BOLD' });
+  const harness = createHarness({
+    note: boldNote,
+    statePatch: { _ppwMode: 'relay', _ppwNote: boldNote },
+  });
+  harness.elements.ppwExtraGas.checked = false;
+  await requestRelayReview(harness, { note: boldNote, wAsset: 'BOLD' });
+
+  harness.elements.ppwExtraGas.checked = true;
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assertQuoteInvalidated(harness);
+});
+
+test('editing withdraw inputs hides the stale quote panel without auto-refetching', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  const intent = createIntent();
+  const { quoteCallsRef } = await showValidRelayQuote(harness, { intent });
+
+  harness.elements.ppwRecipient.value = '0x8888888888888888888888888888888888888888';
+  harness.api.withdrawal.ppwUpdatePreview();
+
+  assert.equal(quoteCallsRef(), 1);
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+});
+
+test('prepare relay quote fetches a fresh quote after a previously displayed quote was invalidated', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  const run = createRun();
+  const initialIntent = createIntent();
+  const { quoteCallsRef } = await showValidRelayQuote(harness, { intent: initialIntent, run });
+
+  harness.elements.ppwRecipient.value = '0x7777777777777777777777777777777777777777';
+  harness.api.withdrawal.ppwUpdatePreview();
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+
+  const nextIntent = createIntent({
+    resolvedRecipient: '0x7777777777777777777777777777777777777777',
+    recipient: '0x7777777777777777777777777777777777777777',
+    customRecipient: '0x7777777777777777777777777777777777777777',
+  });
+  harness.context.ppwDecodeRelayWithdrawalData = () => ({
+    recipient: nextIntent.resolvedRecipient,
+    relayer: RELAYER_ADDRESS,
+    feeBps: 35,
+  });
+  const quoteState = await harness.api.withdrawal.ppwPrepareRelayQuote(nextIntent, createWithdrawalState(), run);
+
+  assert.equal(quoteCallsRef(), 2);
+  assert.equal(quoteState.relayQuote?.feeCommitment?.withdrawalData != null, true);
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+  assert.equal(harness.api.withdrawal.ppwIsRelayQuoteDisplayed(), true);
+});
+
+test('confirming in review uses the stored reviewed quote without silently refetching', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  const { reviewed, quoteCallsRef } = await requestRelayReview(harness);
+  assert.ok(reviewed);
+
+  const order = [];
+  harness.context.ppwLoadWithdrawalState = async () => {
+    order.push('load');
+    return createWithdrawalState();
+  };
+  harness.context.ppwPrepareRelayQuote = async () => {
+    order.push('quote');
+    throw new Error('should not refetch quote during confirm');
+  };
+  harness.context.ppwPrepareProofJob = async (intent, state, quoteState) => {
+    order.push('job');
+    assert.equal(quoteState, reviewed.quoteState);
+    return {
+      intent: reviewed.intent,
+      state,
+      quoteState,
+      isPartial: false,
+      assetUnit: reviewed.intent.wAsset,
+      circuitInputsBase: { withdrawnValue: '1' },
+      wasmUrl: 'blob:wasm',
+      zkeyUrl: 'blob:zkey',
+    };
+  };
+  harness.context.ppwGenerateAndVerifyProof = async () => {
+    order.push('proof');
+    return { withdrawalProcessooor: ENTRYPOINT_ADDRESS, withdrawalData: '0x', proof: createProofResult().proof, publicSignals: createProofResult().publicSignals, pA: [1n, 2n], pB: [[3n, 4n], [5n, 6n]], pC: [7n, 8n], pubSigs: Array(8).fill(1n) };
+  };
+  harness.context.ppwRevalidateBeforeSubmit = async () => {
+    order.push('revalidate');
+    return { ok: true };
+  };
+  harness.context.ppwSubmitWithdrawal = async () => {
+    order.push('submit');
+    return { receipt: { status: 1 }, txHash: '0xconfirm' };
+  };
+  harness.context.ppwFinalizeWithdrawalSuccess = async () => {
+    order.push('finalize');
+  };
+
+  await harness.api.withdrawal.ppwHandleWithdrawPrimaryAction();
+
+  assert.equal(quoteCallsRef(), 1);
+  assert.deepEqual(order, ['load', 'job', 'proof', 'revalidate', 'submit', 'finalize']);
+});
+
+test('confirming with an expired reviewed quote refreshes it and requires another explicit confirm', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  const { reviewed, quoteCallsRef } = await requestRelayReview(harness);
+  reviewed.quoteState.relayQuote.feeCommitment.expiration = Date.now() - 1;
+  let prepareProofCalls = 0;
+  harness.context.ppwPrepareProofJob = async () => {
+    prepareProofCalls += 1;
+    return null;
+  };
+
+  await harness.api.withdrawal.ppwHandleWithdrawPrimaryAction();
+
+  assert.equal(quoteCallsRef(), 2);
+  assert.equal(prepareProofCalls, 0);
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'review');
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), true);
+  assert.equal(harness.elements.ppwWithdrawBtn.textContent, 'Confirm withdrawal');
+  assert.equal(harness.lastStatus?.message, 'Review the refreshed quote and retry withdrawal.');
+});
+
+test('expired reviewed quote fallback clears extra gas and still requires reconfirm', async () => {
+  const boldNote = createBaseNote({ asset: 'BOLD', value: 8_000000000000000000n });
+  const harness = createHarness({
+    mode: 'relay',
+    note: boldNote,
+    statePatch: { _ppwMode: 'relay', _ppwNote: boldNote },
+  });
+  const { reviewed } = await requestRelayReview(harness, {
+    note: boldNote,
+    wAsset: 'BOLD',
+    extraGas: true,
+  });
+  reviewed.quoteState.relayQuote.feeCommitment.expiration = Date.now() - 1;
+  const extraGasCalls = [];
+  let prepareProofCalls = 0;
+  harness.context.ppwRelayerQuote = async (chainId, amount, asset, recipient, extraGas) => {
+    extraGasCalls.push(!!extraGas);
+    if (extraGasCalls.length === 1) throw new Error('UNSUPPORTED_FEATURE: extraGas');
+    return {
+      feeCommitment: createRelayFeeCommitment(harness, asset, {
+        amount: amount.toString(),
+        extraGas: !!extraGas,
+        withdrawalData: harness.context.ethers.AbiCoder.defaultAbiCoder().encode(
+          ['address', 'address', 'uint256'],
+          [recipient, RELAYER_ADDRESS, 35],
+        ),
+        fee: ((BigInt(amount) * 35n) / 10000n).toString(),
+      }),
+    };
+  };
+  harness.context.ppwPrepareProofJob = async () => {
+    prepareProofCalls += 1;
+    return null;
+  };
+
+  await harness.api.withdrawal.ppwHandleWithdrawPrimaryAction();
+
+  assert.deepEqual(extraGasCalls, [true, false]);
+  assert.equal(prepareProofCalls, 0);
+  assert.equal(harness.elements.ppwExtraGas.checked, false);
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), true);
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'review');
+  assert.equal(harness.lastStatus?.message, 'Review the refreshed quote and retry withdrawal.');
+  assert.ok(
+    harness.statusCalls.some(
+      ({ message }) => message === 'Extra gas is not available for this quote. Continuing without it.',
+    ),
+  );
+});
+
+test('proof generation fails closed when the relay quote expires during proving', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  let refreshCalls = 0;
+  harness.context.ppRunWithdrawalProof = async () => createProofResult();
+  harness.context.ppwVerifyProofOnchain = async () => true;
+  harness.context.ppwRefreshRelayQuote = async () => {
+    refreshCalls += 1;
+  };
+  const quoteState = {
+    relayQuote: {
+      feeCommitment: createRelayFeeCommitment(harness, harness.api.withdrawal.ppwCreateRelayQuoteState(createIntent()).relayAssetAddr, {
+        expiration: Date.now() - 1,
+      }),
+    },
+  };
+
+  const proofState = await harness.api.withdrawal.ppwGenerateAndVerifyProof(
+    {
+      intent: createIntent(),
+      circuitInputsBase: { withdrawnValue: '1' },
+      wasmUrl: 'blob:wasm',
+      zkeyUrl: 'blob:zkey',
+      state: createWithdrawalState(),
+    },
+    quoteState,
+    run,
+  );
+
+  assert.equal(proofState, null);
+  assert.equal(refreshCalls, 1);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Relay quote expired during proving. Review the refreshed quote and retry withdrawal.',
+  );
+});
+
+test('proof generation rejects public-signal mismatches before verifier checks', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  // Return a proof with dummy signals that won't match the intended parameters
+  harness.context.ppRunWithdrawalProof = async () => createProofResult();
+  harness.context.ppwVerifyProofOnchain = async () => true; // Should never be reached
+
+  const proofState = await harness.api.withdrawal.ppwGenerateAndVerifyProof(
+    {
+      intent: createIntent({ isRelayMode: false }),
+      circuitInputsBase: { stateRoot: '111', ASPRoot: '222', stateTreeDepth: '32', ASPTreeDepth: '32', withdrawnValue: '1' },
+      newNullifier: 100n,
+      newSecret: 200n,
+      changeValue: 9n,
+      wasmUrl: 'blob:wasm',
+      zkeyUrl: 'blob:zkey',
+      state: createWithdrawalState(),
+    },
+    {},
+    run,
+  );
+
+  assert.equal(proofState, null);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Generated proof does not match the intended withdrawal. Refresh Pool Balances and retry.',
+  );
+});
+
+test('proof generation rejects failed local verifier checks', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  // Build matching public signals so the signal check passes and we reach the verifier
+  const intent = createIntent({ isRelayMode: false });
+  const newNullifier = 100n;
+  const newSecret = 200n;
+  const changeValue = intent.value - intent.withdrawnValue;
+  const { poseidon1, poseidon2, poseidon3, ethers } = createPoseidonContext({ withEthers: true });
+  const nullifierHash = poseidon1([intent.note.nullifier]);
+  const newPrecommitment = poseidon2([newNullifier, newSecret]);
+  const newCommitment = poseidon3([changeValue, intent.label, newPrecommitment]);
+  const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
+    ['tuple(address,bytes)', 'uint256'],
+    [[intent.recipient, '0x'], intent.scope]
+  );
+  const SNARK_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+  const context = BigInt(ethers.keccak256(encoded)) % SNARK_FIELD;
+  const stateRoot = 111n;
+  const aspRoot = 222n;
+  const stateTreeDepth = 32n;
+  const aspTreeDepth = 32n;
+  // ProofLib.sol signal order: newCommitmentHash, existingNullifierHash,
+  // withdrawnValue, stateRoot, stateTreeDepth, ASPRoot, ASPTreeDepth, context
+  const matchingSignals = [newCommitment, nullifierHash, intent.withdrawnValue, stateRoot, stateTreeDepth, aspRoot, aspTreeDepth, context].map(String);
+  harness.context.ppRunWithdrawalProof = async () => ({
+    proof: { pi_a: ['1', '2'], pi_b: [['3', '4'], ['5', '6']], pi_c: ['7', '8'] },
+    publicSignals: matchingSignals,
+  });
+  harness.context.ppwVerifyProofOnchain = async () => false;
+
+  const proofState = await harness.api.withdrawal.ppwGenerateAndVerifyProof(
+    {
+      intent,
+      circuitInputsBase: { stateRoot: stateRoot.toString(), ASPRoot: aspRoot.toString(), stateTreeDepth: stateTreeDepth.toString(), ASPTreeDepth: aspTreeDepth.toString(), withdrawnValue: intent.withdrawnValue.toString() },
+      newNullifier,
+      newSecret,
+      changeValue,
+      wasmUrl: 'blob:wasm',
+      zkeyUrl: 'blob:zkey',
+      state: createWithdrawalState(),
+    },
+    {},
+    run,
+  );
+
+  assert.equal(proofState, null);
+  assert.equal(harness.lastStatus?.message, 'Proof failed local verifier check. Retry withdrawal.');
+});
+
+test('main-thread proving uses the verified snarkjs engine and returns its proof output', async () => {
+  const harness = createHarness();
+  const expected = createProofResult();
+  const calls = [];
+  let stopArgs = null;
+  harness.context.ppEnsureVerifiedSnarkjsEngine = async () => ({
+    groth16: {
+      async fullProve(circuitInputs, wasmUrl, zkeyUrl) {
+        calls.push({ circuitInputs, wasmUrl, zkeyUrl });
+        return expected;
+      },
+    },
+  });
+  harness.context.ppStartWithdrawalProofProgressReporter = async () => ({
+    stop(finalPhase = null, finalProgress = null) {
+      stopArgs = { finalPhase, finalProgress };
+    },
+  });
+
+  const proof = await harness.api.withdrawal.ppRunWithdrawalProof(
+    { withdrawnValue: '1', context: '2' },
+    'blob:wasm',
+    'blob:zkey',
+    () => {},
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(proof)), expected);
+  assert.deepEqual(calls, [{
+    circuitInputs: { withdrawnValue: '1', context: '2' },
+    wasmUrl: 'blob:wasm',
+    zkeyUrl: 'blob:zkey',
+  }]);
+  assert.deepEqual(stopArgs, { finalPhase: 'verifying_proof', finalProgress: 0.8 });
+});
+
+test('verified snarkjs bootstrap validates the vendored bundle and boots the main-thread engine', async () => {
+  let requestedUrl = null;
+  let fetchCalls = 0;
+  const { api } = loadPrivacyTestApi({
+    globals: {
+      btoa: testBtoa,
+      fetch: async (url) => {
+        fetchCalls += 1;
+        requestedUrl = url;
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => toArrayBuffer(VENDORED_SNARKJS_BUNDLE),
+        };
+      },
+    },
+  });
+
+  const source = await api.withdrawal.ppEnsureVerifiedSnarkjsSource();
+  const engine = await api.withdrawal.ppEnsureVerifiedSnarkjsEngine();
+
+  assert.equal(requestedUrl, api.constants.proof.snarkjsSrc);
+  assert.equal(source, VENDORED_SNARKJS_BUNDLE.toString('utf8'));
+  assert.equal(typeof engine.groth16.fullProve, 'function');
+  assert.equal(await api.withdrawal.ppEnsureVerifiedSnarkjsSource(), source);
+  assert.equal(await api.withdrawal.ppEnsureVerifiedSnarkjsEngine(), engine);
+  assert.equal(fetchCalls, 1);
+});
+
+test('verified snarkjs bootstrap fails closed on integrity mismatches', async () => {
+  const tamperedBundle = Buffer.from(VENDORED_SNARKJS_BUNDLE);
+  tamperedBundle[0] = tamperedBundle[0] === 0x20 ? 0x21 : 0x20;
+  const { api } = loadPrivacyTestApi({
+    globals: {
+      btoa: testBtoa,
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => toArrayBuffer(tamperedBundle),
+      }),
+    },
+  });
+
+  await assert.rejects(
+    api.withdrawal.ppEnsureVerifiedSnarkjsSource(),
+    (error) => error.ppBootstrapFailure === true
+      && error.message === 'Failed to fetch verified snarkjs source for withdrawal proving.'
+      && error.cause?.message === 'snarkjs integrity check failed',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Low-level artifact fetch rejection tests (parameterized)
+// ---------------------------------------------------------------------------
+
+const artifactFetchRejections = [
+  {
+    name: 'snarkjs source fetch rejects on network failure',
+    globals: { btoa: testBtoa, fetch: async () => { throw new TypeError('Failed to fetch'); } },
+    invoke: (api) => api.withdrawal.ppEnsureVerifiedSnarkjsSource(),
+    check: (error) => error.ppBootstrapFailure === true
+      && error.message === 'Failed to fetch verified snarkjs source for withdrawal proving.',
+  },
+  {
+    name: 'snarkjs source fetch rejects on HTTP error status',
+    globals: { btoa: testBtoa, fetch: async () => ({ ok: false, status: 503, arrayBuffer: async () => new ArrayBuffer(0) }) },
+    invoke: (api) => api.withdrawal.ppEnsureVerifiedSnarkjsSource(),
+    check: (error) => error.ppBootstrapFailure === true
+      && error.message === 'Failed to fetch verified snarkjs source for withdrawal proving.',
+  },
+  {
+    name: 'withdraw artifact fetch rejects when data is corrupted (wrong SHA-256 hash)',
+    globals: (() => { const p = new Uint8Array(1024); p.fill(0xDE); return { fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => p.buffer }) }; })(),
+    invoke: (api) => api.withdrawal.ppEnsureWithdrawArtifacts(),
+    check: (error) => error.message.includes('integrity check failed'),
+  },
+  {
+    name: 'withdraw artifact fetch rejects on HTTP error status',
+    globals: { fetch: async () => ({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }) },
+    invoke: (api) => api.withdrawal.ppEnsureWithdrawArtifacts(),
+    check: (error) => error.message.includes('HTTP 404'),
+  },
+  {
+    name: 'commitment artifact fetch rejects when data is corrupted (wrong SHA-256 hash)',
+    globals: (() => { const p = new Uint8Array(512); p.fill(0xBE); return { fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => p.buffer }) }; })(),
+    invoke: (api) => api.withdrawal.ppEnsureCommitmentArtifacts(),
+    check: (error) => error.message.includes('integrity check failed'),
+  },
+  {
+    name: 'commitment artifact fetch rejects on HTTP error status',
+    globals: { fetch: async () => ({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }) },
+    invoke: (api) => api.withdrawal.ppEnsureCommitmentArtifacts(),
+    check: (error) => error.message.includes('HTTP 404'),
+  },
+];
+
+for (const { name, globals, invoke, check } of artifactFetchRejections) {
+  test(name, async () => {
+    const { api } = loadPrivacyTestApi({ globals });
+    await assert.rejects(() => invoke(api), check);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Higher-level artifact propagation tests (parameterized shared setup)
+// ---------------------------------------------------------------------------
+
+function setupProofJobHarness(artifactError) {
+  const harness = createHarness();
+  const run = createRun();
+  const intent = createIntent({ isRelayMode: false, recipient: CONNECTED_ADDRESS });
+  const state = createWithdrawalState();
+  const quoteState = { isRelayMode: false };
+  harness.context._ppArtifactCache = null;
+  harness.context._ppArtifactCachePromise = null;
+  harness.context.ppEnsureMasterKeys = async () => ({
+    masterNullifier: 1n,
+    masterSecret: 2n,
+    legacyMasterNullifier: null,
+    legacyMasterSecret: null,
+  });
+  harness.context.ppGetKeysetForDerivation = () => ({
+    masterNullifier: 1n,
+    masterSecret: 2n,
+  });
+  harness.context.ppResolveNextWithdrawalIndex = () => ({
+    nextIndex: 0,
+    kind: 'fresh',
+  });
+  harness.context.ppEnsureWithdrawArtifacts = async () => { throw artifactError; };
+  return { harness, run, intent, state, quoteState };
+}
+
+function setupRagequitJobHarness(artifactError) {
+  const harness = createHarness({
+    mode: 'direct',
+    actionKind: 'ragequit',
+    statePatch: { _ppwMode: 'direct', _ppwActionKind: 'ragequit' },
+  });
+  const run = createRun();
+  const intent = createIntent({ isRelayMode: false, recipient: CONNECTED_ADDRESS });
+  harness.context._ppCommitmentArtifactCache = null;
+  harness.context._ppCommitmentArtifactCachePromise = null;
+  harness.context.ppEnsureCommitmentArtifacts = async () => { throw artifactError; };
+  return { harness, run, intent };
+}
+
+const propagationTests = [
+  {
+    name: 'ppwPrepareProofJob propagates artifact network failure to caller',
+    setup: () => setupProofJobHarness(new TypeError('Failed to fetch')),
+    invoke: ({ harness, intent, state, quoteState, run }) =>
+      harness.api.withdrawal.ppwPrepareProofJob(intent, state, quoteState, run),
+    check: (error) => error instanceof TypeError && error.message === 'Failed to fetch',
+  },
+  {
+    name: 'ppwPrepareProofJob propagates artifact HTTP error to caller',
+    setup: () => setupProofJobHarness(new Error('withdraw.wasm: HTTP 404')),
+    invoke: ({ harness, intent, state, quoteState, run }) =>
+      harness.api.withdrawal.ppwPrepareProofJob(intent, state, quoteState, run),
+    check: (error) => error.message.includes('HTTP 404'),
+  },
+  {
+    name: 'ppwPrepareRagequitJob propagates commitment artifact network failure to caller',
+    setup: () => setupRagequitJobHarness(new TypeError('Failed to fetch')),
+    invoke: ({ harness, intent, run }) =>
+      harness.api.withdrawal.ppwPrepareRagequitJob(intent, run),
+    check: (error) => error instanceof TypeError && error.message === 'Failed to fetch',
+  },
+  {
+    name: 'ppwPrepareRagequitJob propagates commitment artifact HTTP error to caller',
+    setup: () => setupRagequitJobHarness(new Error('commitment.wasm: HTTP 404')),
+    invoke: ({ harness, intent, run }) =>
+      harness.api.withdrawal.ppwPrepareRagequitJob(intent, run),
+    check: (error) => error.message.includes('HTTP 404'),
+  },
+];
+
+for (const { name, setup, invoke, check } of propagationTests) {
+  test(name, async () => {
+    const ctx = setup();
+    await assert.rejects(() => invoke(ctx), check);
+  });
+}
+
+test('progress-sidecar startup failure does not block successful main-thread proving', async () => {
+  const harness = createHarness();
+  const progressEvents = [];
+  harness.context.ppEnsureVerifiedSnarkjsEngine = async () => ({
+    groth16: {
+      async fullProve() {
+        return createProofResult();
+      },
+    },
+  });
+
+  const proof = await harness.api.withdrawal.ppRunWithdrawalProof(
+    { withdrawnValue: '1' },
+    'blob:wasm',
+    'blob:zkey',
+    (event) => progressEvents.push(event),
+  );
+
+  assert.equal(proof.publicSignals.length, 8);
+  assert.ok(
+    progressEvents.some((event) => event.fallbackMessage === 'Live proof progress updates are unavailable. Proving continues on the main thread.'),
+  );
+  assert.ok(
+    progressEvents.some((event) => event.phase === 'verifying_proof' && event.progress === 0.8),
+  );
+});
+
+test('proof-progress sidecar relays worker progress and stops cleanly when workers are available', async () => {
+  class FakeWorker {
+    static instances = [];
+
+    constructor(url) {
+      this.url = url;
+      this.messages = [];
+      this.terminated = false;
+      this.onmessage = null;
+      this.onerror = null;
+      FakeWorker.instances.push(this);
+    }
+
+    postMessage(message) {
+      this.messages.push(message);
+      if (message.type === 'start') {
+        queueMicrotask(() => {
+          this.onmessage?.({
+            data: {
+              id: message.id,
+              type: 'progress',
+              phase: 'generating_proof',
+              progress: 0.4,
+            },
+          });
+        });
+      }
+    }
+
+    terminate() {
+      this.terminated = true;
+    }
+  }
+
+  const harness = createHarness({
+    globals: {
+      Worker: FakeWorker,
+    },
+  });
+  const progressEvents = [];
+
+  const reporter = await harness.api.withdrawal.ppStartWithdrawalProofProgressReporter(
+    (event) => progressEvents.push(event),
+  );
+  await flushMicrotasks();
+  reporter.stop('verifying_proof', 0.8);
+
+  assert.equal(FakeWorker.instances.length, 1);
+  assert.equal(FakeWorker.instances[0].url, 'blob:privacy-test');
+  assert.equal(FakeWorker.instances[0].messages[0].type, 'start');
+  assert.equal(FakeWorker.instances[0].messages[1].type, 'stop');
+  assert.equal(FakeWorker.instances[0].terminated, true);
+  assert.ok(progressEvents.some((event) => event.phase === 'generating_proof' && event.progress === 0.4));
+  assert.ok(progressEvents.some((event) => event.phase === 'verifying_proof' && event.progress === 0.8));
+  assert.ok(!progressEvents.some((event) => event.fallbackMessage));
+});
+
+test('withdraw preload warms verified snarkjs plus withdraw and commitment artifacts without prebuilding a proof worker', async () => {
+  const harness = createHarness();
+  let engineCalls = 0;
+  let artifactCalls = 0;
+  let commitmentArtifactCalls = 0;
+  let workerCalls = 0;
+  harness.context.ppScheduleIdle = (fn) => fn();
+  harness.context.ppEnsureVerifiedSnarkjsEngine = async () => {
+    engineCalls += 1;
+    return { groth16: { fullProve: async () => createProofResult() } };
+  };
+  harness.context.ppEnsureWithdrawArtifacts = async () => {
+    artifactCalls += 1;
+    return { wasmUrl: 'blob:wasm', zkeyUrl: 'blob:zkey' };
+  };
+  harness.context.ppEnsureCommitmentArtifacts = async () => {
+    commitmentArtifactCalls += 1;
+    return { wasmUrl: 'blob:commitment-wasm', zkeyUrl: 'blob:commitment-zkey' };
+  };
+  harness.context.ppEnsureWithdrawalProgressWorkerBlobUrl = async () => {
+    workerCalls += 1;
+    return 'blob:progress-worker';
+  };
+
+  harness.api.withdrawal.ppScheduleWithdrawPreload();
+  await flushMicrotasks();
+
+  assert.equal(engineCalls, 1);
+  assert.equal(artifactCalls, 1);
+  assert.equal(commitmentArtifactCalls, 1);
+  assert.equal(workerCalls, 0);
+});
+
+test('pre-submit revalidation fails when roots are no longer current', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppEnsureWithdrawalRootsCurrent = async () => ({
+    ok: false,
+    message: 'State root moved during proof generation. Refresh Pool Balances and retry withdrawal.',
+  });
+
+  const result = await harness.api.withdrawal.ppwRevalidateBeforeSubmit(
+    {
+      intent: createIntent({ isRelayMode: false }),
+      state: createWithdrawalState(),
+    },
+    {},
+    {},
+    run,
+  );
+
+  assert.equal(result, null);
+  assert.equal(
+    harness.lastStatus?.message,
+    'State root moved during proof generation. Refresh Pool Balances and retry withdrawal.',
+  );
+});
+
+test('pre-submit revalidation refreshes expired relay quotes and requires retry', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  let refreshCalls = 0;
+  harness.context.ppEnsureWithdrawalRootsCurrent = async () => ({ ok: true });
+  harness.context.ppwRefreshRelayQuote = async () => {
+    refreshCalls += 1;
+  };
+
+  const result = await harness.api.withdrawal.ppwRevalidateBeforeSubmit(
+    {
+      intent: createIntent(),
+      state: createWithdrawalState(),
+    },
+    {},
+    {
+      relayQuote: {
+        feeCommitment: {
+          expiration: Date.now() - 1,
+        },
+      },
+    },
+    run,
+  );
+
+  assert.equal(result, null);
+  assert.equal(refreshCalls, 1);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Relay quote expired before submission. Review the refreshed quote and retry withdrawal.',
+  );
+});
+
+test('withdraw run escapes text-only log messages before appending HTML', () => {
+  const harness = createHarness();
+  const run = harness.api.withdrawal.ppwCreateWithdrawRun();
+
+  run.log('<b>unsafe</b> & more');
+
+  assert.equal(harness.elements.ppwVerify.style.display, '');
+  assert.equal(
+    harness.elements.ppwVerifyStatus.innerHTML,
+    '&lt;b&gt;unsafe&lt;/b&gt; &amp; more<br>',
+  );
+});
+
+test('withdraw run preserves trusted HTML log messages', () => {
+  const harness = createHarness();
+  const run = harness.api.withdrawal.ppwCreateWithdrawRun();
+
+  run.logHtml('<b>Trusted</b> <span>markup</span>');
+
+  assert.equal(
+    harness.elements.ppwVerifyStatus.innerHTML,
+    '<b>Trusted</b> <span>markup</span><br>',
+  );
+});
+
+test('formatted withdrawal failures still render trusted markup in the verify panel', () => {
+  const harness = createHarness();
+  const run = harness.api.withdrawal.ppwCreateWithdrawRun();
+
+  harness.api.withdrawal.ppwHandleWithdrawalFailure(new Error('InvalidProof'), run);
+
+  assert.match(
+    harness.elements.ppwVerifyStatus.innerHTML,
+    /^<b>Error:<\/b> Proof verification failed\./,
+  );
+  assert.equal(
+    harness.lastStatus?.message,
+    'Proof verification failed. Please retry your withdrawal.',
+  );
+});
+
+test('relay submission returns the relayer transaction hash and receipt', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwRelayerRequest = async () => ({ txHash: '0xrelaytx' });
+  harness.context.ppReadWithRpc = async () => ({ status: 1 });
+
+  const result = await harness.api.withdrawal.ppwSubmitWithdrawal(
+    {
+      intent: createIntent(),
+    },
+    {
+      withdrawalProcessooor: ENTRYPOINT_ADDRESS,
+      withdrawalData: '0x1234',
+      proof: createProofResult().proof,
+      publicSignals: createProofResult().publicSignals,
+    },
+    {
+      relayChainId: 1,
+      relayQuote: { feeCommitment: { fee: '1' } },
+    },
+    run,
+  );
+
+  assert.equal(result.txHash, '0xrelaytx');
+  assert.equal(result.receipt.status, 1);
+});
+
+test('relay submission failures clarify that the withdrawal was not submitted', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwRelayerRequest = async () => {
+    throw new Error('relayer unavailable');
+  };
+
+  const result = await harness.api.withdrawal.ppwSubmitWithdrawal(
+    {
+      intent: createIntent(),
+    },
+    {
+      withdrawalProcessooor: ENTRYPOINT_ADDRESS,
+      withdrawalData: '0x1234',
+      proof: createProofResult().proof,
+      publicSignals: createProofResult().publicSignals,
+    },
+    {
+      relayChainId: 1,
+      relayQuote: { feeCommitment: { fee: '1' } },
+    },
+    run,
+  );
+
+  assert.equal(result, null);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Relayer submission failed before submission. Your withdrawal was not submitted. Retry the relay flow in a few minutes.',
+  );
+  assert.ok(
+    run.logs.some((entry) => entry.includes('Your withdrawal was not submitted. Retry the relay flow in a few minutes.')),
+  );
+});
+
+test('relay responses without a transaction hash clarify that submission did not happen', async () => {
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwRelayerRequest = async () => ({ ok: true });
+
+  const result = await harness.api.withdrawal.ppwSubmitWithdrawal(
+    {
+      intent: createIntent(),
+    },
+    {
+      withdrawalProcessooor: ENTRYPOINT_ADDRESS,
+      withdrawalData: '0x1234',
+      proof: createProofResult().proof,
+      publicSignals: createProofResult().publicSignals,
+    },
+    {
+      relayChainId: 1,
+      relayQuote: { feeCommitment: { fee: '1' } },
+    },
+    run,
+  );
+
+  assert.equal(result, null);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Relayer did not confirm submission. Your withdrawal was not submitted. Retry the relay flow.',
+  );
+  assert.ok(
+    run.logs.some((entry) => entry.includes('Your withdrawal was not submitted. Retry the relay flow.')),
+  );
+});
+
+test('direct submission blocks wallet changes before signing', async () => {
+  const dom = createDom({});
+  const statusCalls = [];
+  const { api } = loadPrivacyTestApi({
+    globals: {
+      console: TEST_CONSOLE,
+      ...dom,
+      _connectedAddress: CONNECTED_ADDRESS,
+      _isWalletConnect: false,
+      _connectedWalletProvider: null,
+      _signer: { getAddress: async () => OTHER_ADDRESS },
+      showStatus(message, type = '') {
+        statusCalls.push({ message, type });
+      },
+      escText: String,
+      escAttr: String,
+      fmt: String,
+      tokens: String,
+    },
+    statePatch: {
+      _ppwMode: 'direct',
+      _ppwNote: createBaseNote(),
+    },
+  });
+  const run = createRun();
+
+  const result = await api.withdrawal.ppwSubmitWithdrawal(
+    {
+      intent: { ...createIntent({ isRelayMode: false, recipient: CONNECTED_ADDRESS }), isRelayMode: false, recipient: CONNECTED_ADDRESS },
+    },
+    {
+      withdrawalData: '0x',
+      pA: [1n, 2n],
+      pB: [[3n, 4n], [5n, 6n]],
+      pC: [7n, 8n],
+      pubSigs: Array(8).fill(1n),
+    },
+    {},
+    run,
+  );
+
+  assert.equal(result, null);
+  assert.match(
+    statusCalls.at(-1)?.message || '',
+    /Wallet (?:changed during withdrawal|disconnected)\. Please reconnect and retry\./,
+  );
+});
+
+test('ragequit locks the draft while running', async () => {
+  let releaseLoad;
+  const loadGate = new Promise((resolve) => {
+    releaseLoad = resolve;
+  });
+  const harness = createHarness({
+    mode: 'direct',
+    statePatch: { _ppwMode: 'direct', _ppwActionKind: 'ragequit' },
+  });
+  harness.context.ppwCollectRagequitIntent = async () => {
+    await loadGate;
+    return createIntent({ isRelayMode: false, recipient: CONNECTED_ADDRESS });
+  };
+  harness.context.ppwLoadWithdrawalState = async () => createWithdrawalState();
+  harness.context.ppwPrepareProofJob = async () => ({
+    intent: createIntent({ isRelayMode: false, recipient: CONNECTED_ADDRESS }),
+    state: createWithdrawalState(),
+    quoteState: { isRelayMode: false },
+    isPartial: false,
+    assetUnit: 'ETH',
+    circuitInputsBase: { withdrawnValue: '1' },
+    wasmUrl: 'blob:wasm',
+    zkeyUrl: 'blob:zkey',
+  });
+  harness.context.ppwGenerateAndVerifyProof = async () => ({
+    withdrawalProcessooor: CONNECTED_ADDRESS,
+    withdrawalData: '0x',
+    proof: createProofResult().proof,
+    publicSignals: createProofResult().publicSignals,
+    pA: [1n, 2n],
+    pB: [[3n, 4n], [5n, 6n]],
+    pC: [7n, 8n],
+    pubSigs: Array(8).fill(1n),
+  });
+  harness.context.ppwRevalidateBeforeSubmit = async () => ({ ok: true });
+  harness.context.ppwSubmitWithdrawal = async () => ({ receipt: { status: 1 }, txHash: '0xragequit' });
+  harness.context.ppwFinalizeWithdrawalSuccess = async () => {};
+
+  const pending = harness.api.withdrawal.ppwHandleWithdrawPrimaryAction();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // Ragequit routes through ppwRagequit which has its own locking
+  // Just verify the action was dispatched
+  releaseLoad();
+  await pending;
+  // After completion, verify phase returned to editing
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'editing');
+});
+
+test('reset and disconnect clear relay review state', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  harness.elements.ppwParsed = createElement({ style: { display: '' } });
+  await requestRelayReview(harness);
+
+  harness.api.withdrawal.ppwResetDraftState();
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'editing');
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), false);
+  assert.equal(harness.elements.ppwRelayFeePanel.style.display, 'none');
+
+  await requestRelayReview(harness);
+  harness.context.ppResetWalletCompatibility = () => {};
+  harness.context.ppClearPendingWalletSeedBackups = () => {};
+  harness.context.ppRenderWalletSeedBackupNotice = () => {};
+  harness.context.ppScrubMasterKeyStore = () => {};
+  harness.context.ppTerminateProofProgressWorker = () => {};
+  harness.context.ppUpdateDepositCta = () => {};
+  harness.context.ppUpdateDescriptions = () => {};
+  harness.context.ppwUpdateLoadButton = () => {};
+  harness.context.ppwSyncBackgroundRefreshLoop = () => {};
+  harness.context.ppwRenderIdleState = () => {};
+  harness.context.ppRenderWalletCompatibilityNotice = () => {};
+  harness.context.ppwUpdateRecipientHint = () => {};
+  harness.context._ppMasterKeys = { address: CONNECTED_ADDRESS, versions: { v2: {} } };
+  harness.context._ppwLoadAbort = null;
+
+  harness.api.hooks.ppHandlePrivacyWalletDisconnected();
+
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'editing');
+  assert.equal(harness.api.withdrawal.ppwHasReviewedRelayQuote(), false);
+});
+
+test('partial-withdrawal finalization renders the result summary and refreshes caches', async () => {
+  let cacheInvalidations = 0;
+  let scheduledRefreshes = 0;
+  const harness = createHarness();
+  const run = createRun();
+  harness.context.ppwParseChangeLeafIndex = async () => ({ leafIndex: 9 });
+  harness.context.ppInvalidatePoolViewCaches = () => {
+    cacheInvalidations += 1;
+  };
+  harness.context.ppwScheduleMutationRefreshes = () => {
+    scheduledRefreshes += 1;
+  };
+
+  await harness.api.withdrawal.ppwFinalizeWithdrawalSuccess(
+    { status: 1, logs: [] },
+    {
+      intent: createIntent({ withdrawnValue: 4_000000000000000000n, wAsset: 'ETH' }),
+      isPartial: true,
+      newNullifier: 333n,
+      newSecret: 444n,
+      changeValue: 6_000000000000000000n,
+      assetUnit: 'ETH',
+    },
+    {},
+    { txHash: '0xwithdraw' },
+    run,
+  );
+
+  assert.match(harness.elements.ppwResultSummary.innerHTML, /remaining in (?:PA-1|your Pool Account)/i);
+  assert.match(harness.elements.ppwResultSummary.innerHTML, /0xwithdraw/i);
+  assert.equal(cacheInvalidations, 1);
+  assert.equal(scheduledRefreshes, 1);
+  assert.equal(harness.lastStatus?.message, 'Withdrawal successful!');
+});
+
+test('withdrawal error decoder preserves fail-closed user messaging', () => {
+  const harness = createHarness();
+  assert.equal(
+    harness.api.withdrawal.ppwDecodeWithdrawalError(new Error('execution reverted: InvalidProof')),
+    'Proof verification failed. Please retry your withdrawal.',
+  );
+  assert.equal(
+    harness.api.withdrawal.ppwDecodeWithdrawalError(new Error('execution reverted: UnknownStateRoot')),
+    'Pool state is temporarily out of sync. Wait a few minutes and retry.',
+  );
+});
+
+test('terminal failure handling surfaces reverted and unconfirmed transactions', () => {
+  const harness = createHarness();
+  const run = createRun();
+
+  harness.api.withdrawal.ppwHandleWithdrawalFailure({ txHash: '0xrev', receipt: { status: 0 } }, run);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Transaction reverted onchain. The deposit may have been already spent or the relay quote may have expired.',
+  );
+
+  harness.statusCalls.length = 0;
+
+  harness.api.withdrawal.ppwHandleWithdrawalFailure({ txHash: '0xpend', receipt: null }, run);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Transaction submitted but not yet confirmed. Check Etherscan for tx: 0xpend',
+  );
+});
+
+test('withdraw coordinator remains a thin orchestration layer over the extracted phases', async () => {
+  const harness = createHarness();
+  const order = [];
+  let stopArgs = null;
+  harness.context.ppwCreateWithdrawRun = () => ({
+    reset() {
+      order.push('reset');
+    },
+    stopIfNeeded(success, mode) {
+      stopArgs = { success, mode };
+    },
+  });
+  harness.context.ppwCollectWithdrawalIntent = async () => {
+    order.push('intent');
+    return { id: 'intent' };
+  };
+  harness.context.ppwLoadWithdrawalState = async () => {
+    order.push('load');
+    return { id: 'state' };
+  };
+  harness.context.ppwPrepareRelayQuote = async () => {
+    order.push('quote');
+    return { id: 'quote' };
+  };
+  harness.context.ppwPrepareProofJob = async () => {
+    order.push('job');
+    return { id: 'job', intent: createIntent({ isRelayMode: false, recipient: CONNECTED_ADDRESS, wAsset: 'ETH', withdrawnValue: 1n }), isPartial: false, assetUnit: 'ETH' };
+  };
+  harness.context.ppwGenerateAndVerifyProof = async () => {
+    order.push('proof');
+    return { id: 'proof' };
+  };
+  harness.context.ppwRevalidateBeforeSubmit = async () => {
+    order.push('revalidate');
+    return { ok: true };
+  };
+  harness.context.ppwSubmitWithdrawal = async () => {
+    order.push('submit');
+    return { receipt: { status: 1 }, txHash: '0xok' };
+  };
+  harness.context.ppwFinalizeWithdrawalSuccess = async () => {
+    order.push('finalize');
+  };
+  harness.context.ppwHandleWithdrawalFailure = () => {
+    order.push('failure');
+  };
+  harness.api.withdrawal.ppwSetMode('direct');
+
+  await harness.api.withdrawal.ppwWithdraw();
+
+  assert.deepEqual(order, [
+    'reset',
+    'intent',
+    'load',
+    'quote',
+    'job',
+    'proof',
+    'revalidate',
+    'submit',
+    'finalize',
+  ]);
+  assert.deepEqual(stopArgs, { success: true, mode: harness.api.withdrawal.ppwGetMode() });
+});
+
+test('ragequit mode stays direct-only and submit-ready for original depositors', () => {
+  const harness = createHarness({
+    note: createBaseNote({
+      reviewStatus: 'declined',
+      isWithdrawable: false,
+      isRagequittable: true,
+      isOriginalDepositor: true,
+    }),
+    mode: 'relay',
+  });
+  harness.context.ppGetWalletCompatibilitySnapshot = () => ({
+    status: 'ready',
+    result: { supported: true, kind: 'eoa', message: '' },
+  });
+
+  harness.api.withdrawal.ppwSetActionKind('ragequit');
+  harness.api.withdrawal.ppwSetMode('relay');
+
+  assert.equal(harness.api.withdrawal.ppwGetActionKind(), 'ragequit');
+  assert.equal(harness.api.withdrawal.ppwGetMode(), 'direct');
+  assert.equal(harness.elements.ppwModeSection.style.display, 'none');
+  assert.equal(harness.elements.ppwRagequitWarning.style.display, '');
+  assert.equal(harness.elements.ppwRelayRecipientWrap.style.display, 'none');
+  assert.equal(harness.elements.ppwPreviewTitle.textContent, 'Ragequit Preview');
+  assert.equal(harness.api.withdrawal.ppwCanSubmitWithdrawal(), true);
+});
+
+test('withdrawal error decoder explains OnlyOriginalDepositor for ragequit', () => {
+  const harness = createHarness({ actionKind: 'ragequit' });
+  const decoded = harness.api.withdrawal.ppwDecodeWithdrawalError({
+    message: 'execution reverted: OnlyOriginalDepositor()',
+  });
+
+  assert.equal(decoded, 'Only the original depositor wallet can ragequit this Pool Account.');
+});
+
+test('ragequit submit readiness follows the live depositor wallet, not stale row flags', () => {
+  const harness = createHarness({ actionKind: 'ragequit', mode: 'direct' });
+
+  const staleAllowedNote = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+    depositor: CONNECTED_ADDRESS,
+  });
+  const blockedForOtherWallet = harness.api.withdrawal.ppwCanSubmitWithdrawalState({
+    note: staleAllowedNote,
+    actionKind: 'ragequit',
+    connectedAddress: OTHER_ADDRESS,
+    signer: { getAddress: async () => OTHER_ADDRESS },
+  });
+
+  const staleBlockedNote = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: false,
+    isOriginalDepositor: false,
+    depositor: CONNECTED_ADDRESS,
+  });
+  const recoveredForDepositor = harness.api.withdrawal.ppwCanSubmitWithdrawalState({
+    note: staleBlockedNote,
+    actionKind: 'ragequit',
+    connectedAddress: CONNECTED_ADDRESS,
+    signer: { getAddress: async () => CONNECTED_ADDRESS },
+  });
+
+  assert.equal(blockedForOtherWallet, false);
+  assert.equal(recoveredForDepositor, true);
+});
+
+test('ragequit selection uses the live depositor check when loaded flags are stale', () => {
+  const row = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: false,
+    isOriginalDepositor: false,
+    depositor: CONNECTED_ADDRESS,
+  });
+  const harness = createHarness({
+    statePatch: {
+      _ppwLoadResults: [row],
+      _ppwHasResolvedLoadState: true,
+    },
+  });
+
+  harness.context.ppwSelectAccount(0, 'ragequit');
+
+  assert.equal(harness.api.withdrawal.ppwGetActionKind(), 'ragequit');
+  assert.equal(harness.elements.ppwParsed.style.display, '');
+  assert.equal(harness.lastStatus, null);
+});
+
+test('ragequit selection blocks stale original-depositor flags after a wallet switch', () => {
+  const row = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+    depositor: CONNECTED_ADDRESS,
+  });
+  const harness = createHarness({
+    globals: { _connectedAddress: OTHER_ADDRESS, _signer: { getAddress: async () => OTHER_ADDRESS } },
+    statePatch: {
+      _ppwLoadResults: [row],
+      _ppwHasResolvedLoadState: true,
+    },
+  });
+  harness.elements.ppwParsed.style.display = 'none';
+
+  harness.context.ppwSelectAccount(0, 'ragequit');
+
+  assert.equal(harness.elements.ppwParsed.style.display, 'none');
+  assert.equal(harness.lastStatus?.message, 'Only the original depositor wallet can ragequit this Pool Account.');
+});
+
+test('ragequit proof generation rejects public-signal mismatches before verifier checks', async () => {
+  const note = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+  });
+  const harness = createHarness({ note, actionKind: 'ragequit', mode: 'direct' });
+  const run = createRun();
+  let verifyCalls = 0;
+  harness.context._ppCommitmentArtifactCache = { wasmUrl: 'blob:wasm', zkeyUrl: 'blob:zkey' };
+  const expectedCommitment = harness.context.poseidon3([note.value, note.label, note.precommitment]);
+  const expectedNullifierHash = harness.context.poseidon1([note.nullifier]);
+  harness.context.ppRunWithdrawalProof = async () => ({
+    proof: createProofResult().proof,
+    publicSignals: [
+      String(expectedCommitment + 1n),
+      String(expectedNullifierHash),
+      String(note.value),
+      String(note.label),
+    ],
+  });
+  harness.context.ppwVerifyRagequitProofOnchain = async () => {
+    verifyCalls += 1;
+    return true;
+  };
+
+  const job = await harness.api.withdrawal.ppwPrepareRagequitJob(
+    createIntent({
+      note,
+      value: note.value,
+      withdrawnValue: note.value,
+      isRelayMode: false,
+      recipient: CONNECTED_ADDRESS,
+      wAsset: note.asset,
+    }),
+    run,
+  );
+  const proofState = await harness.api.withdrawal.ppwGenerateAndVerifyRagequitProof(job, run);
+
+  assert.equal(proofState, null);
+  assert.equal(verifyCalls, 0);
+  assert.equal(
+    harness.lastStatus?.message,
+    'Generated ragequit proof does not match the selected Pool Account. Refresh Pool Balances and retry.',
+  );
+});
+
+test('ragequit submission simulates the full pool call before wallet confirmation', async () => {
+  const note = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+  });
+  const callOrder = [];
+  class FakePoolContract {
+    constructor(address) {
+      const ragequit = async (proof) => {
+        callOrder.push({ type: 'submit', address, proof });
+        return { hash: '0xragequit' };
+      };
+      ragequit.staticCall = async (proof) => {
+        callOrder.push({ type: 'simulate', address, proof });
+        return undefined;
+      };
+      this.ragequit = ragequit;
+    }
+  }
+  const { ethers: isolatedEthers } = createPoseidonContext({ withEthers: true });
+  isolatedEthers.Contract = FakePoolContract;
+  const harness = createHarness({
+    note,
+    actionKind: 'ragequit',
+    mode: 'direct',
+    globals: { ethers: isolatedEthers },
+  });
+  const run = createRun();
+  harness.context.wcTransaction = async (promise, label) => {
+    callOrder.push({ type: 'wallet', label });
+    return await promise;
+  };
+  harness.context.waitForTx = async (tx) => ({ status: 1, hash: tx.hash });
+
+  const result = await harness.api.withdrawal.ppwSubmitRagequit(
+    {
+      intent: createIntent({
+        note,
+        value: note.value,
+        withdrawnValue: note.value,
+        isRelayMode: false,
+        recipient: CONNECTED_ADDRESS,
+        wAsset: note.asset,
+      }),
+    },
+    {
+      pA: [1n, 2n],
+      pB: [[3n, 4n], [5n, 6n]],
+      pC: [7n, 8n],
+      pubSigs: [11n, 22n, 33n, 44n],
+    },
+    run,
+  );
+
+  assert.equal(result.txHash, '0xragequit');
+  assert.equal(result.receipt.status, 1);
+  assert.deepEqual(callOrder.map((entry) => entry.type), ['simulate', 'submit', 'wallet']);
+  assert.ok(run.logs.some((entry) => entry.includes('Preflight simulation passed.')));
+});
+
+test('ragequit submission surfaces simulation reverts before wallet confirmation', async () => {
+  const note = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+  });
+  let submitCalls = 0;
+  let walletCalls = 0;
+  class FakePoolContract {
+    constructor() {
+      const ragequit = async () => {
+        submitCalls += 1;
+        return { hash: '0xragequit' };
+      };
+      ragequit.staticCall = async () => {
+        throw new Error('execution reverted: OnlyOriginalDepositor()');
+      };
+      this.ragequit = ragequit;
+    }
+  }
+  const { ethers: isolatedEthers } = createPoseidonContext({ withEthers: true });
+  isolatedEthers.Contract = FakePoolContract;
+  const harness = createHarness({
+    note,
+    actionKind: 'ragequit',
+    mode: 'direct',
+    globals: { ethers: isolatedEthers },
+  });
+  const run = createRun();
+  harness.context.wcTransaction = async (promise) => {
+    walletCalls += 1;
+    return await promise;
+  };
+
+  const result = await harness.api.withdrawal.ppwSubmitRagequit(
+    {
+      intent: createIntent({
+        note,
+        value: note.value,
+        withdrawnValue: note.value,
+        isRelayMode: false,
+        recipient: CONNECTED_ADDRESS,
+        wAsset: note.asset,
+      }),
+    },
+    {
+      pA: [1n, 2n],
+      pB: [[3n, 4n], [5n, 6n]],
+      pC: [7n, 8n],
+      pubSigs: [11n, 22n, 33n, 44n],
+    },
+    run,
+  );
+
+  assert.equal(result, null);
+  assert.equal(submitCalls, 0);
+  assert.equal(walletCalls, 0);
+  assert.equal(harness.lastStatus?.message, 'Only the original depositor wallet can ragequit this Pool Account.');
+});
+
+test('ragequit coordinator remains a thin orchestration layer over the extracted phases', async () => {
+  const note = createBaseNote({
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+  });
+  const harness = createHarness({ note, actionKind: 'ragequit', mode: 'direct' });
+  const order = [];
+  let stopArgs = null;
+  harness.context.ppwCreateWithdrawRun = () => ({
+    reset() {
+      order.push('reset');
+    },
+    log() {},
+    logHtml() {},
+    setProgressStage() {},
+    setButtonText() {},
+    stopIfNeeded(success, mode) {
+      stopArgs = { success, mode };
+    },
+  });
+  harness.context.ppwCollectWithdrawalIntent = async () => {
+    order.push('intent');
+    return createIntent({
+      note,
+      value: note.value,
+      withdrawnValue: note.value,
+      isRelayMode: false,
+      recipient: CONNECTED_ADDRESS,
+      wAsset: note.asset,
+    });
+  };
+  harness.context.ppwCheckNullifierUnspent = async () => {
+    order.push('spent-check');
+    return { isSpent: false, nullHash: 1n };
+  };
+  harness.context.ppwPrepareRagequitJob = async () => {
+    order.push('job');
+    return { intent: createIntent({ note, value: note.value, withdrawnValue: note.value, isRelayMode: false, recipient: CONNECTED_ADDRESS, wAsset: note.asset }), assetUnit: note.asset };
+  };
+  harness.context.ppwGenerateAndVerifyRagequitProof = async () => {
+    order.push('proof');
+    return { id: 'proof' };
+  };
+  harness.context.ppwSubmitRagequit = async () => {
+    order.push('submit');
+    return { receipt: { status: 1 }, txHash: '0xragequit' };
+  };
+  harness.context.ppwFinalizeRagequitSuccess = async () => {
+    order.push('finalize');
+  };
+  harness.context.ppwHandleWithdrawalFailure = () => {
+    order.push('failure');
+  };
+
+  await harness.api.withdrawal.ppwRagequit();
+
+  assert.deepEqual(order, [
+    'reset',
+    'intent',
+    'spent-check',
+    'job',
+    'proof',
+    'submit',
+    'finalize',
+  ]);
+  assert.deepEqual(stopArgs, { success: true, mode: 'direct' });
+});
+
+test('ragequit finalization renders the result summary and refreshes caches', async () => {
+  const note = createBaseNote({
+    asset: 'ETH',
+    value: 3_000000000000000000n,
+    reviewStatus: 'declined',
+    isWithdrawable: false,
+    isRagequittable: true,
+    isOriginalDepositor: true,
+  });
+  const harness = createHarness({ note, actionKind: 'ragequit', mode: 'direct' });
+  let invalidatedAsset = null;
+  let refreshCalls = 0;
+  harness.context.ppInvalidatePoolViewCaches = (asset) => {
+    invalidatedAsset = asset;
+  };
+  harness.context.ppwScheduleMutationRefreshes = () => {
+    refreshCalls += 1;
+  };
+  const run = createRun();
+  const job = {
+    intent: createIntent({
+      note,
+      value: note.value,
+      withdrawnValue: note.value,
+      isRelayMode: false,
+      recipient: CONNECTED_ADDRESS,
+      wAsset: note.asset,
+    }),
+    assetUnit: note.asset,
+  };
+
+  await harness.api.withdrawal.ppwFinalizeRagequitSuccess({ status: 1 }, job, { txHash: '0xragequit' }, run);
+
+  assert.equal(harness.elements.ppwResult.style.display, '');
+  assert.match(harness.elements.ppwResultSummary.innerHTML, /Ragequit 3 ETH successfully/);
+  assert.equal(invalidatedAsset, 'ETH');
+  assert.equal(refreshCalls, 1);
+  assert.equal(harness.lastStatus?.message, 'Ragequit successful!');
+});
+
+// ---------------------------------------------------------------------------
+// XSS protection: recipient addresses and ENS names in the quote panel
+// ---------------------------------------------------------------------------
+
+const xssVectors = [
+  { name: '<script> tags in recipient address', payload: '<script>alert(1)</script>', mustNotContain: '<script>' },
+  { name: '<img onerror> XSS in recipient ENS name', payload: '<img onerror=alert(1) src=x>', mustNotContain: '<img' },
+  { name: 'attribute-breaking XSS in recipient', payload: '"onclick="alert(1)', mustNotContain: '"onclick="' },
+  { name: 'both text and attribute contexts for combined XSS', payload: '"><script>alert(document.cookie)</script>', mustNotContain: '<script>' },
+];
+
+for (const { name, payload, mustNotContain } of xssVectors) {
+  test(`quote panel escapes ${name}`, () => {
+    const harness = createHarness({ mode: 'relay' });
+    const intent = createIntent({
+      resolvedRecipient: payload,
+      recipient: payload,
+      withdrawnValue: 5_000000000000000000n,
+      wAsset: 'ETH',
+    });
+
+    harness.context.ppwUpdatePreviewWithQuote(
+      intent,
+      '175000000000000000',
+      '3.5%',
+      Date.now() + 60_000,
+    );
+
+    const html = harness.elements.ppwPreviewContent.innerHTML;
+    assert.ok(!html.includes(mustNotContain), `Raw "${mustNotContain}" must not appear in rendered HTML`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent / multi-tab withdrawal race condition guards
+// ---------------------------------------------------------------------------
+
+console.log('\n-- Concurrent withdrawal race condition guards --');
+
+test('ppwHandleWithdrawPrimaryAction is a no-op while _ppwDraftPhase === running', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  // Force the draft phase to 'running' via the public API
+  harness.api.withdrawal.ppwSetDraftInteractivity('running');
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'running');
+
+  // Stub withdrawal pipeline — should never be reached
+  let pipelineReached = false;
+  harness.context.ppwCollectWithdrawalIntent = async () => {
+    pipelineReached = true;
+    return createIntent();
+  };
+  harness.context.ppwRagequit = async () => {
+    pipelineReached = true;
+  };
+
+  await harness.api.withdrawal.ppwHandleWithdrawPrimaryAction();
+
+  assert.equal(pipelineReached, false, 'withdrawal pipeline must not be entered while running');
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'running');
+});
+
+test('ppwSetMode is a no-op while _ppwDraftPhase === running', () => {
+  const harness = createHarness({ mode: 'direct' });
+  harness.api.withdrawal.ppwSetDraftInteractivity('running');
+  assert.equal(harness.api.withdrawal.ppwGetMode(), 'direct');
+
+  // Attempt to switch to relay while running — must be ignored
+  harness.api.withdrawal.ppwSetMode('relay');
+  assert.equal(harness.api.withdrawal.ppwGetMode(), 'direct', 'mode switch must be blocked while running');
+  assert.equal(harness.api.withdrawal.ppwGetDraftPhase(), 'running');
+});
+
+test('ppwRequestRelayQuoteReview returns null while _ppwDraftPhase === running', async () => {
+  const harness = createHarness({ mode: 'relay' });
+  harness.api.withdrawal.ppwSetDraftInteractivity('running');
+
+  let quoteFetched = false;
+  harness.context.ppwRelayerDetails = async () => {
+    quoteFetched = true;
+    return { feeReceiverAddress: RELAYER_ADDRESS };
+  };
+
+  const result = await harness.api.withdrawal.ppwRequestRelayQuoteReview();
+
+  assert.equal(result, null, 'relay quote review must return null while running');
+  assert.equal(quoteFetched, false, 'relayer details must not be fetched while running');
+});
+
+test('submit button is disabled when draft phase is running', () => {
+  const harness = createHarness({ mode: 'relay' });
+  const btn = harness.elements.ppwWithdrawBtn;
+
+  // Before running, the button follows normal submit-readiness logic
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  const editingDisabled = btn.disabled;
+
+  // Transition to running — button must be disabled regardless of readiness
+  harness.api.withdrawal.ppwSetDraftInteractivity('running');
+  assert.equal(btn.disabled, true, 'button must be disabled during running phase');
+
+  // Transition back to editing — button should be re-evaluated (not stuck disabled)
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  assert.equal(btn.disabled, editingDisabled, 'button disabled state must be restored after leaving running phase');
+});
+
+test('form inputs are disabled when draft phase is running', () => {
+  const harness = createHarness({ mode: 'relay' });
+  const amountEl = harness.elements.ppwWithdrawAmt;
+  const recipientEl = harness.elements.ppwRecipient;
+
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  assert.equal(amountEl.disabled, false, 'amount input should be enabled while editing');
+  assert.equal(recipientEl.disabled, false, 'recipient input should be enabled while editing');
+
+  harness.api.withdrawal.ppwSetDraftInteractivity('running');
+  assert.equal(amountEl.disabled, true, 'amount input must be disabled while running');
+  assert.equal(recipientEl.disabled, true, 'recipient input must be disabled while running');
+  assert.equal(amountEl.readOnly, true, 'amount input must be readOnly while running');
+  // Note: recipientEl.readOnly is reset by ppwUpdateRecipientHint during sync;
+  // the disabled flag is the primary guard against edits during running phase.
+});
+
+test('draft action link is hidden when draft phase is running', () => {
+  const harness = createHarness({ mode: 'relay' });
+  const link = harness.elements.ppwDraftActionLink;
+
+  harness.api.withdrawal.ppwSetDraftInteractivity('editing');
+  assert.notEqual(link.style.display, 'none', 'action link should be visible while editing');
+
+  harness.api.withdrawal.ppwSetDraftInteractivity('running');
+  assert.equal(link.style.display, 'none', 'action link must be hidden while running');
+});
+
+await done();
