@@ -8,6 +8,9 @@
 // Usage: node test/privacy/test_rpc_log_chunking.mjs
 //
 import { strict as assert } from 'node:assert';
+import { createTestRunner } from './_app_source_utils.mjs';
+
+const { test, done } = createTestRunner();
 
 function ppSleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -153,20 +156,6 @@ function makeFallbackProvider(name, impl) {
   };
 }
 
-let passed = 0;
-let failed = 0;
-
-async function test(name, fn) {
-  try {
-    await fn();
-    passed++;
-    console.log(`  \x1b[32mPASS\x1b[0m ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`  \x1b[31mFAIL\x1b[0m ${name}`);
-    console.log(`       ${e.message}`);
-  }
-}
 
 console.log('\n── RPC log chunking ──');
 
@@ -311,11 +300,4 @@ await test('range-limited recursion stops at the maximum subdivision depth', asy
   );
 });
 
-console.log('\n════════════════════════════════════════════════════════════');
-if (failed === 0) {
-  console.log(`\x1b[32m  All ${passed} tests passed.\x1b[0m`);
-  process.exit(0);
-} else {
-  console.log(`\x1b[31m  ${failed} tests failed, ${passed} passed.\x1b[0m`);
-  process.exit(1);
-}
+await done();

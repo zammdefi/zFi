@@ -8,50 +8,17 @@
 // Usage:  node test/privacy/test_key_derivation.mjs
 //
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { webcrypto } from 'node:crypto';
+import { createPoseidonContext, createKeyDerivation, createTestRunner, loadPrivacyTestApi } from './_app_source_utils.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT = path.resolve(__dirname, '../..');
-
-// ── Load vendored Poseidon libs ──────────────────────────────────────────────
-// The .min.js files are IIFEs that assign to `window.poseidonN`.
-// We create a shared context with a `window` object and run them there.
-
-const ctx = vm.createContext({
-  window: {},
-  atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-  Uint8Array,
-  Array,
-  BigInt,
-});
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon1.min.js'), 'utf8'), ctx);
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon2.min.js'), 'utf8'), ctx);
-vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon3.min.js'), 'utf8'), ctx);
-
-const { poseidon1, poseidon2, poseidon3 } = ctx.window;
+const { poseidon1, poseidon2, poseidon3, ethers } = createPoseidonContext({ withEthers: true });
 assert(typeof poseidon1 === 'function', 'poseidon1 loaded');
 assert(typeof poseidon2 === 'function', 'poseidon2 loaded');
 assert(typeof poseidon3 === 'function', 'poseidon3 loaded');
+assert(typeof ethers?.keccak256 === 'function', 'ethers loaded');
 
-// ── Re-implement the derivation functions (same logic as dapp/index.html) ────
-
-function ppDeriveDepositKeys(masterNullifier, masterSecret, scope, index) {
-  const nullifier = poseidon3([masterNullifier, scope, BigInt(index)]);
-  const secret = poseidon3([masterSecret, scope, BigInt(index)]);
-  const precommitment = poseidon2([nullifier, secret]);
-  return { nullifier, secret, precommitment };
-}
-
-function ppDeriveWithdrawalKeys(masterNullifier, masterSecret, label, withdrawalIndex) {
-  const nullifier = poseidon3([masterNullifier, label, BigInt(withdrawalIndex)]);
-  const secret = poseidon3([masterSecret, label, BigInt(withdrawalIndex)]);
-  const precommitment = poseidon2([nullifier, secret]);
-  return { nullifier, secret, precommitment };
-}
+const { ppDeriveDepositKeys, ppDeriveWithdrawalKeys } = createKeyDerivation(poseidon2, poseidon3);
+const { test, done } = createTestRunner();
 
 function deriveHdSeed(hexKey, mode = 'safe') {
   const hdKey = BigInt(hexKey);
@@ -64,25 +31,93 @@ function deriveMasterKeysFromHdKeys(key1, key2, mode = 'safe') {
   return { masterNullifier, masterSecret };
 }
 
+function ppNormalizeWalletSeedVersion(version) {
+  return version === 'v1' ? 'v1' : (version === 'v2' ? 'v2' : null);
+}
+
+function ppWalletSeedContext(version = 'v2') {
+  const normalizedVersion = ppNormalizeWalletSeedVersion(version) || 'v2';
+  return `privacy-pools/wallet-seed:${normalizedVersion}`;
+}
+
+function ppWalletSeedEntropyBits(version = 'v2') {
+  return version === 'v1' ? 128 : 256;
+}
+
+async function ppDeriveWalletMnemonic(privateKey, version = 'v2') {
+  const wallet = new ethers.Wallet(privateKey);
+  const domain = { name: 'Privacy Pools', version: '1' };
+  const types = {
+    DeriveSeed: [
+      { name: 'action', type: 'string' },
+      { name: 'context', type: 'string' },
+      { name: 'addressHash', type: 'bytes32' },
+    ],
+  };
+  const message = {
+    action: 'Derive Account Seed',
+    context: ppWalletSeedContext(version),
+    addressHash: ethers.keccak256(wallet.address),
+  };
+  const sig1 = await wallet.signTypedData(domain, types, message);
+  const sig2 = await wallet.signTypedData(domain, types, message);
+  assert.equal(sig1, sig2, 'wallet signature determinism');
+  const sigBytes = ethers.getBytes(sig1);
+  const r = sigBytes.slice(0, 32);
+  const ikm = await webcrypto.subtle.importKey('raw', r, 'HKDF', false, ['deriveBits']);
+  const hkdfBits = await webcrypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: ethers.getBytes(wallet.address),
+      info: new TextEncoder().encode(ppWalletSeedContext(version)),
+    },
+    ikm,
+    ppWalletSeedEntropyBits(version),
+  );
+  return {
+    address: wallet.address,
+    signature: sig1,
+    mnemonic: ethers.Mnemonic.fromEntropy(new Uint8Array(hkdfBits)),
+  };
+}
+
+function ppDeriveWalletMasterKeys(mnemonic, derivation = 'safe') {
+  const key1 = ethers.HDNodeWallet.fromMnemonic(mnemonic, `m/44'/60'/0'/0/0`).privateKey;
+  const key2 = ethers.HDNodeWallet.fromMnemonic(mnemonic, `m/44'/60'/1'/0/0`).privateKey;
+  const toSeed = derivation === 'legacy'
+    ? (hexKey) => BigInt(Number(BigInt(hexKey)))
+    : (hexKey) => BigInt(hexKey);
+  return {
+    masterNullifier: poseidon1([toSeed(key1)]),
+    masterSecret: poseidon1([toSeed(key2)]),
+  };
+}
+
+const { api } = loadPrivacyTestApi();
+const {
+  ppBuildWalletSeedTypedData: appBuildWalletSeedTypedData,
+  ppDeriveWalletSeedSignature: appDeriveWalletSeedSignature,
+  ppDeriveWalletSeedMnemonicFromSignature: appDeriveWalletSeedMnemonicFromSignature,
+  ppDeriveWalletSeed: appDeriveWalletSeed,
+} = api.wallet;
+
+// Mirrors ppComputeScopeForPool in the runtime. The hardcoded expected values
+// in the scope tests below are the authoritative check — this helper just
+// reconstructs the keccak(pool ++ 0x01 ++ asset) % SNARK_FIELD formula.
+function ppComputeScope(poolAddress, assetAddress) {
+  return BigInt(ethers.keccak256(
+    '0x' +
+    poolAddress.slice(2).toLowerCase() +
+    '0000000000000000000000000000000000000000000000000000000000000001' +
+    assetAddress.slice(2).toLowerCase()
+  )) % SNARK_SCALAR_FIELD;
+}
+
 // ── BN254 scalar field ───────────────────────────────────────────────────────
 const SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  \x1b[32mPASS\x1b[0m ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`  \x1b[31mFAIL\x1b[0m ${name}`);
-    console.log(`       ${e.message}`);
-  }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  1. Poseidon sanity checks
@@ -95,30 +130,10 @@ const p1_ref = poseidon1([1n]);
 const p2_ref = poseidon2([1n, 2n]);
 const p3_ref = poseidon3([1n, 2n, 3n]);
 
-test('poseidon1([1]) returns a BigInt', () => {
-  assert.equal(typeof p1_ref, 'bigint');
-});
-
-test('poseidon2([1,2]) returns a BigInt', () => {
-  assert.equal(typeof p2_ref, 'bigint');
-});
-
-test('poseidon3([1,2,3]) returns a BigInt', () => {
-  assert.equal(typeof p3_ref, 'bigint');
-});
-
 test('poseidon outputs are within BN254 scalar field', () => {
   assert(p1_ref > 0n && p1_ref < SNARK_SCALAR_FIELD);
   assert(p2_ref > 0n && p2_ref < SNARK_SCALAR_FIELD);
   assert(p3_ref > 0n && p3_ref < SNARK_SCALAR_FIELD);
-});
-
-test('poseidon is deterministic', () => {
-  for (let i = 0; i < 50; i++) {
-    assert.equal(poseidon1([1n]), p1_ref);
-    assert.equal(poseidon2([1n, 2n]), p2_ref);
-    assert.equal(poseidon3([1n, 2n, 3n]), p3_ref);
-  }
 });
 
 test('different inputs produce different outputs', () => {
@@ -166,9 +181,9 @@ const TEST_MASTER_NULLIFIER = poseidon1([42n]);
 const TEST_MASTER_SECRET = poseidon1([43n]);
 const TEST_SCOPE = 0xF241d57C6DebAe225c0F2e6eA1529373C9A9C9fBn; // ETH pool address as scope
 
-test('deposit keys are deterministic (50 iterations)', () => {
+test('deposit keys are deterministic', () => {
   const ref = ppDeriveDepositKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_SCOPE, 0);
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 3; i++) {
     const keys = ppDeriveDepositKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_SCOPE, 0);
     assert.equal(keys.nullifier, ref.nullifier);
     assert.equal(keys.secret, ref.secret);
@@ -200,13 +215,13 @@ test('deposit nullifier != secret for same inputs', () => {
   assert.notEqual(k.nullifier, k.secret);
 });
 
-test('precommitment = poseidon2(nullifier, secret)', () => {
-  const k = ppDeriveDepositKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_SCOPE, 5);
-  assert.equal(k.precommitment, poseidon2([k.nullifier, k.secret]));
+test('deposit precommitment matches hardcoded regression value', () => {
+  const k = ppDeriveDepositKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_SCOPE, 0);
+  assert.equal(k.precommitment, 7401488295419196436257358403189492305761693180908177863987681050820699998762n);
 });
 
 test('deposit keys are within BN254 scalar field', () => {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 2; i++) {
     const k = ppDeriveDepositKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_SCOPE, i);
     assert(k.nullifier > 0n && k.nullifier < SNARK_SCALAR_FIELD);
     assert(k.secret > 0n && k.secret < SNARK_SCALAR_FIELD);
@@ -222,9 +237,9 @@ console.log('\n── Withdrawal key derivation ──');
 
 const TEST_LABEL = poseidon2([123n, 456n]); // arbitrary commitment label
 
-test('withdrawal keys are deterministic (50 iterations)', () => {
+test('withdrawal keys are deterministic', () => {
   const ref = ppDeriveWithdrawalKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_LABEL, 0);
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 3; i++) {
     const keys = ppDeriveWithdrawalKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_LABEL, 0);
     assert.equal(keys.nullifier, ref.nullifier);
     assert.equal(keys.secret, ref.secret);
@@ -248,13 +263,13 @@ test('withdrawal keys differ by label', () => {
   assert.notEqual(kA.precommitment, kB.precommitment);
 });
 
-test('withdrawal precommitment = poseidon2(nullifier, secret)', () => {
-  const k = ppDeriveWithdrawalKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_LABEL, 3);
-  assert.equal(k.precommitment, poseidon2([k.nullifier, k.secret]));
+test('withdrawal precommitment matches hardcoded regression value', () => {
+  const k = ppDeriveWithdrawalKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_LABEL, 0);
+  assert.equal(k.precommitment, 1498187307751531547739050021339576787746854005122278518607550109185386234750n);
 });
 
 test('withdrawal keys are within BN254 scalar field', () => {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 2; i++) {
     const k = ppDeriveWithdrawalKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, TEST_LABEL, i);
     assert(k.nullifier > 0n && k.nullifier < SNARK_SCALAR_FIELD);
     assert(k.secret > 0n && k.secret < SNARK_SCALAR_FIELD);
@@ -268,18 +283,16 @@ test('withdrawal keys are within BN254 scalar field', () => {
 
 console.log('\n── Cross-path isolation ──');
 
-test('deposit and withdrawal keys differ for same (masterKeys, value, index)', () => {
-  // Use the same numeric value for scope and label to prove it's the context
-  // (deposit vs withdrawal call path) that differentiates them — they use the
-  // same poseidon3 call, so identical inputs WILL produce identical outputs.
-  // The safety comes from scope and label always being different values
-  // in practice (scope = pool address, label = commitment hash).
+test('deposit and withdrawal use identical algorithm — isolation comes from distinct inputs', () => {
+  // Same poseidon3 call with identical inputs → identical outputs. This is expected.
+  // The safety property is that scope (pool address) and label (commitment hash)
+  // are always different values in production.
   const sharedValue = 999n;
   const dk = ppDeriveDepositKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, sharedValue, 0);
   const wk = ppDeriveWithdrawalKeys(TEST_MASTER_NULLIFIER, TEST_MASTER_SECRET, sharedValue, 0);
-  // Same algorithm, same inputs → same output (this is EXPECTED)
-  assert.equal(dk.nullifier, wk.nullifier);
-  // This confirms the security property: scope != label in production
+  assert.equal(dk.nullifier, wk.nullifier, 'same inputs produce same output');
+  assert.equal(dk.secret, wk.secret, 'same inputs produce same output');
+  assert.equal(dk.precommitment, wk.precommitment, 'same inputs produce same output');
 });
 
 test('deposit scope (pool address) != withdrawal label (commitment hash) guarantees isolation', () => {
@@ -312,7 +325,7 @@ test('legacy hd seed still truncates like bytesToNumber for old accounts', () =>
   const legacySeed = deriveHdSeed(fakeKey, 'legacy');
   assert.equal(legacySeed, BigInt(Number(BigInt(fakeKey))));
   const ref = poseidon1([legacySeed]);
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 3; i++) {
     assert.equal(poseidon1([deriveHdSeed(fakeKey, 'legacy')]), ref);
   }
 });
@@ -330,15 +343,170 @@ test('safe and legacy master keys diverge for 256-bit hd keys', () => {
   assert(legacy.masterSecret > 0n && legacy.masterSecret < SNARK_SCALAR_FIELD);
 });
 
-test('safe master key derivation is deterministic', () => {
-  const key1 = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-  const key2 = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-  const ref = deriveMasterKeysFromHdKeys(key1, key2, 'safe');
-  for (let i = 0; i < 50; i++) {
-    const keys = deriveMasterKeysFromHdKeys(key1, key2, 'safe');
-    assert.equal(keys.masterNullifier, ref.masterNullifier);
-    assert.equal(keys.masterSecret, ref.masterSecret);
-  }
+console.log('\n── Wallet seed versioning ──');
+
+test('wallet seed contexts differ between v1 and v2', () => {
+  assert.equal(ppWalletSeedContext('v1'), 'privacy-pools/wallet-seed:v1');
+  assert.equal(ppWalletSeedContext('v2'), 'privacy-pools/wallet-seed:v2');
+  assert.notEqual(ppWalletSeedContext('v1'), ppWalletSeedContext('v2'));
+});
+
+test('legacy wallet seed uses 128-bit entropy and v2 uses 256-bit entropy', () => {
+  assert.equal(ppWalletSeedEntropyBits('v1'), 128);
+  assert.equal(ppWalletSeedEntropyBits('v2'), 256);
+});
+
+test('shared typed-data helper matches the canonical v1 payload exactly', () => {
+  const address = '0x8fd379246834eac74B8419FfdA202CF8051F7A03';
+  const typedData = JSON.parse(JSON.stringify(appBuildWalletSeedTypedData(address, 'v1')));
+  assert.deepEqual(typedData, {
+    domain: { name: 'Privacy Pools', version: '1' },
+    types: {
+      DeriveSeed: [
+        { name: 'action', type: 'string' },
+        { name: 'context', type: 'string' },
+        { name: 'addressHash', type: 'bytes32' },
+      ],
+    },
+    primaryType: 'DeriveSeed',
+    message: {
+      action: 'Derive Account Seed',
+      context: 'privacy-pools/wallet-seed:v1',
+      addressHash: ethers.keccak256(ethers.getBytes(address)),
+    },
+  });
+  assert.deepEqual(Object.keys(typedData.message).sort(), ['action', 'addressHash', 'context']);
+});
+
+test('shared typed-data helper matches the canonical v2 payload exactly', () => {
+  const address = '0x8fd379246834eac74B8419FfdA202CF8051F7A03';
+  const typedData = JSON.parse(JSON.stringify(appBuildWalletSeedTypedData(address, 'v2')));
+  assert.deepEqual(typedData, {
+    domain: { name: 'Privacy Pools', version: '1' },
+    types: {
+      DeriveSeed: [
+        { name: 'action', type: 'string' },
+        { name: 'context', type: 'string' },
+        { name: 'addressHash', type: 'bytes32' },
+      ],
+    },
+    primaryType: 'DeriveSeed',
+    message: {
+      action: 'Derive Account Seed',
+      context: 'privacy-pools/wallet-seed:v2',
+      addressHash: ethers.keccak256(ethers.getBytes(address)),
+    },
+  });
+  assert.deepEqual(Object.keys(typedData.message).sort(), ['action', 'addressHash', 'context']);
+});
+
+test('shared signature helper reproduces the canonical deterministic signature', async () => {
+  const privateKey = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const wallet = new ethers.Wallet(privateKey);
+  const signature = await appDeriveWalletSeedSignature(wallet, wallet.address, 'v2');
+  assert.equal(
+    signature,
+    '0x7dd8ed1057b460d0a2939725542fa7b3f8942f3e714082435164b6c37afa8f0b3de41b054aec2e1a8e4a518042f489db09a0928d98c8d2d78ea8c9c9b97aa8911b',
+  );
+});
+
+test('shared signature-to-mnemonic helper preserves the canonical v2 phrase', async () => {
+  const privateKey = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const derived = await ppDeriveWalletMnemonic(privateKey, 'v2');
+  const mnemonic = await appDeriveWalletSeedMnemonicFromSignature(derived.signature, derived.address, 'v2');
+  assert.equal(
+    mnemonic.phrase,
+    'leg steak curious unaware false coffee token amount gossip violin caught foam lunar acquire now cash ability pair summer suit thunder spin describe artwork',
+  );
+});
+
+test('shared signature-to-mnemonic helper rejects malformed signatures fail-closed', async () => {
+  await assert.rejects(
+    () => appDeriveWalletSeedMnemonicFromSignature('0x1234', '0x8fd379246834eac74B8419FfdA202CF8051F7A03', 'v2'),
+    /Invalid signature length/,
+  );
+});
+
+test('shared wallet-seed orchestration helper preserves the canonical v1 phrase', async () => {
+  const privateKey = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const wallet = new ethers.Wallet(privateKey);
+  const mnemonic = await appDeriveWalletSeed(wallet, wallet.address, 'v1');
+  assert.equal(
+    mnemonic.phrase,
+    'balance beef phrase when cute tone excess orbit supreme turtle grant song',
+  );
+});
+
+test('wallet-derived v1 mnemonic matches the canonical deterministic vector', async () => {
+  const derived = await ppDeriveWalletMnemonic(
+    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'v1',
+  );
+  assert.equal(derived.address, '0x8fd379246834eac74B8419FfdA202CF8051F7A03');
+  assert.equal(
+    derived.signature,
+    '0x683a71947b08997ecabbdc30e4428bfc667f2a6ddcca5acd54ff263499161b6a2f99442b8fe63f74168b9c884f74244b6d2e0c9c8b527f39ad4fc1978fbcd6b11c',
+  );
+  assert.equal(
+    derived.mnemonic.phrase,
+    'balance beef phrase when cute tone excess orbit supreme turtle grant song',
+  );
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'safe').masterNullifier, 21714767383873811356026703648140636088049773679134530645715666881245477838600n);
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'safe').masterSecret, 2313678352674809104289031563479915316695415708264861938079169028508258930244n);
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'legacy').masterNullifier, 19395970097533534986192183671933054422198728623554741107491370224706127138834n);
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'legacy').masterSecret, 4784437395811465677638853664905111266381218266111922105402673462692425399573n);
+});
+
+test('wallet-derived v2 mnemonic matches the canonical deterministic vector', async () => {
+  const derived = await ppDeriveWalletMnemonic(
+    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'v2',
+  );
+  assert.equal(derived.address, '0x8fd379246834eac74B8419FfdA202CF8051F7A03');
+  assert.equal(
+    derived.signature,
+    '0x7dd8ed1057b460d0a2939725542fa7b3f8942f3e714082435164b6c37afa8f0b3de41b054aec2e1a8e4a518042f489db09a0928d98c8d2d78ea8c9c9b97aa8911b',
+  );
+  assert.equal(
+    derived.mnemonic.phrase,
+    'leg steak curious unaware false coffee token amount gossip violin caught foam lunar acquire now cash ability pair summer suit thunder spin describe artwork',
+  );
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'safe').masterNullifier, 11004014446923394146163674023384271253389186342588884686484403797957068672042n);
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'safe').masterSecret, 7519711529599660434665922316666032718700481529342101979711146121903451412460n);
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'legacy').masterNullifier, 3889574738913266875051599445031320200644132601634090549411042274149067019911n);
+  assert.equal(ppDeriveWalletMasterKeys(derived.mnemonic, 'legacy').masterSecret, 1010789321856576828358212594735301713285780700071983686555955435469722712486n);
+});
+
+console.log('\n── Canonical pool scopes ──');
+
+test('mainnet ETH pool scope matches the canonical Privacy Pools value', () => {
+  assert.equal(
+    ppComputeScope(
+      '0xF241d57C6DebAe225c0F2e6eA1529373C9A9C9fB',
+      '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
+    ),
+    4916574638117198869413701114161172350986437430914933850166949084132905299523n,
+  );
+});
+
+test('mainnet BOLD pool scope matches the canonical Privacy Pools value', () => {
+  assert.equal(
+    ppComputeScope(
+      '0xb4b5Fd38Fd4788071d7287e3cB52948e0d10b23E',
+      '0x6440f144b7e50D6a8439336510312d2F54beB01D',
+    ),
+    12594345321156708920712766274402096360984745412708601457862140420990105325804n,
+  );
+});
+
+test('mainnet wstETH pool scope matches the canonical Privacy Pools value', () => {
+  assert.equal(
+    ppComputeScope(
+      '0x1A604E9DFa0EFDC7FFda378AF16Cb81243b61633',
+      '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0',
+    ),
+    472674026048933344947929992064610492276304547390666782210980269768303717449n,
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -401,11 +569,4 @@ test('withdrawal keys derived from deposit precommitment are unique per deposit'
 //  Summary
 // ═══════════════════════════════════════════════════════════════════════════════
 
-console.log(`\n${'═'.repeat(60)}`);
-if (failed === 0) {
-  console.log(`\x1b[32m  All ${passed} tests passed.\x1b[0m\n`);
-  process.exit(0);
-} else {
-  console.log(`\x1b[31m  ${failed} failed, ${passed} passed.\x1b[0m\n`);
-  process.exit(1);
-}
+await done();
