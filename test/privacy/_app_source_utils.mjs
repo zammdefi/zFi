@@ -7,7 +7,18 @@ import path from 'node:path';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PRIVACY_RUNTIME_START_MARKER = '// ==================== PRIVACY POOLS RUNTIME START ====================';
 const PRIVACY_RUNTIME_END_MARKER = '// ==================== PRIVACY POOLS RUNTIME END ====================';
-const PRIVACY_RUNTIME_PATH = path.join(ROOT, 'dapp/privacy-pools.js');
+const PRIVACY_RUNTIME_PATHS = [
+  path.join(ROOT, 'dapp/modules/privacy-pools.js'),
+  path.join(ROOT, 'dapp/privacy-pools.js'),
+];
+const POSEIDON_SCRIPT_PATHS = [
+  ['dapp/vendor/poseidon1.min.js', 'dapp/vendor/poseidon2.min.js', 'dapp/vendor/poseidon3.min.js'],
+  ['dapp/poseidon1.min.js', 'dapp/poseidon2.min.js', 'dapp/poseidon3.min.js'],
+];
+const ETHERS_SCRIPT_PATHS = [
+  'dapp/vendor/ethers.min.js',
+  'dapp/ethers.min.js',
+];
 
 let _appSourceCache = null;
 let _privacyRuntimeSourceCache = null;
@@ -23,8 +34,9 @@ function getAppSource() {
 
 function getPrivacyRuntimeSource() {
   if (!_privacyRuntimeSourceCache) {
-    _privacyRuntimeSourceCache = existsSync(PRIVACY_RUNTIME_PATH)
-      ? readFileSync(PRIVACY_RUNTIME_PATH, 'utf8')
+    const runtimePath = PRIVACY_RUNTIME_PATHS.find((candidate) => existsSync(candidate));
+    _privacyRuntimeSourceCache = runtimePath
+      ? readFileSync(runtimePath, 'utf8')
       : sliceSourceByMarkers(
           getAppSource(),
           PRIVACY_RUNTIME_START_MARKER,
@@ -487,12 +499,16 @@ function getStaticShellScriptPlan() {
       content: match[2] || '',
     });
   }
-  const startIndex = scripts.findIndex((script) => script.src === './ethers.min.js');
+  const startIndex = scripts.findIndex((script) => (
+    script.src === './vendor/ethers.min.js' || script.src === './ethers.min.js'
+  ));
   const endIndex = scripts.findIndex((script) => !script.src && script.content.includes('function switchTab(tab)'));
   if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
     throw new Error('Could not resolve the static privacy shell boot scripts from index.html.');
   }
-  return scripts.slice(startIndex, endIndex + 1).filter((script) => script.src !== './walletconnect.min.js');
+  return scripts
+    .slice(startIndex, endIndex + 1)
+    .filter((script) => script.src !== './walletconnect.min.js' && script.src !== './vendor/walletconnect.min.js');
 }
 
 function readDappScriptSource(src) {
@@ -1009,11 +1025,23 @@ export function createPoseidonContext({ withEthers = false } = {}) {
     Object.assign(globals, { globalThis: {}, btoa: (s) => Buffer.from(s, 'binary').toString('base64'), crypto: webcrypto, TextEncoder, TextDecoder });
   }
   const ctx = vm.createContext(globals);
-  vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon1.min.js'), 'utf8'), ctx);
-  vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon2.min.js'), 'utf8'), ctx);
-  vm.runInContext(readFileSync(path.join(ROOT, 'dapp/poseidon3.min.js'), 'utf8'), ctx);
+  const poseidonPaths = POSEIDON_SCRIPT_PATHS
+    .map((candidates) => candidates.map((candidate) => path.join(ROOT, candidate)))
+    .find((candidates) => candidates.every((candidate) => existsSync(candidate)));
+  if (!poseidonPaths) {
+    throw new Error('Could not resolve vendored poseidon bundles for privacy tests.');
+  }
+  vm.runInContext(readFileSync(poseidonPaths[0], 'utf8'), ctx);
+  vm.runInContext(readFileSync(poseidonPaths[1], 'utf8'), ctx);
+  vm.runInContext(readFileSync(poseidonPaths[2], 'utf8'), ctx);
   if (withEthers) {
-    vm.runInContext(readFileSync(path.join(ROOT, 'dapp/ethers.min.js'), 'utf8'), ctx);
+    const ethersPath = ETHERS_SCRIPT_PATHS
+      .map((candidate) => path.join(ROOT, candidate))
+      .find((candidate) => existsSync(candidate));
+    if (!ethersPath) {
+      throw new Error('Could not resolve vendored ethers bundle for privacy tests.');
+    }
+    vm.runInContext(readFileSync(ethersPath, 'utf8'), ctx);
   }
   const result = { poseidon1: ctx.window.poseidon1, poseidon2: ctx.window.poseidon2, poseidon3: ctx.window.poseidon3 };
   if (withEthers) result.ethers = ctx.globalThis.ethers;

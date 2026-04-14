@@ -35,7 +35,8 @@ test('withdrawal fail-closed copy stays explicit', () => {
 
 test('static privacy shell still ships the extracted runtime asset', () => {
   assert(
-    appHtml.includes('<script src="./privacy-pools.js"></script>'),
+    appHtml.includes('<script src="./modules/privacy-pools.js"></script>')
+      || appHtml.includes('<script src="./privacy-pools.js"></script>'),
     'index.html must include the privacy runtime script for static ENS/IPFS deployments',
   );
 });
