@@ -11,32 +11,13 @@
 <meta name="twitter:title" content="About zFi">
 <meta name="twitter:description" content="zFi is the first superdapp that integrates all of DeFi into a single domain.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400' width='400' height='400'%3E%3Crect width='400' height='400' fill='%23000'/%3E%3CclipPath id='frame'%3E%3Crect width='400' height='400'/%3E%3C/clipPath%3E%3Cg clip-path='url(%23frame)'%3E%3Cpath d='M-60-20L460-20L460 90L80 310L460 310L460 420L-60 420L-60 310L320 90L-60 90Z' fill='white'/%3E%3C/g%3E%3C/svg%3E" type="image/svg+xml">
+<link rel="stylesheet" href="../theme.css">
 <script>
 (function(){var d=localStorage.getItem('dark');if(d==='1'||(d===null&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')})();
 </script>
+<script src="../theme.js"></script>
 <style>
-:root {
-  --bg:#fff;--fg:#000;--fg-muted:#666;--fg-dim:#999;
-  --border:#000;--border-muted:#ddd;
-  --surface:#f9f9f9;--surface-hover:#f5f5f5;
-  --btn-bg:#000;--btn-fg:#fff;--btn-hover:#333;
-  --link-fg:inherit;
-}
-.dark {
-  --bg:#0a0a0a;--fg:#e8e8e0;--fg-muted:#888;--fg-dim:#666;
-  --border:#333;--border-muted:#333;
-  --surface:#111;--surface-hover:#151515;
-  --btn-bg:#e8e8e0;--btn-fg:#0a0a0a;--btn-hover:#ccc;
-  --link-fg:#e8e8e0;
-}
-* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-body {
-  font-family:Helvetica,Arial,sans-serif;
-  background:var(--bg);color:var(--fg);
-  min-height:100vh;padding:60px 20px 40px;
-  max-width:480px;margin:0 auto;
-}
-a { color:var(--link-fg); }
+body { padding:60px 20px 40px; }
 h1 {
   font-size:14px;font-weight:400;letter-spacing:0.1em;text-transform:uppercase;
   margin-bottom:24px;
@@ -82,30 +63,8 @@ h1 {
 .links a:hover {
   text-decoration-style:solid;
 }
-.dark-toggle {
-  position:fixed;bottom:max(20px, env(safe-area-inset-bottom, 0px));right:max(20px, env(safe-area-inset-right, 0px));
-  border:none;cursor:pointer;padding:13px;margin:-13px;opacity:0.5;transition:opacity 0.2s;z-index:100;
-  background:#000;border-radius:50%;width:40px;height:40px;background-clip:content-box;
-}
-:root.dark .dark-toggle { background:#fff; }
-.dark-toggle:hover { opacity:1; }
-.zorg-bg{fill:#fff}.zorg-fg{fill:#000}
-.dark .zorg-bg{fill:#000}.dark .zorg-fg{fill:#fff}
-.z-nav { position:fixed; top:max(16px, env(safe-area-inset-top)); left:max(16px, env(safe-area-inset-left)); z-index:200; }
-.z-nav-btn { background:none; border:none; cursor:pointer; opacity:0.5; transition:opacity 0.2s; padding:6px; margin:-6px; line-height:0; }
-.z-nav-btn:hover, .z-nav.open .z-nav-btn { opacity:1; }
-.z-nav-menu { display:none; position:absolute; top:36px; left:0; background:var(--bg); border:1px solid var(--border); padding:8px 0; min-width:140px; max-height:calc(100vh - 60px); overflow-y:auto; }
-.z-nav.open .z-nav-menu { display:block; }
-.z-nav-menu a { display:block; padding:6px 16px; font-size:13px; color:var(--fg); text-decoration:none; letter-spacing:0.05em; }
-.z-nav-menu a:hover { background:var(--surface); }
-.z-nav-menu a.active { opacity:0.35; pointer-events:none; }
-.z-nav-menu .z-nav-sep { border-top:1px solid var(--border); margin:6px 0; }
 @media (max-width:600px) {
   body { padding:60px 16px 32px; }
-  .dark-toggle { bottom:16px; right:16px; }
-  .z-nav { top:14px; left:14px; }
-  .z-nav-btn { padding:4px; margin:-4px; }
-  .z-nav-menu a { padding:10px 16px; }
   h1 { font-size:13px; margin-bottom:16px; }
   .lead { font-size:14px; margin-bottom:24px; }
   .section { margin-bottom:22px; }
@@ -125,27 +84,7 @@ h1 {
 </head>
 <body>
 
-<div class="z-nav">
-  <button class="z-nav-btn" onclick="this.parentElement.classList.toggle('open')" title="Menu">
-    <svg width="28" height="28" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"><rect class="zorg-bg" width="400" height="400"/><clipPath id="zh"><rect width="400" height="400"/></clipPath><g clip-path="url(#zh)"><path class="zorg-fg" d="M-60-20L460-20L460 90L80 310L460 310L460 420L-60 420L-60 310L320 90L-60 90Z"/></g></svg>
-  </button>
-  <div class="z-nav-menu">
-    <a href="../">Swap</a>
-    <a href="../coin/">Coin</a>
-    <a href="../predict/">Predict</a>
-    <a id="navOrderbook" href="../orderbook/">Orderbook</a>
-    <a href="../lp/">Liquidity</a>
-    <a href="https://multisig.wei.is/">Multisig</a>
-    <a href="../domains/">Domain</a>
-    <a href="../dao/">DAO</a>
-    <div class="z-nav-sep"></div>
-    <a href="./" class="active">About</a>
-    <a href="../api/">API</a>
-    <a href="https://github.com/z-fi/zFi" target="_blank" rel="noopener">GitHub</a>
-  </div>
-</div>
-
-<button class="dark-toggle" onclick="toggleDark()" title="Toggle dark mode"></button>
+<div id="z-nav"></div>
 
 <h1>About</h1>
 
@@ -209,11 +148,6 @@ h1 {
 </div>
 
 <script>
-document.addEventListener('click', e => { if (!e.target.closest('.z-nav')) document.querySelector('.z-nav')?.classList.remove('open'); });
-function toggleDark() {
-  document.documentElement.classList.toggle('dark');
-  localStorage.setItem('dark', document.documentElement.classList.contains('dark') ? '1' : '0');
-}
 </script>
 </body>
 </html>

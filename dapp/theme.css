@@ -1,0 +1,58 @@
+/* zFi shared theme — base variables, resets, nav, dark toggle */
+
+:root {
+  --bg:#fff;--fg:#000;--fg-muted:#666;--fg-dim:#999;
+  --border:#000;--border-muted:#ddd;
+  --surface:#f9f9f9;--surface-hover:#f5f5f5;
+  --btn-bg:#000;--btn-fg:#fff;--btn-hover:#333;
+  --link-fg:inherit;
+  --modal-overlay:rgba(0,0,0,0.8);--modal-bg:#fff;--modal-border:#000;
+  --status-error:#fff0f0;--status-success:#f0fff0;
+}
+.dark {
+  --bg:#0a0a0a;--fg:#e8e8e0;--fg-muted:#888;--fg-dim:#666;
+  --border:#333;--border-muted:#333;
+  --surface:#111;--surface-hover:#151515;
+  --btn-bg:#e8e8e0;--btn-fg:#0a0a0a;--btn-hover:#ccc;
+  --link-fg:#e8e8e0;
+  --modal-overlay:rgba(0,0,0,0.85);--modal-bg:#111;--modal-border:#333;
+  --status-error:#1a0000;--status-success:#001a00;
+}
+
+/* SVG logo fill rules */
+.zorg-bg{fill:#fff}.zorg-fg{fill:#000}
+.dark .zorg-bg{fill:#000}.dark .zorg-fg{fill:#fff}
+
+/* Reset */
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body {
+  font-family:Helvetica,Arial,sans-serif;
+  background:var(--bg); color:var(--fg);
+  min-height:100vh; padding:60px 20px 20px;
+  max-width:480px; margin:0 auto;
+  overflow-x:hidden;
+}
+a { color:var(--link-fg); }
+
+/* Dark mode toggle */
+.dark-toggle {
+  position:fixed;
+  bottom:max(20px, env(safe-area-inset-bottom, 0px));
+  right:max(20px, env(safe-area-inset-right, 0px));
+  border:none; cursor:pointer; padding:13px; margin:-13px;
+  opacity:0.5; transition:opacity 0.2s; z-index:100;
+  background:#000; border-radius:50%; width:40px; height:40px; background-clip:content-box;
+}
+:root.dark .dark-toggle { background:#fff; }
+.dark-toggle:hover { opacity:1; }
+
+/* Navigation drawer */
+.z-nav { position:fixed; top:max(16px, env(safe-area-inset-top)); left:max(16px, env(safe-area-inset-left)); z-index:200; }
+.z-nav-btn { background:none; border:none; cursor:pointer; opacity:0.5; transition:opacity 0.2s; padding:6px; margin:-6px; line-height:0; }
+.z-nav-btn:hover, .z-nav.open .z-nav-btn { opacity:1; }
+.z-nav-menu { display:none; position:absolute; top:36px; left:0; background:var(--bg); border:1px solid var(--border); padding:8px 0; min-width:140px; max-height:calc(100vh - 60px); overflow-y:auto; }
+.z-nav.open .z-nav-menu { display:block; }
+.z-nav-menu a { display:block; padding:6px 16px; font-size:13px; color:var(--fg); text-decoration:none; letter-spacing:0.05em; }
+.z-nav-menu a:hover { background:var(--surface); }
+.z-nav-menu a.active { opacity:0.35; pointer-events:none; }
+.z-nav-menu .z-nav-sep { border-top:1px solid var(--border); margin:6px 0; }

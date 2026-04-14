@@ -4,21 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>DAO</title>
+<link rel="stylesheet" href="../theme.css">
 <link rel="stylesheet" href="../wallet.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400' width='400' height='400'%3E%3Crect width='400' height='400' fill='%23000'/%3E%3CclipPath id='frame'%3E%3Crect width='400' height='400'/%3E%3C/clipPath%3E%3Cg clip-path='url(%23frame)'%3E%3Cpath d='M-60-20L460-20L460 90L80 310L460 310L460 420L-60 420L-60 310L320 90L-60 90Z' fill='white'/%3E%3C/g%3E%3C/svg%3E" type="image/svg+xml">
 <script>
 (function(){var d=localStorage.getItem('dark');if(d==='1'||(d===null&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')})();
 </script>
+<script src="../theme.js"></script>
 <style>
 :root {
-  --bg:#fff;--fg:#000;--fg-muted:#666;--fg-dim:#999;
-  --border:#000;--border-muted:#ddd;
-  --surface:#f9f9f9;--surface-hover:#f5f5f5;
-  --btn-bg:#000;--btn-fg:#fff;--btn-hover:#333;
   --btn-dis-bg:#ccc;--btn-dis-fg:#fff;
-  --link-fg:inherit;
-  --modal-overlay:rgba(0,0,0,0.8);--modal-bg:#fff;--modal-border:#000;
-  --status-error:#fff0f0;--status-success:#f0fff0;--status-warning:#fffaf0;--status-info:#f0f4ff;
+  --status-warning:#fffaf0;--status-info:#f0f4ff;
   --green:#2d8a2d;--red:#e74c3c;--amber:#b8860b;
   --error-border:#e8c0c0;--error-border-light:#f5d5d5;--warning-border:#e0c8a0;--warning-border-dark:#d4b888;--warning-accent:#ddc040;
   --info-fg:#4466aa;--info-border:#aac8e8;
@@ -26,31 +22,16 @@
   --divider:#f0f0f0;
 }
 .dark {
-  --bg:#0a0a0a;--fg:#e8e8e0;--fg-muted:#888;--fg-dim:#666;
-  --border:#333;--border-muted:#333;
-  --surface:#111;--surface-hover:#1a1a1a;
-  --btn-bg:#e8e8e0;--btn-fg:#0a0a0a;--btn-hover:#ccc;
   --btn-dis-bg:#333;--btn-dis-fg:#666;
-  --link-fg:#e8e8e0;
-  --modal-overlay:rgba(0,0,0,0.85);--modal-bg:#0a0a0a;--modal-border:#333;
-  --status-error:#1a0000;--status-success:#001a00;--status-warning:#1a1400;--status-info:#0a0e1a;
+  --status-warning:#1a1400;--status-info:#0a0e1a;
   --green:#4ade80;--red:#ef4444;--amber:#f59e0b;
   --error-border:#4a2020;--error-border-light:#3a2020;--warning-border:#4a3a20;--warning-border-dark:#3a2a15;--warning-accent:#8a7020;
   --info-fg:#6688cc;--info-border:#2a3a50;
   --shadow:rgba(255,255,255,0.05);
   --divider:#222;
 }
-.zorg-bg{fill:#fff}.zorg-fg{fill:#000}
-.dark .zorg-bg{fill:#000}.dark .zorg-fg{fill:#fff}
-* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body {
-  font-family: Helvetica, Arial, sans-serif;
-  background: var(--bg);
-  color: var(--fg);
-  min-height: 100vh;
-  padding: 60px 20px 20px;
   max-width: 620px;
-  margin: 0 auto;
 }
 h1 {
   font-size: 14px;
@@ -80,7 +61,6 @@ h4 {
   text-transform: uppercase;
   margin-bottom: 8px;
 }
-a { color: var(--link-fg); }
 label {
   display: block;
   font-size: 11px;
@@ -127,27 +107,6 @@ button.secondary {
 }
 button.secondary:hover { background: var(--surface-hover); }
 
-/* Dark toggle */
-.dark-toggle {
-  position:fixed;
-  bottom:max(20px, env(safe-area-inset-bottom, 0px));
-  right:max(20px, env(safe-area-inset-right, 0px));
-  border:none; cursor:pointer; padding:13px; margin:-13px;
-  opacity:0.5; transition:opacity 0.2s; z-index:100;
-  background:#000; border-radius:50%; width:40px; height:40px;
-  background-clip: content-box;
-}
-:root.dark .dark-toggle { background:#fff; }
-.dark-toggle:hover { opacity:1; }
-.z-nav { position:fixed; top:max(16px, env(safe-area-inset-top)); left:max(16px, env(safe-area-inset-left)); z-index:200; }
-.z-nav-btn { background:none; border:none; cursor:pointer; opacity:0.5; transition:opacity 0.2s; padding:6px; margin:-6px; line-height:0; }
-.z-nav-btn:hover, .z-nav.open .z-nav-btn { opacity:1; }
-.z-nav-menu { display:none; position:absolute; top:36px; left:0; background:var(--bg); border:1px solid var(--border); padding:8px 0; min-width:140px; max-height:calc(100vh - 60px); overflow-y:auto; }
-.z-nav.open .z-nav-menu { display:block; }
-.z-nav-menu a { display:block; padding:6px 16px; font-size:13px; color:var(--fg); text-decoration:none; letter-spacing:0.05em; }
-.z-nav-menu a:hover { background:var(--surface); }
-.z-nav-menu a.active { opacity:0.35; pointer-events:none; }
-.z-nav-menu .z-nav-sep { border-top:1px solid var(--border); margin:6px 0; }
 
 /* Dark mode — semantic color overrides (elements not using CSS vars) */
 .dark .proposal-state.active { border-color:var(--green); background:var(--status-success); }
@@ -1823,10 +1782,6 @@ body.modal-open { overflow: hidden; }
 /* Responsive */
 @media (max-width: 700px) {
   body { padding: 80px 16px 20px; }
-  .dark-toggle { bottom: 16px; right: 16px; }
-  .z-nav { top: 14px; left: 14px; }
-  .z-nav-btn { padding: 4px; margin: -4px; }
-  .z-nav-menu a { padding: 10px 16px; }
   h1 { font-size: 13px; margin-bottom: 16px; }
   .dao-tiles { grid-template-columns: 1fr; }
   .dao-view-toggle { width: 100%; }
@@ -1895,27 +1850,8 @@ body.modal-open { overflow: hidden; }
 </head>
 <body>
 
-<button class="dark-toggle" onclick="toggleDark()" title="Toggle dark mode"></button>
+<div id="z-nav"></div>
 <div class="majeur-logo" title="Majeur"><svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><circle cx="100" cy="100" r="60" fill="none" stroke="currentColor" stroke-width="4" opacity="0.5"/><circle cx="100" cy="100" r="35" fill="none" stroke="currentColor" stroke-width="4" opacity="0.4"/><line x1="75" y1="0" x2="90" y2="100" stroke="currentColor" stroke-width="5" opacity="0.6"/><line x1="75" y1="200" x2="90" y2="100" stroke="currentColor" stroke-width="5" opacity="0.6"/><line x1="100" y1="0" x2="100" y2="100" stroke="currentColor" stroke-width="7" opacity="0.8"/><line x1="100" y1="200" x2="100" y2="100" stroke="currentColor" stroke-width="7" opacity="0.8"/><line x1="125" y1="0" x2="110" y2="100" stroke="currentColor" stroke-width="5" opacity="0.6"/><line x1="125" y1="200" x2="110" y2="100" stroke="currentColor" stroke-width="5" opacity="0.6"/></svg></div>
-<div class="z-nav">
-  <button class="z-nav-btn" onclick="this.parentElement.classList.toggle('open')" title="Menu">
-    <svg width="28" height="28" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"><rect class="zorg-bg" width="400" height="400"/><clipPath id="zh"><rect width="400" height="400"/></clipPath><g clip-path="url(#zh)"><path class="zorg-fg" d="M-60-20L460-20L460 90L80 310L460 310L460 420L-60 420L-60 310L320 90L-60 90Z"/></g></svg>
-  </button>
-  <div class="z-nav-menu">
-    <a href="../">Swap</a>
-    <a href="../coin/">Coin</a>
-    <a href="../predict/">Predict</a>
-    <a id="navOrderbook" href="../orderbook/">Orderbook</a>
-    <a href="../lp/">Liquidity</a>
-    <a href="https://multisig.wei.is/">Multisig</a>
-    <a href="../domains/">Domain</a>
-    <a href="./" class="active">DAO</a>
-    <div class="z-nav-sep"></div>
-    <a href="../about/">About</a>
-    <a href="../api/">API</a>
-    <a href="https://github.com/z-fi/zFi" target="_blank" rel="noopener">GitHub</a>
-  </div>
-</div>
 
 <!-- Toast Notifications -->
 <div class="toast-container" id="toastContainer"></div>
@@ -2714,12 +2650,6 @@ body.modal-open { overflow: hidden; }
     <script>
       function isDark() { return document.documentElement.classList.contains('dark'); }
       function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-      document.addEventListener('click', e => { if (!e.target.closest('.z-nav')) document.querySelector('.z-nav')?.classList.remove('open'); });
-      function toggleDark() {
-        document.documentElement.classList.toggle('dark');
-        localStorage.setItem('dark', document.documentElement.classList.contains('dark') ? '1' : '0');
-        if (heroFire && heroFire.updateTheme) heroFire.updateTheme();
-      }
 
       // DOM element cache (initialized on page load)
       const DOMCache = {
