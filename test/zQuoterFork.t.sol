@@ -18,10 +18,10 @@ contract zQuoterForkTest is Test {
     address constant _BOLD = 0x6440f144b7e50D6a8439336510312d2F54beB01D;
     address constant _ROUTER = 0x000000000000FB114709235f1ccBFfb925F600e4;
 
-    // PNKSTR hooked pool params
-    address constant _PNKSTR = 0xfAaad5B731F52cDc9746F2414c823eca9B06E844;
-    uint24 constant PNKSTR_FEE = 3000;
-    int24 constant PNKSTR_TICK = 60;
+    // Sample V4 hooked-pool params for the hooked-split helper
+    address constant _HOOK_ADDR = 0xfAaad5B731F52cDc9746F2414c823eca9B06E844;
+    uint24 constant HOOK_FEE = 3000;
+    int24 constant HOOK_TICK = 60;
 
     address constant USER = address(0xBEEF);
     uint256 constant DEADLINE = type(uint256).max;
@@ -802,13 +802,13 @@ contract zQuoterForkTest is Test {
     }
 
     // ================================================================
-    //  12. V4 hooked pool (PNKSTR) — dapp uses this for special tokens
+    //  12. V4 hooked pool helper
     // ================================================================
 
     function test_splitSwapHooked_ETH_to_USDC() public {
         // Even without a real hooked pool, this should fall back to standard split
         (zQuoter.Quote[2] memory legs, bytes memory mc, uint256 mv) =
-            quoter.buildSplitSwapHooked(USER, ETH, _USDC, 5e18, SLIPPAGE, DEADLINE, PNKSTR_FEE, PNKSTR_TICK, _PNKSTR);
+            quoter.buildSplitSwapHooked(USER, ETH, _USDC, 5e18, SLIPPAGE, DEADLINE, HOOK_FEE, HOOK_TICK, _HOOK_ADDR);
         assertGt(legs[0].amountOut + legs[1].amountOut, 0);
         assertGt(mc.length, 0);
         assertGt(mv, 0);
