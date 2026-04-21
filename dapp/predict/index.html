@@ -1520,12 +1520,12 @@ const MASTER_ROUTER_ABI = [
 // ==================== zRouter integration (buy with any token) ====================
 
 const ZROUTER_ADDRESS = '0x000000000000FB114709235f1ccBFfb925F600e4';
-const ZQUOTER_ADDRESS = '0x9909861aa515afbce9d36c532eae7e0ebf804034';
+const ZQUOTER_ADDRESS = '0x000000a7DfdD39f4D74c7b201501eaD119F8b86C';
 const WETH_ADDRESS = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 const ZQUOTER_IFACE = new ethers.Interface([
-  'function buildBestSwapViaETHMulticall(address to,address refundTo,bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline,uint24 hookPoolFee,int24 hookTickSpacing,address hookAddress) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) a, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) b, bytes[] calls, bytes multicall, uint256 msgValue)'
+  'function buildBestSwapViaETHMulticall(address to,address refundTo,bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) a, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) b, bytes[] calls, bytes multicall, uint256 msgValue)'
 ]);
 
 const ZROUTER_IFACE = new ethers.Interface([
@@ -4069,7 +4069,7 @@ async function getRoutedBuyQuote(inputAmountStr, marketId, buyYes) {
       const r = await quoter.buildBestSwapViaETHMulticall(
         ZROUTER_ADDRESS, _connectedAddress, false,
         ZERO_ADDRESS, collateralAddr,
-        amountIn, 100n, deadline, 0, 0, ZERO_ADDRESS,
+        amountIn, 100n, deadline,
         { gasLimit: 5000000 }
       );
       const isTwoHop = r.b.amountOut > 0n;
@@ -4081,7 +4081,7 @@ async function getRoutedBuyQuote(inputAmountStr, marketId, buyYes) {
       const r = await quoter.buildBestSwapViaETHMulticall(
         ZROUTER_ADDRESS, _connectedAddress, false,
         payData.address, collateralAddr,
-        amountIn, 100n, deadline, 0, 0, ZERO_ADDRESS,
+        amountIn, 100n, deadline,
         { gasLimit: 5000000 }
       );
       const isTwoHop = r.b.amountOut > 0n;
@@ -4178,7 +4178,7 @@ async function getRoutedExactOutBuyQuote(desiredSharesStr, marketId, buyYes) {
       const r = await quoter.buildBestSwapViaETHMulticall(
         ZROUTER_ADDRESS, _connectedAddress, true,
         ethIn ? ZERO_ADDRESS : payData.address, collateralAddr,
-        collateralNeeded, 100n, deadline, 0, 0, ZERO_ADDRESS,
+        collateralNeeded, 100n, deadline,
         { gasLimit: 5000000 }
       );
       firstLegCalls = Array.from(r.calls);

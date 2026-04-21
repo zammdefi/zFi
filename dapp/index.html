@@ -1531,7 +1531,7 @@ body.modal-open { overflow: hidden; }
 
 // ---- Constants ----
 const CHAIN_ID = 1;
-const ZQUOTER_ADDRESS = "0x9909861aa515afbce9d36c532eae7e0ebf804034";
+const ZQUOTER_ADDRESS = "0x000000a7DfdD39f4D74c7b201501eaD119F8b86C";
 const ZQUOTER_BASE_ADDRESS = "0x658bF1A6608210FDE7310760f391AD4eC8006A5F";
 const ZROUTER_ADDRESS = "0x000000000000FB114709235f1ccBFfb925F600e4";
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
@@ -3151,11 +3151,11 @@ const CURVE_GET_DY_IFACE = new ethers.Interface(["function get_dy(uint256,uint25
 
 // ---- Hoisted ABIs / Interfaces (avoid re-parsing per call) ----
 const QUOTER_IFACE = new ethers.Interface([
-  "function buildBestSwapViaETHMulticall(address to,address refundTo,bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline,uint24 hookPoolFee,int24 hookTickSpacing,address hookAddress) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) a, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) b, bytes[] calls, bytes multicall, uint256 msgValue)",
+  "function buildBestSwapViaETHMulticall(address to,address refundTo,bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) a, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) b, bytes[] calls, bytes multicall, uint256 msgValue)",
   "function buildSplitSwap(address to,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut)[2] legs, bytes multicall, uint256 msgValue)",
   "function getQuotes(bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) best, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut)[] quotes)",
   "function quoteCurve(bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount,uint256 maxCandidates) view returns (uint256 amountIn,uint256 amountOut,address bestPool,bool usedUnderlying,bool usedStable,uint8 iIndex,uint8 jIndex)",
-  "function build3HopMulticall(address to,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) a, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) b, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) c, bytes[] calls, bytes multicall, uint256 msgValue)",
+  "function build3HopMulticall(address to,bool exactOut,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) a, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) b, tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut) c, bytes[] calls, bytes multicall, uint256 msgValue)",
   "function buildHybridSplit(address to,address tokenIn,address tokenOut,uint256 swapAmount,uint256 slippageBps,uint256 deadline) view returns (tuple(uint8 source,uint256 feeBps,uint256 amountIn,uint256 amountOut)[2] legs, bytes multicall, uint256 msgValue)",
   "function quoteLido(bool exactOut,address tokenOut,uint256 swapAmount) view returns (uint256 amountIn, uint256 amountOut)",
 ]);
@@ -4128,7 +4128,7 @@ async function getZammSellQuote(fromAmountStr, fromSym, toSym) {
     const r = await quoter.buildBestSwapViaETHMulticall(
       receiver, _connectedAddress, false,
       ZERO_ADDRESS, toData.address,
-      ethOut, splitSlip, deadline, 0, 0, ZERO_ADDRESS, callOpts
+      ethOut, splitSlip, deadline, callOpts
     );
     const isTwoHop = r.b.amountOut > 0n;
     const finalOut = isTwoHop ? r.b.amountOut : r.a.amountOut;
@@ -4194,7 +4194,7 @@ async function getZammBuyQuote(fromAmountStr, fromSym, toSym) {
       const r = await quoter.buildBestSwapViaETHMulticall(
         ZROUTER_ADDRESS, _connectedAddress, false,
         fromData.address, ZERO_ADDRESS,
-        amountIn, BigInt(slippageBps), deadline, 0, 0, ZERO_ADDRESS, callOpts
+        amountIn, BigInt(slippageBps), deadline, callOpts
       );
       const isTwoHop = r.b.amountOut > 0n;
       ethForSwap = isTwoHop ? r.b.amountOut : r.a.amountOut;
@@ -4310,7 +4310,7 @@ async function getZOrgQuote(fromAmountStr, fromSym) {
       const r = await quoter.buildBestSwapViaETHMulticall(
         ZROUTER_ADDRESS, _connectedAddress, false,
         fromData.address, ZERO_ADDRESS,
-        amountIn, BigInt(slippageBps), deadline, 0, 0, ZERO_ADDRESS, callOpts
+        amountIn, BigInt(slippageBps), deadline, callOpts
       );
       const isTwoHop = r.b.amountOut > 0n;
       ethForSwap = isTwoHop ? r.b.amountOut : r.a.amountOut;
@@ -4622,8 +4622,7 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     heavyEntries.push({ target: ZQUOTER_ADDRESS, data: QUOTER_IFACE.encodeFunctionData("buildBestSwapViaETHMulticall", [
       receiver, _connectedAddress, false,
       fromData.address, toData.address,
-      amountIn, BigInt(slippageBps), deadline,
-      0, 0, ZERO_ADDRESS
+      amountIn, BigInt(slippageBps), deadline
     ]) });
     let _heavySplitIdx = -1, _heavy3HopIdx = -1, _heavyHybridIdx = -1;
     if (!_skipSplitRoutes) {
@@ -4634,7 +4633,7 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
     ]) });
     _heavy3HopIdx = heavyEntries.length;
     heavyEntries.push({ target: ZQUOTER_ADDRESS, data: QUOTER_IFACE.encodeFunctionData("build3HopMulticall", [
-      receiver, fromData.address, toData.address,
+      receiver, false, fromData.address, toData.address,
       amountIn, splitSlip, deadline
     ]) });
     _heavyHybridIdx = heavyEntries.length;
@@ -4674,7 +4673,7 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
           receiver, _connectedAddress, false,
           fromData.address, toData.address,
           amountIn, BigInt(slippageBps), deadline,
-          0, 0, ZERO_ADDRESS, callOpts
+          callOpts
         );
         bestResult = { status: 'fulfilled', value: fb };
       } catch (_) {}
@@ -5154,8 +5153,7 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
     mc3Entries.push({ target: ZQUOTER_ADDRESS, data: QUOTER_IFACE.encodeFunctionData("buildBestSwapViaETHMulticall", [
       receiver, _connectedAddress, true,
       fromData.address, toData.address,
-      amountOut, BigInt(slippageBps), deadline,
-      0, 0, ZERO_ADDRESS
+      amountOut, BigInt(slippageBps), deadline
     ]) });
     // 0x Swap API v2 does not support exact-out (no buyAmount param)
     // ParaSwap supports exact-out (side=BUY)
@@ -5170,7 +5168,7 @@ async function getExactOutQuote(outputAmountStr, fromSym, toSym) {
           receiver, _connectedAddress, true,
           fromData.address, toData.address,
           amountOut, BigInt(slippageBps), deadline,
-          0, 0, ZERO_ADDRESS, callOpts
+          callOpts
         );
         bestResult = { status: 'fulfilled', value: fb };
       } catch (_) {}
@@ -6786,7 +6784,7 @@ async function executeSwap() {
               ZROUTER_ADDRESS, _connectedAddress, false,
               fromData.address, WSTETH_ADDRESS,
               amountIn, BigInt(slippageBps), deadline,
-              0, 0, ZERO_ADDRESS, { blockTag: "latest" }
+              { blockTag: "latest" }
             );
           })),
         ]);
@@ -6822,14 +6820,14 @@ async function executeSwap() {
               ZROUTER_ADDRESS, _connectedAddress, true,
               fromData.address, _ppTokenOut,
               exactOutputAmt, BigInt(slippageBps), deadline,
-              0, 0, ZERO_ADDRESS, { blockTag: "latest" }
+              { blockTag: "latest" }
             );
           }
           return quoter.buildBestSwapViaETHMulticall(
             ZROUTER_ADDRESS, _connectedAddress, false,
             fromData.address, _ppTokenOut,
             amountIn, BigInt(slippageBps), deadline,
-            0, 0, ZERO_ADDRESS, { blockTag: "latest" }
+            { blockTag: "latest" }
           );
         }));
         swapCalls = ppQuote.calls ? Array.from(ppQuote.calls) : decodeMulticallCalls(ppQuote.multicall);

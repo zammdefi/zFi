@@ -173,7 +173,7 @@ await signer.sendTransaction({
 <div class="section">
   <h2>Contracts</h2>
   <p><strong>zQuoter</strong> &mdash; read-only route discovery and calldata builder.</p>
-  <p class="addr"><a href="https://etherscan.io/address/0x9909861aa515afbce9d36c532eae7e0ebf804034" target="_blank" rel="noopener">0x9909861aa515afbce9d36c532eae7e0ebf804034</a></p>
+  <p class="addr"><a href="https://etherscan.io/address/0x000000a7DfdD39f4D74c7b201501eaD119F8b86C" target="_blank" rel="noopener">0x000000a7DfdD39f4D74c7b201501eaD119F8b86C</a></p>
   <p style="margin-top:10px"><strong>zRouter</strong> &mdash; swap executor. Send the calldata built by zQuoter here.</p>
   <p class="addr"><a href="https://etherscan.io/address/0x000000000000FB114709235f1ccBFfb925F600e4" target="_blank" rel="noopener">0x000000000000FB114709235f1ccBFfb925F600e4</a></p>
   <p style="margin-top:10px;font-size:12px;color:var(--fg-muted)">Aggregates Uniswap V2/V3/V4, SushiSwap, Curve, zAMM, and Lido. Zero protocol fees.</p>
@@ -195,14 +195,14 @@ await signer.sendTransaction({
 
 <div class="section">
   <h2>Quick Start</h2>
-  <p>Swap 1 ETH for USDC using ethers.js:</p>
+  <p>Swap 1 ETH for USDC using ethers.js and <code>buildSwapAuto</code> — the one-call entry point that cascades single-hop &rarr; 2-hop hub &rarr; 3-hop:</p>
 <pre>import { ethers } from "ethers";
 
-const ZQUOTER = "0x9909861aa515afbce9d36c532eae7e0ebf804034";
+const ZQUOTER = "0x000000a7DfdD39f4D74c7b201501eaD119F8b86C";
 const ZROUTER = "0x000000000000FB114709235f1ccBFfb925F600e4";
 
 const quoterAbi = [
-  "function buildBestSwapViaETHMulticall(address to, address refundTo, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline, uint24 hookPoolFee, int24 hookTickSpacing, address hookAddress) view returns (tuple(uint8 source, uint256 feeBps, uint256 amountIn, uint256 amountOut) a, tuple(uint8 source, uint256 feeBps, uint256 amountIn, uint256 amountOut) b, bytes[] calls, bytes multicall, uint256 msgValue)"
+  "function buildSwapAuto(address to, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline) view returns (tuple(uint8 source, uint256 feeBps, uint256 amountIn, uint256 amountOut) best, bytes callData, uint256 amountLimit, uint256 msgValue)"
 ];
 
 const provider = new ethers.JsonRpcProvider("https://eth.llamarpc.com");
@@ -217,27 +217,23 @@ const oneETH = ethers.parseEther("1");
 const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
 
 // 1. Quote (view call — free, no gas)
-const result = await quoter.buildBestSwapViaETHMulticall(
+const r = await quoter.buildSwapAuto(
   me,             // to: recipient
-  me,             // refundTo: excess ETH refund
   false,          // exactOut: false = exact input
   ETH,            // tokenIn
   USDC,           // tokenOut
   oneETH,         // swapAmount: 1 ETH
   50n,            // slippageBps: 0.5%
-  deadline,
-  0, 0, ETH       // hookPoolFee, hookTickSpacing, hookAddress (unused)
+  deadline
 );
 
-const isTwoHop = result.b.amountOut > 0n;
-const output = isTwoHop ? result.b.amountOut : result.a.amountOut;
-console.log("Expected USDC out:", ethers.formatUnits(output, 6));
+console.log("Expected USDC out:", ethers.formatUnits(r.best.amountOut, 6));
 
 // 2. Execute (send transaction)
 const tx = await signer.sendTransaction({
   to: ZROUTER,
-  data: result.multicall,
-  value: result.msgValue
+  data: r.callData,
+  value: r.msgValue
 });
 
 console.log("Tx:", tx.hash);</pre>
@@ -255,19 +251,18 @@ const token = new ethers.Contract(USDC, [
 await token.approve(ZROUTER, ethers.MaxUint256);
 
 // Then quote and execute as before, with tokenIn = USDC
-const result = await quoter.buildBestSwapViaETHMulticall(
-  me, me, false,
+const r = await quoter.buildSwapAuto(
+  me, false,
   USDC,           // tokenIn: USDC
   ETH,            // tokenOut: ETH
   ethers.parseUnits("1000", 6),  // 1000 USDC
-  50n, deadline,
-  0, 0, ETH
+  50n, deadline
 );
 
 const tx = await signer.sendTransaction({
   to: ZROUTER,
-  data: result.multicall,
-  value: result.msgValue  // 0 for ERC20 input
+  data: r.callData,
+  value: r.msgValue  // 0 for ERC20 input
 });</pre>
   <p>zRouter also supports <code>permit</code> and <code>permit2TransferFrom</code> for gasless approvals. These can be batched into a <code>multicall</code> alongside the swap calls.</p>
 </div>
@@ -277,25 +272,38 @@ const tx = await signer.sendTransaction({
 <div class="section">
   <h2>zQuoter Functions</h2>
 
-  <h3>buildBestSwapViaETHMulticall<span class="pill">primary</span></h3>
-  <p>The main entry point. Discovers the optimal route across all supported AMMs (single-hop, 2-hop via hub tokens, or hooked V4 pools) and returns ready-to-execute calldata for zRouter.</p>
-  <div class="sig">buildBestSwapViaETHMulticall(address to, address refundTo, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline, uint24 hookPoolFee, int24 hookTickSpacing, address hookAddress) &rarr; (Quote a, Quote b, bytes[] calls, bytes multicall, uint256 msgValue)</div>
+  <h3>buildSwapAuto<span class="pill">primary</span></h3>
+  <p>One-call entry point that cascades through route depths and returns a <em>single</em> flat result (Quote, calldata, amountLimit, msgValue). Use this when you just want the best available route without composing multiple entry points yourself.</p>
+  <div class="sig">buildSwapAuto(address to, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline) &rarr; (Quote best, bytes callData, uint256 amountLimit, uint256 msgValue)</div>
   <ul>
     <li><code>to</code> &mdash; recipient of output tokens</li>
-    <li><code>refundTo</code> &mdash; address for excess ETH refunds (usually <code>msg.sender</code>)</li>
     <li><code>exactOut</code> &mdash; <code>false</code> for exact input, <code>true</code> for exact output</li>
     <li><code>tokenIn</code> / <code>tokenOut</code> &mdash; ERC20 address, or <code>address(0)</code> for ETH</li>
     <li><code>swapAmount</code> &mdash; amount of <code>tokenIn</code> (exact-in) or desired <code>tokenOut</code> (exact-out)</li>
-    <li><code>slippageBps</code> &mdash; per-leg slippage tolerance in basis points (50 = 0.5%)</li>
+    <li><code>slippageBps</code> &mdash; slippage tolerance in basis points (50 = 0.5%)</li>
     <li><code>deadline</code> &mdash; unix timestamp after which the swap reverts</li>
-    <li><code>hookPoolFee</code>, <code>hookTickSpacing</code>, <code>hookAddress</code> &mdash; set to 0/0/address(0) unless targeting a specific V4 hooked pool</li>
   </ul>
   <p>Returns:</p>
   <ul>
-    <li><code>a</code>, <code>b</code> &mdash; Quote structs for leg A and leg B (b is empty for single-hop)</li>
-    <li><code>calls</code> &mdash; individual call bytes for each leg (useful for prepending permit calls)</li>
-    <li><code>multicall</code> &mdash; encoded <code>multicall(bytes[])</code> calldata, ready to send to zRouter</li>
+    <li><code>best</code> &mdash; aggregated Quote summarizing end-to-end input/output (<code>source</code> = final leg's AMM)</li>
+    <li><code>callData</code> &mdash; <strong>ready to send</strong> to zRouter as the transaction's <code>data</code> field (multicall envelope when multi-hop, raw swap when single-hop)</li>
+    <li><code>amountLimit</code> &mdash; min output (exact-in) or max input (exact-out) after slippage</li>
     <li><code>msgValue</code> &mdash; ETH value to attach to the transaction</li>
+  </ul>
+  <p style="margin-top:8px;font-size:12px;color:var(--fg-muted)">Cascade (NOT a head-to-head comparison across depths): single/2-hop is tried first, 3-hop is a fallback only for pairs that can't build at shallower depth. For the best possible output across depths on a single pair, compare <code>buildBestSwapViaETHMulticall</code> + <code>buildSplitSwap</code> + <code>buildHybridSplit</code> yourself (see <a href="#best-quote">Best Quote Selection</a>).</p>
+
+  <h3>buildBestSwap</h3>
+  <p>Direct single-hop best-of quote and calldata. Same return shape as <code>buildSwapAuto</code>, but no multicall envelope when the result is a raw single-hop swap routed directly to <code>to</code>. Use when you know a single-hop route exists and want minimum overhead.</p>
+  <div class="sig">buildBestSwap(address to, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline) &rarr; (Quote best, bytes callData, uint256 amountLimit, uint256 msgValue)</div>
+
+  <h3>buildBestSwapViaETHMulticall</h3>
+  <p>Lower-level builder that explicitly returns both legs of a potential 2-hop hub route plus the individual call bytes. Use when you need to inspect or modify the multicall (e.g. prepending permit calls, custom sweeps).</p>
+  <div class="sig">buildBestSwapViaETHMulticall(address to, address refundTo, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline) &rarr; (Quote a, Quote b, bytes[] calls, bytes multicall, uint256 msgValue)</div>
+  <ul>
+    <li><code>refundTo</code> &mdash; address for excess ETH / leftover MID refunds (usually <code>msg.sender</code>)</li>
+    <li><code>a</code>, <code>b</code> &mdash; Quote structs for leg A and leg B (<code>b.amountOut == 0</code> for single-hop)</li>
+    <li><code>calls</code> &mdash; individual call bytes for each leg (for prepending permit / custom actions)</li>
+    <li><code>multicall</code> &mdash; encoded <code>multicall(bytes[])</code> calldata</li>
   </ul>
 
   <h3>buildSplitSwap</h3>
@@ -308,7 +316,7 @@ const tx = await signer.sendTransaction({
 
   <h3>build3HopMulticall</h3>
   <p>Three-hop routing through two hub tokens for exotic pairs.</p>
-  <div class="sig">build3HopMulticall(address to, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline) &rarr; (Quote a, Quote b, Quote c, bytes[] calls, bytes multicall, uint256 msgValue)</div>
+  <div class="sig">build3HopMulticall(address to, bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps, uint256 deadline) &rarr; (Quote a, Quote b, Quote c, bytes[] calls, bytes multicall, uint256 msgValue)</div>
 
   <h3>getQuotes<span class="pill">view</span></h3>
   <p>Returns the best single-hop quote and all individual AMM quotes (V2, Sushi, zAMM, V3, V4). Useful for displaying price comparison across venues.</p>
@@ -345,13 +353,13 @@ const tx = await signer.sendTransaction({
 
 <hr class="divider">
 
-<div class="section">
+<div class="section" id="best-quote">
   <h2>Best Quote Selection</h2>
-  <p>For maximum output, compare multiple route strategies and take the best. This is what the <a href="../">swap page</a> does:</p>
+  <p>For maximum output, compare multiple route strategies and take the best. This is what the <a href="../">swap page</a> does. (If you don't need the cross-depth comparison, just use <code>buildSwapAuto</code>.)</p>
 <pre>const [best, split, hybrid] = await Promise.allSettled([
   quoter.buildBestSwapViaETHMulticall(
     me, me, false, tokenIn, tokenOut,
-    amountIn, 50n, deadline, 0, 0, ETH),
+    amountIn, 50n, deadline),
   quoter.buildSplitSwap(
     me, tokenIn, tokenOut,
     amountIn, 50n, deadline),
@@ -527,7 +535,7 @@ const tx = await signer.sendTransaction({
   <h2>Source</h2>
   <ul>
     <li><a href="https://github.com/z-fi/zFi" target="_blank" rel="noopener">GitHub</a></li>
-    <li><a href="https://etherscan.io/address/0x9909861aa515afbce9d36c532eae7e0ebf804034#code" target="_blank" rel="noopener">zQuoter verified source</a></li>
+    <li><a href="https://etherscan.io/address/0x000000a7DfdD39f4D74c7b201501eaD119F8b86C#code" target="_blank" rel="noopener">zQuoter verified source</a></li>
     <li><a href="https://etherscan.io/address/0x000000000000FB114709235f1ccBFfb925F600e4#code" target="_blank" rel="noopener">zRouter verified source</a></li>
   </ul>
 </div>

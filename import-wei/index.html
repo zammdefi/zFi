@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDK</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='64' height='64' style='image-rendering:pixelated'%3E%3Crect width='16' height='16' fill='%230a0a0a'/%3E%3Crect x='3' y='1' width='1' height='1' fill='%23e8e8e0'/%3E%3Crect x='5' y='2' width='1' height='1' fill='%23e8e8e0'/%3E%3Crect x='10' y='2' width='1' height='1' fill='%23e8e8e0'/%3E%3Crect x='12' y='1' width='1' height='1' fill='%23e8e8e0'/%3E%3Crect x='4' y='4' width='8' height='1' fill='%23e8e8e0'/%3E%3Crect x='3' y='5' width='10' height='1' fill='%23e8e8e0'/%3E%3Crect x='2' y='6' width='12' height='3' fill='%23e8e8e0'/%3E%3Crect x='3' y='9' width='10' height='1' fill='%23e8e8e0'/%3E%3Crect x='4' y='10' width='8' height='1' fill='%23e8e8e0'/%3E%3Crect x='3' y='6' width='3' height='2' fill='%230a0a0a'/%3E%3Crect x='10' y='6' width='3' height='2' fill='%230a0a0a'/%3E%3Crect x='5' y='11' width='2' height='1' fill='%23e8e8e0'/%3E%3Crect x='9' y='11' width='2' height='1' fill='%23e8e8e0'/%3E%3Crect x='2' y='12' width='3' height='1' fill='%23e8e8e0'/%3E%3Crect x='7' y='12' width='2' height='1' fill='%23e8e8e0'/%3E%3Crect x='11' y='12' width='3' height='1' fill='%23e8e8e0'/%3E%3Crect x='1' y='13' width='2' height='1' fill='%23e8e8e0'/%3E%3Crect x='13' y='13' width='2' height='1' fill='%23e8e8e0'/%3E%3C/svg%3E">
+<style>
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; max-width: 640px; margin: 50px auto; padding: 20px; line-height: 1.6; }
+h1 { margin-bottom: 8px; }
+h2 { margin-top: 32px; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 14px; }
+pre { background: #f5f5f5; padding: 16px; overflow-x: auto; border-radius: 4px; font-size: 13px; }
+a { color: #000; }
+input { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; width: 100%; margin-bottom: 8px; }
+button { padding: 10px 20px; font-size: 14px; background: #000; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+button:hover { background: #333; }
+.result { margin-top: 12px; padding: 12px; background: #f9f9f9; border-radius: 4px; font-family: monospace; font-size: 13px; min-height: 20px; }
+.result:empty { display: none; }
+.success { background: #f0fff0; }
+.error { background: #fff0f0; }
+.demo-box { border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin: 16px 0; }
+.subtitle { color: #666; margin-top: 0; }
+</style>
+</head>
+<body>
+
+<h1>import.wei</h1>
+<p class="subtitle">Wei Name Service SDK</p>
+
+<h2>Install</h2>
+<pre>&lt;script src="https://import.wei.domains/wei.min.js"&gt;&lt;/script&gt;</pre>
+
+<p>With integrity check (recommended):</p>
+<pre>&lt;script src="https://import.wei.domains/wei.min.js"
+        integrity="sha384-kHl2q2pY/CM91u/WWD76+MSoolokbAN9uMbWj41DERwM489kIDBVP5SGUsZuZjL2"
+        crossorigin="anonymous"&gt;&lt;/script&gt;</pre>
+
+<p>Or full source version:</p>
+<pre>&lt;script src="https://import.wei.domains/wei.js"
+        integrity="sha384-Vcno4pF2IF0VTZDE8hTHjsoYpeYmnx+WaNWmzI4hwjvSzpohl6ozKr06xgsnxvNk"
+        crossorigin="anonymous"&gt;&lt;/script&gt;</pre>
+
+<h2>Try It</h2>
+
+<div class="demo-box">
+  <strong>wei.resolve(name)</strong>
+  <p style="font-size:13px;color:#666;margin:8px 0;">Resolve a .wei name to an address</p>
+  <input type="text" id="resolveName" placeholder="name.wei" value="wns.wei">
+  <button onclick="testResolve()">Resolve</button>
+  <div class="result" id="resolveResult"></div>
+</div>
+
+<div class="demo-box">
+  <strong>wei.reverseResolve(address)</strong>
+  <p style="font-size:13px;color:#666;margin:8px 0;">Get the .wei name for an address</p>
+  <input type="text" id="reverseAddr" placeholder="0x...">
+  <button onclick="testReverse()">Reverse</button>
+  <div class="result" id="reverseResult"></div>
+</div>
+
+<div class="demo-box">
+  <strong>wei.isWei(string)</strong>
+  <p style="font-size:13px;color:#666;margin:8px 0;">Check if string is a .wei name</p>
+  <input type="text" id="isWeiInput" placeholder="test.wei" value="test.wei">
+  <button onclick="testIsWei()">Check</button>
+  <div class="result" id="isWeiResult"></div>
+</div>
+
+<h2>API Reference</h2>
+<pre>
+// Resolve name to address
+const addr = await wei.resolve('name.wei')
+// => '0x...' or null
+
+// Reverse resolve address to name
+const name = await wei.reverseResolve('0x...')
+// => 'name.wei' or null
+
+// Smart resolve (addresses pass through)
+const addr = await wei.resolveAny(input)
+
+// Check if .wei name
+wei.isWei('name.wei')  // true
+wei.isWei('0x...')     // false
+
+// Custom RPC endpoint
+wei.config({ rpc: 'https://eth-mainnet.g.alchemy.com/v2/KEY' })
+
+// Bridge ETH from Mainnet to Base (requires ethers.js signer)
+await wei.bridgeToBase('name.wei', '0.1', signer)
+await wei.bridgeToBase(null, '0.1', signer)  // bridge to self
+
+// Contract address
+wei.CONTRACT  // '0x0000000000696760E15f265e828DB644A0c242EB'
+wei.BASE_PORTAL // '0x49048044D57e1C92A77f79988d21Fa8fAF74E97e'
+</pre>
+
+<h2>Example: Payment Form</h2>
+<pre>
+&lt;input id="to" placeholder="0x... or name.wei"&gt;
+
+&lt;script src="https://import.wei.domains/wei.min.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+async function send() {
+  const input = document.getElementById('to').value
+  const address = await wei.resolveAny(input)
+
+  if (!address) return alert('Invalid recipient')
+
+  // Send transaction to resolved address
+  await ethereum.request({
+    method: 'eth_sendTransaction',
+    params: [{ to: address, value: '0x...' }]
+  })
+}
+&lt;/script&gt;
+</pre>
+
+<h2>Example Dapp</h2>
+<p><a href="example.html"><strong>View live example →</strong></a></p>
+<p style="font-size:13px;color:#666;">A simple "Send ETH" form that accepts .wei names.</p>
+
+<h2>Links</h2>
+<ul>
+<li><a href="https://wei.domains">wei.domains</a> - Register .wei names</li>
+<li><a href="https://etherscan.io/address/0x0000000000696760E15f265e828DB644A0c242EB">Contract</a> - Etherscan</li>
+</ul>
+
+<p style="margin-top:40px;opacity:0.5;font-size:12px;">
+<a href="wei.js">wei.js</a> (5KB) · <a href="wei.min.js">wei.min.js</a> (2KB) · <a href="https://www.npmjs.com/package/wns-utils" target="_blank" rel="noopener"><svg fill="#000" width="14" height="14" viewBox="-2 -8 24 24" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin" style="vertical-align:middle"><path d='M0 0h20v6.857H10V8H5.556V6.857H0V0zm1.111 5.714h2.222V2.286h1.111v3.428h1.112V1.143H1.11v4.571zm5.556-4.571v5.714h2.222V5.714h2.222V1.143H6.667zm5.555 0v4.571h2.222V2.286h1.112v3.428h1.11V2.286h1.112v3.428h1.11V1.143h-6.666z'/><path d='M10 4.7H9V2.2h1z'/></svg></a>
+</p>
+
+<script src="wei.min.js"></script>
+<script>
+function weiReady(resultEl) {
+  if (typeof wei === 'undefined') {
+    resultEl.textContent = 'SDK failed to load. Check that wei.min.js is available.'
+    resultEl.className = 'result error'
+    return false
+  }
+  return true
+}
+
+async function testResolve() {
+  const name = document.getElementById('resolveName').value
+  const result = document.getElementById('resolveResult')
+  result.className = 'result'
+  result.textContent = 'Resolving...'
+  if (!weiReady(result)) return
+
+  try {
+    const addr = await wei.resolve(name)
+    if (addr) {
+      result.textContent = addr
+      result.className = 'result success'
+    } else {
+      result.textContent = 'Not found'
+      result.className = 'result error'
+    }
+  } catch (e) {
+    result.textContent = 'Error: ' + e.message
+    result.className = 'result error'
+  }
+}
+
+async function testReverse() {
+  const addr = document.getElementById('reverseAddr').value
+  const result = document.getElementById('reverseResult')
+  result.className = 'result'
+  result.textContent = 'Resolving...'
+  if (!weiReady(result)) return
+
+  try {
+    const name = await wei.reverseResolve(addr)
+    if (name) {
+      result.textContent = name
+      result.className = 'result success'
+    } else {
+      result.textContent = 'No primary name set'
+      result.className = 'result error'
+    }
+  } catch (e) {
+    result.textContent = 'Error: ' + e.message
+    result.className = 'result error'
+  }
+}
+
+function testIsWei() {
+  const input = document.getElementById('isWeiInput').value
+  const result = document.getElementById('isWeiResult')
+  if (!weiReady(result)) return
+  const isWei = wei.isWei(input)
+  result.textContent = isWei ? 'true ✓' : 'false'
+  result.className = isWei ? 'result success' : 'result'
+}
+</script>
+
+</body>
+</html>

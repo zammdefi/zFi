@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Compile with: solc 0.8.33 | via_ir: true | optimizer: true, runs: 20
+// Compile with: solc >= 0.8.34 | via_ir: true | optimizer: true, runs: 20
 // Required foundry.toml:
 //   [profile.default.optimizer_details]
 //   yul = false
 // Disabling the Yul optimizer with via_ir keeps contract under EIP-170 (24,576 bytes).
-pragma solidity ^0.8.33;
+pragma solidity ^0.8.34;
 
 interface IZQuoterBase {
+    // Per-source quoters.
     function quoteV2(bool, address, address, uint256, bool) external view returns (uint256, uint256);
     function quoteV3(bool, address, address, uint24, uint256) external view returns (uint256, uint256);
     function quoteV4(bool, address, address, uint24, int24, address, uint256) external view returns (uint256, uint256);
@@ -14,6 +15,13 @@ interface IZQuoterBase {
         external
         view
         returns (uint256, uint256);
+
+    // Aggregated quoting. Mirrors zQuoter.getQuotes shape so the base-quoter
+    // cross-call (`zQuoter(address(_BASE)).getQuotes(...)`) is ABI-checked.
+    function getQuotes(bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount)
+        external
+        view
+        returns (zQuoter.Quote memory best, zQuoter.Quote[] memory quotes);
 }
 
 IZQuoterBase constant _BASE = IZQuoterBase(0x658bF1A6608210FDE7310760f391AD4eC8006A5F);
@@ -27,8 +35,7 @@ contract zQuoter {
         UNI_V4,
         CURVE,
         LIDO,
-        WETH_WRAP,
-        V4_HOOKED
+        WETH_WRAP
     }
 
     struct Quote {
@@ -46,11 +53,11 @@ contract zQuoter {
         returns (Quote memory best, Quote[] memory quotes)
     {
         (best, quotes) = zQuoter(address(_BASE)).getQuotes(exactOut, tokenIn, tokenOut, swapAmount);
-        // Reject exact-out V3 best if round-trip proves phantom liquidity.
-        // Only neuter the specific fee tier that failed — other V3 tiers (e.g. 30bp) may be healthy.
+        // Reject exact-out V3 phantom-liquidity picks. Only the specific failing fee
+        // tier is zeroed — other V3 tiers may be healthy — then we re-pick best.
         while (exactOut && best.source == AMM.UNI_V3 && best.amountIn > 0) {
             (, uint256 rt) = _BASE.quoteV3(false, tokenIn, tokenOut, uint24(best.feeBps * 100), best.amountIn);
-            if (rt * 10 >= swapAmount * 9) break; // healthy — keep it
+            if (rt * 10 >= swapAmount * 9) break;
             uint256 badFee = best.feeBps;
             best = Quote(AMM.UNI_V2, 0, 0, 0);
             for (uint256 i; i < quotes.length; ++i) {
@@ -63,7 +70,6 @@ contract zQuoter {
                     best = quotes[i];
                 }
             }
-            // Loop: if new best is also V3, round-trip check it too
         }
     }
 
@@ -83,7 +89,7 @@ contract zQuoter {
         (best,) = getQuotes(exactOut, tokenIn, tokenOut, amount);
         if (best.source == AMM.WETH_WRAP) best = Quote(AMM.UNI_V2, 0, 0, 0);
 
-        // 2. Curve (unbuildable cases already filtered inside quoteCurve)
+        // 2. Curve (unbuildable cases already filtered inside quoteCurve).
         {
             (uint256 cin, uint256 cout, address pool,,,,) = quoteCurve(exactOut, tokenIn, tokenOut, amount, 8);
             if (pool != address(0)) {
@@ -104,6 +110,23 @@ contract zQuoter {
         }
     }
 
+    /// @dev Best exactIn direct quote, excluding LIDO and WETH_WRAP. Used by split
+    ///      builders that can't safely use LIDO (callvalue semantics) or WETH_WRAP
+    ///      (trivial 1:1, not a real route). Considers all base-quoter sources + Curve.
+    function _bestDirectExcludingLido(address tokenIn, address tokenOut, uint256 swapAmount)
+        internal
+        view
+        returns (Quote memory best)
+    {
+        (, Quote[] memory quotes) = getQuotes(false, tokenIn, tokenOut, swapAmount);
+        for (uint256 i; i < quotes.length; ++i) {
+            if (quotes[i].source == AMM.LIDO || quotes[i].source == AMM.WETH_WRAP) continue;
+            if (quotes[i].amountOut > best.amountOut) best = quotes[i];
+        }
+        (uint256 cin, uint256 cout, address pool,,,,) = quoteCurve(false, tokenIn, tokenOut, swapAmount, 8);
+        if (pool != address(0) && cout > best.amountOut) best = _asQuote(AMM.CURVE, cin, cout);
+    }
+
     // zRouter calldata builders:
 
     error NoRoute();
@@ -113,12 +136,38 @@ contract zQuoter {
         return token == CURVE_ETH ? address(0) : token;
     }
 
+    /// @dev zRouter treats `deadline == type(uint256).max` on swapV2 as a sentinel that
+    ///      routes execution to the Sushi factory. Callers who pass max (e.g. "no expiry")
+    ///      would therefore silently get a Sushi pool for a quote the base quoter gave
+    ///      for the Uniswap V2 pool. Use this only on the UNI_V2 encode path — do NOT
+    ///      apply globally, because swapVZ also uses max as a sentinel (ZAMM_0 vs ZAMM)
+    ///      and the base quoter's zAMM source may depend on the caller-supplied deadline.
+    function _v2Deadline(bool isSushi, uint256 deadline) internal view returns (uint256) {
+        if (isSushi) return type(uint256).max; // sentinel: router selects SUSHI_FACTORY
+        return deadline == type(uint256).max ? block.timestamp + 30 minutes : deadline;
+    }
+
     function _hubs() internal pure returns (address[6] memory) {
         return [WETH, USDC, USDT, DAI, WBTC, WSTETH];
     }
 
     function _sweepTo(address token, address to) internal pure returns (bytes memory) {
-        return abi.encodeWithSelector(IRouterExt.sweep.selector, token, uint256(0), uint256(0), to);
+        return _sweepAmt(token, 0, to);
+    }
+
+    /// @dev Assembly-built sweep(token, 0, amount, to) calldata. Replaces four scattered
+    ///      abi.encodeWithSelector sites with one shared encoder to shrink bytecode.
+    function _sweepAmt(address token, uint256 amount, address to) internal pure returns (bytes memory data) {
+        bytes4 sel = IRouterExt.sweep.selector;
+        data = new bytes(0x84);
+        assembly ("memory-safe") {
+            let p := add(data, 0x20)
+            mstore(p, sel)
+            mstore(add(p, 0x04), token)
+            mstore(add(p, 0x24), 0)
+            mstore(add(p, 0x44), amount)
+            mstore(add(p, 0x64), to)
+        }
     }
 
     function _mc(bytes[] memory c) internal pure returns (bytes memory) {
@@ -129,6 +178,37 @@ contract zQuoter {
         bytes[] memory c = new bytes[](1);
         c[0] = cd;
         return _mc(c);
+    }
+
+    /// @dev Shared exactIn fallback used by split/hybrid edge cases (trivial wrap,
+    ///     no split, 100/0 or 0/100 split, 100% direct hybrid). Returns the best
+    ///     exactIn quote for the full pair, its calldata wrapped in a 1-element
+    ///     multicall envelope, and msgValue — so call sites become one expression.
+    function _fallbackBest(
+        address to,
+        address tokenIn,
+        address tokenOut,
+        uint256 amount,
+        uint256 bps,
+        uint256 dl
+    ) internal view returns (Quote memory q, bytes memory multicall, uint256 msgValue) {
+        bytes memory cd;
+        (q, cd,, msgValue) = buildBestSwap(to, false, tokenIn, tokenOut, amount, bps, dl);
+        multicall = _mc1(cd);
+    }
+
+    /// @dev Append a (optionally pre-wrapped) leg to calls_. Used by split/hybrid paths
+    ///     when a Curve leg with ETH input needs a WETH pre-wrap plus route[0] rewrite.
+    ///     Deduplicates 4 copies of `if (wrap) { _wrap + mstore(cd,100,WETH) } append(cd)`.
+    function _appendLegMaybeWrap(bytes[] memory calls_, uint256 ci, bytes memory cd, bool needsWrap, uint256 amt)
+        internal pure returns (uint256)
+    {
+        if (needsWrap) {
+            calls_[ci++] = _wrap(amt);
+            assembly ("memory-safe") { mstore(add(cd, 100), WETH) }
+        }
+        calls_[ci++] = cd;
+        return ci;
     }
 
     function _wrap(uint256 a) internal pure returns (bytes memory) {
@@ -233,27 +313,33 @@ contract zQuoter {
         if (ethIn || ethOut) {
             pools2 = ICurveMetaRegistry(CURVE_METAREGISTRY).find_pools_for_coins(aWeth, bWeth);
         }
-        uint256 len2 = pools2.length;
-        uint256 totalLen = pools1.length + len2;
-        uint256 limit_ = (maxCandidates == 0 || maxCandidates > totalLen) ? totalLen : maxCandidates;
+        // Apply maxCandidates per-set so the WETH representation pool set (pools2)
+        // isn't starved when pools1 alone has >= maxCandidates entries. Without this,
+        // ETH pair quoting can miss tricrypto-style WETH-registered crypto pools.
+        uint256 cap1 = (maxCandidates == 0 || maxCandidates > pools1.length) ? pools1.length : maxCandidates;
+        uint256 cap2 = (maxCandidates == 0 || maxCandidates > pools2.length) ? pools2.length : maxCandidates;
+        uint256 limit_ = cap1 + cap2;
 
         CurveAcc memory acc;
         acc.bestIn = type(uint256).max;
 
         for (uint256 k; k < limit_; ++k) {
             // Walk pools1 first, then pools2
-            bool fromSet2 = k >= pools1.length;
-            address pool = fromSet2 ? pools2[k - pools1.length] : pools1[k];
+            bool fromSet2 = k >= cap1;
+            address pool = fromSet2 ? pools2[k - cap1] : pools1[k];
             if (pool.code.length == 0) continue;
 
-            // Skip duplicates: if pool already appeared in pools1, don't re-quote
-            if (fromSet2 && _inPools(pools1, pool)) continue;
+            // Skip duplicates: only within the *quoted* prefix of pools1. Searching
+            // all of pools1 would drop a pool that's in pools2 and also in the
+            // capped-out tail of pools1 (which was never actually quoted).
+            if (fromSet2 && _inPoolsPrefix(pools1, cap1, pool)) continue;
 
             // Try coin indices with both address representations
             address qa = fromSet2 ? aWeth : aEth;
             address qb = fromSet2 ? bWeth : bEth;
 
             (bool idxOk, int128 i, int128 j, bool underlying) = _tryCoinIndices(pool, qa, qb);
+            bool primaryHit = idxOk;
             // If the primary representation failed and this is an ETH pair, try the other
             if (!idxOk && (ethIn || ethOut)) {
                 address altA = fromSet2 ? aEth : aWeth;
@@ -261,6 +347,14 @@ contract zQuoter {
                 (idxOk, i, j, underlying) = _tryCoinIndices(pool, altA, altB);
             }
             if (!idxOk) continue;
+            // For ETH pairs, zRouter's swapCurve always pre-funds the pool with WETH
+            // and calls exchange() without msg.value (see zRouter.sol:504-517, 558-563).
+            // Pools whose ETH-side coin is the CURVE_ETH sentinel (e.g. Curve's legacy
+            // stETH/ETH 0xDC24...7022) require msg.value on exchange() and so cannot be
+            // executed by the router — skip them at discovery time.
+            //   - fromSet2=false + primary hit: queried with CURVE_ETH → sentinel pool.
+            //   - fromSet2=true  + alt hit:     fallback used CURVE_ETH → sentinel pool.
+            if ((ethIn || ethOut) && (primaryHit ? !fromSet2 : fromSet2)) continue;
 
             (bool ok, uint256 qIn, uint256 qOut, bool isStable, bool actuallyUnderlying) =
                 _curveTryQuoteOne(pool, exactOut, i, j, underlying, swapAmount);
@@ -294,8 +388,8 @@ contract zQuoter {
         jIndex = acc.jIdx;
     }
 
-    function _inPools(address[] memory pools, address pool) internal pure returns (bool) {
-        for (uint256 i; i < pools.length; ++i) {
+    function _inPoolsPrefix(address[] memory pools, uint256 prefixLen, address pool) internal pure returns (bool) {
+        for (uint256 i; i < prefixLen; ++i) {
             if (pools[i] == pool) return true;
         }
         return false;
@@ -320,16 +414,18 @@ contract zQuoter {
         }
     }
 
-    // Single-pool quote with ABI autodetect. usedUnderlying=true → exchange_underlying needed.
+    // Single-pool quote with ABI autodetect (crypto uint256 indices vs stable int128).
+    // Underlying (meta) pools are filtered out by this helper, so usedUnderlying is
+    // always false in the returned tuple.
     function _curveTryQuoteOne(address pool, bool exactOut, int128 i, int128 j, bool underlying, uint256 amt)
         internal
         view
         returns (bool ok, uint256 amountIn, uint256 amountOut, bool usedStable, bool usedUnderlying)
     {
         // underlying=true means pool coins are wrapped (aTokens, cTokens, etc.).
-        // Skip: exchange() expects wrapped tokens the user doesn't have, and
-        // exchange_underlying (st=2) is not reliably supported by the router.
-        // The direct-coin pool (e.g. 3pool) will be found instead.
+        // Skip: exchange() expects wrapped tokens the user doesn't have, and the
+        // quoter doesn't populate basePools[] needed for the st=2 exactOut
+        // backward pass. The direct-coin pool (e.g. 3pool) will be found instead.
         if (underlying) return (false, 0, 0, false, false);
         bytes4 selD = exactOut ? ICurveStableLike.get_dx.selector : ICurveStableLike.get_dy.selector;
         // Try crypto (uint256) first — pools that support both get_dy signatures
@@ -340,13 +436,14 @@ contract zQuoter {
         (bool s2, bytes memory r2) = pool.staticcall(abi.encodeWithSelector(sel2, ui, uj, amt));
         if (s2 && r2.length >= 32) {
             uint256 q2 = abi.decode(r2, (uint256));
-            return exactOut ? (true, q2, amt, false, false) : (true, amt, q2, false, false);
+            // Router adds +1 to every get_dx result; mirror it or exactOut reverts at tight slippage.
+            return exactOut ? (true, q2 + 1, amt, false, false) : (true, amt, q2, false, false);
         }
         // Fall back to stable (int128)
         (bool sd, bytes memory rd) = pool.staticcall(abi.encodeWithSelector(selD, i, j, amt));
         if (!sd || rd.length < 32) return (false, 0, 0, false, false);
         uint256 q = abi.decode(rd, (uint256));
-        return exactOut ? (true, q, amt, true, false) : (true, amt, q, true, false);
+        return exactOut ? (true, q + 1, amt, true, false) : (true, amt, q, true, false);
     }
 
     // ====================== BUILD CALLDATA (single-hop) ======================
@@ -360,19 +457,13 @@ contract zQuoter {
         uint256 slippageBps,
         uint256 deadline,
         address pool,
-        bool useUnderlying,
+        bool, /* useUnderlying — always false; filtered in _curveTryQuoteOne */
         bool isStable,
         uint8 iIndex,
         uint8 jIndex,
         uint256 amountIn,
         uint256 amountOut
     ) internal pure returns (bytes memory callData, uint256 amountLimit, uint256 msgValue) {
-        // Guard: router can't do exactOut stable-underlying when both indices are base coins
-        if (exactOut && isStable && useUnderlying && iIndex > 0 && jIndex > 0) {
-            return (callData, 0, 0); // empty callData signals unbuildable
-        }
-
-        uint256 st = (isStable && useUnderlying) ? 2 : 1;
         uint256 pt = isStable ? 10 : 20;
         uint256 quoted = exactOut ? amountIn : amountOut;
         amountLimit = SlippageLib.limit(exactOut, quoted, slippageBps);
@@ -380,6 +471,12 @@ contract zQuoter {
         // Build calldata with assembly: avoids allocating address[11] + uint256[4][5] + address[5]
         // Layout: sel(4) + to,exactOut(64) + route[11](352) + swapParams[5][4](640)
         //       + basePools[5](160) + swapAmount,amountLimit,deadline(96) = 1316 bytes
+        //
+        // ETH-output case: Curve WETH-representation pools output WETH, but zRouter's
+        // outBal tracking uses address(this).balance when nextToken==ETH, which doesn't
+        // update on a WETH payout and triggers BadSwap() at zRouter.sol:594. Fix: build
+        // a 2-hop route [tokenIn, pool, WETH, WETH_dummy, 0(ETH)] with swapParams[1][2]=8
+        // (st=8 unwrap hop). Done branchlessly in Yul below to keep bytecode lean.
         bytes4 sel = IZRouter.swapCurve.selector;
         callData = new bytes(1316);
         assembly ("memory-safe") {
@@ -388,16 +485,21 @@ contract zQuoter {
             let s := add(p, 4)
             mstore(s, to)
             mstore(add(s, 0x20), exactOut)
-            // route: [tokenIn, pool, tokenOut, 0..0]
             mstore(add(s, 0x40), tokenIn)
             mstore(add(s, 0x60), pool)
-            mstore(add(s, 0x80), tokenOut)
-            // swapParams[0] = [iIndex, jIndex, st, pt]  (offset 0x1a0 from s)
+            // e = 1 when tokenOut == 0 (ETH output), else 0
+            let e := iszero(tokenOut)
+            // route[2] = e ? WETH : tokenOut  (tokenOut is 0 when e=1, so OR is clean)
+            mstore(add(s, 0x80), or(tokenOut, mul(e, WETH)))
+            // route[3] = e ? WETH : 0  (non-zero sentinel so outer loop enters the unwrap hop)
+            mstore(add(s, 0xa0), mul(e, WETH))
+            // swapParams[0] = [iIndex, jIndex, 1, pt]
             mstore(add(s, 0x1a0), iIndex)
             mstore(add(s, 0x1c0), jIndex)
-            mstore(add(s, 0x1e0), st)
+            mstore(add(s, 0x1e0), 1)
             mstore(add(s, 0x200), pt)
-            // swapAmount, amountLimit, deadline (offset 0x4c0 from s)
+            // swapParams[1][2] = e ? 8 : 0 (st=8 WETH→ETH unwrap)
+            mstore(add(s, 0x260), mul(e, 8))
             mstore(add(s, 0x4c0), swapAmount)
             mstore(add(s, 0x4e0), amountLimit)
             mstore(add(s, 0x500), deadline)
@@ -456,19 +558,19 @@ contract zQuoter {
     function _buildLidoSwap(address to, bool exactOut, address tokenOut, uint256 swapAmount)
         internal
         pure
-        returns (bytes memory callData)
+        returns (bytes memory)
     {
+        // Pick the selector from a 2x2 (token × exactOut) table, then encode once.
+        // Halves the number of distinct abi.encodeWithSelector sites (4 → 2).
+        bytes4 sel;
         if (tokenOut == STETH) {
-            callData = exactOut
-                ? abi.encodeWithSelector(IZRouter.ethToExactSTETH.selector, to, swapAmount)
-                : abi.encodeWithSelector(IZRouter.exactETHToSTETH.selector, to);
+            sel = exactOut ? IZRouter.ethToExactSTETH.selector : IZRouter.exactETHToSTETH.selector;
         } else if (tokenOut == WSTETH) {
-            callData = exactOut
-                ? abi.encodeWithSelector(IZRouter.ethToExactWSTETH.selector, to, swapAmount)
-                : abi.encodeWithSelector(IZRouter.exactETHToWSTETH.selector, to);
+            sel = exactOut ? IZRouter.ethToExactWSTETH.selector : IZRouter.exactETHToWSTETH.selector;
         } else {
             revert NoRoute();
         }
+        return exactOut ? abi.encodeWithSelector(sel, to, swapAmount) : abi.encodeWithSelector(sel, to);
     }
 
     // ====================== TOP-LEVEL BUILDER (with Curve override) ======================
@@ -498,7 +600,7 @@ contract zQuoter {
                 } else {
                     bytes[] memory c = new bytes[](2);
                     c[0] = _wrap(swapAmount);
-                    c[1] = abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, uint256(0), swapAmount, to);
+                    c[1] = _sweepAmt(WETH, swapAmount, to);
                     callData = _mc(c);
                 }
             } else {
@@ -514,7 +616,7 @@ contract zQuoter {
                     bytes[] memory c = new bytes[](3);
                     c[0] = dep;
                     c[1] = unw;
-                    c[2] = abi.encodeWithSelector(IRouterExt.sweep.selector, address(0), uint256(0), swapAmount, to);
+                    c[2] = _sweepAmt(address(0), swapAmount, to);
                     callData = _mc(c);
                 }
             }
@@ -533,7 +635,88 @@ contract zQuoter {
             to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, slippageBps, deadline, best
         );
 
-        msgValue = _requiredMsgValue(exactOut, tokenIn, swapAmount, amountLimit);
+        msgValue = tokenIn == address(0) ? (exactOut ? amountLimit : swapAmount) : 0;
+    }
+
+    /// @notice One-call quote+build that returns the same shape as buildBestSwap.
+    ///         Cascade (NOT a head-to-head comparison across depths): single/2-hop
+    ///         first, 3-hop only as a fallback for pairs that can't build at shallower
+    ///         depth. Frontends can use this as a drop-in for buildBestSwap — no
+    ///         decoder changes — and recover every pair that has *any* on-chain path.
+    ///
+    ///         Cascade:
+    ///           1. buildBestSwapViaETHMulticall — internally picks best of {single-hop, 2-hop hub}
+    ///           2. build3HopMulticall           — last-resort for exotic tokens (exactIn + exactOut)
+    ///
+    ///         Note: step 1 wraps single-hop results in a 1-element multicall envelope
+    ///         (~2–3k extra gas), but guarantees we never miss a strictly-better hub
+    ///         route just because a marginal single-hop pool also happened to quote.
+    ///         For custom tokens this matters: a user's exotic token may have a
+    ///         stale V3 1bp pool that buildBestSwap would prefer, while the deep
+    ///         liquidity actually lives on a WETH-hub 2-hop path.
+    ///
+    ///         The returned `best` aggregates multi-hop plans into a single Quote
+    ///         with end-to-end amounts (source = final leg's source).
+    function buildSwapAuto(
+        address to,
+        bool exactOut,
+        address tokenIn,
+        address tokenOut,
+        uint256 swapAmount,
+        uint256 slippageBps,
+        uint256 deadline
+    ) public view returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue) {
+        // Defensive: no-op swap (tokenIn == tokenOut after ETH/WETH normalization).
+        // Without this, inner builders produce nonsense quotes or revert with an
+        // opaque error depending on which code path gets hit first.
+        if (_normalizeETH(tokenIn) == _normalizeETH(tokenOut)) revert NoRoute();
+
+        // 1. Best of {single-hop, 2-hop hub}. buildBestSwapViaETHMulticall's
+        //    internal logic only prefers hub if it's strictly better (>2% for
+        //    exactIn, or single-hop unavailable for exactOut), so this gives
+        //    optimal quote across both depths in one pass.
+        try this.buildBestSwapViaETHMulticall(
+            to, to, exactOut, tokenIn, tokenOut, swapAmount, slippageBps, deadline
+        ) returns (
+            Quote memory a, Quote memory b, bytes[] memory, bytes memory mc, uint256 mv
+        ) {
+            bool twoHop = (b.amountIn != 0 || b.amountOut != 0);
+            best.source = twoHop ? b.source : a.source;
+            best.feeBps = twoHop ? b.feeBps : a.feeBps;
+            best.amountIn = a.amountIn;
+            best.amountOut = twoHop ? b.amountOut : a.amountOut;
+            callData = mc;
+            amountLimit = SlippageLib.limit(exactOut, exactOut ? best.amountIn : best.amountOut, slippageBps);
+            msgValue = mv;
+            return (best, callData, amountLimit, msgValue);
+        } catch {}
+
+        // 2. 3-hop last resort for exotic custom tokens with no direct or 2-hop-via-hub pool.
+        //    Supported for both exactIn and exactOut after the exactOut extension to
+        //    build3HopMulticall.
+        try this.build3HopMulticall(to, exactOut, tokenIn, tokenOut, swapAmount, slippageBps, deadline) returns (
+            Quote memory a_, Quote memory, Quote memory c_, bytes[] memory, bytes memory mc, uint256 mv
+        ) {
+            if (exactOut) {
+                // leg-1's amountIn is the end-to-end input; tokenOut amount is the user's target.
+                best.source = c_.source;
+                best.feeBps = c_.feeBps;
+                best.amountIn = a_.amountIn;
+                best.amountOut = swapAmount;
+                amountLimit = SlippageLib.limit(true, best.amountIn, slippageBps);
+            } else {
+                best.source = c_.source;
+                best.feeBps = c_.feeBps;
+                best.amountIn = swapAmount;
+                best.amountOut = c_.amountOut;
+                amountLimit = SlippageLib.limit(false, best.amountOut, slippageBps);
+            }
+            callData = mc;
+            msgValue = mv;
+            return (best, callData, amountLimit, msgValue);
+        } catch {}
+
+        revert NoRoute();
     }
 
     function _spacingFromBps(uint16 bps) internal pure returns (int24) {
@@ -546,15 +729,6 @@ contract zQuoter {
         }
     }
 
-    /* msg.value rule (matches zRouter):
-       tokenIn==ETH → exactIn: swapAmount, exactOut: amountLimit; else 0. */
-    function _requiredMsgValue(bool exactOut, address tokenIn, uint256 swapAmount, uint256 amountLimit)
-        internal
-        pure
-        returns (uint256)
-    {
-        return tokenIn == address(0) ? (exactOut ? amountLimit : swapAmount) : 0;
-    }
 
     function _bestSingleHop(
         address to,
@@ -584,10 +758,7 @@ contract zQuoter {
         address tokenOut, // ERC20 or address(0) for ETH
         uint256 swapAmount, // exactIn: amount of tokenIn; exactOut: desired tokenOut
         uint256 slippageBps, // per-leg bound
-        uint256 deadline,
-        uint24 hookPoolFee,
-        int24 hookTickSpacing,
-        address hookAddress
+        uint256 deadline
     )
         public
         view
@@ -625,7 +796,7 @@ contract zQuoter {
                 return (a, b, calls, multicall, msgValue);
             }
 
-            // ---------- FAST PATH #2: direct single-hop (may be Curve/V2/V3/V4/zAMM/V4_HOOKED) ----------
+            // ---------- FAST PATH #2: direct single-hop (may be Curve/V2/V3/V4/zAMM) ----------
             // We always try hub routing too and compare, because low-liquidity pools
             // (e.g. V3 1bp) can return tiny dust outputs that technically "succeed" but
             // produce reverts at execution or give users effectively nothing.
@@ -636,28 +807,6 @@ contract zQuoter {
             {
                 (bool ok, Quote memory best, bytes memory callData,, uint256 val) =
                     _bestSingleHop(to, exactOut, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
-
-                // Also try hooked pool if applicable (ETH input only, exactIn)
-                if (hookAddress != address(0) && tokenIn == address(0) && !exactOut) {
-                    uint256 hookedOut =
-                        _tryQuoteV4Hooked(tokenIn, tokenOut, swapAmount, hookPoolFee, hookTickSpacing, hookAddress);
-                    if (hookedOut > 0 && (!ok || hookedOut > best.amountOut)) {
-                        ok = true;
-                        best = Quote(AMM.V4_HOOKED, hookPoolFee, swapAmount, hookedOut);
-                        callData = _buildV4HookedCalldata(
-                            to,
-                            tokenIn,
-                            tokenOut,
-                            swapAmount,
-                            SlippageLib.limit(false, hookedOut, slippageBps),
-                            deadline,
-                            hookPoolFee,
-                            hookTickSpacing,
-                            hookAddress
-                        );
-                        val = swapAmount;
-                    }
-                }
 
                 if (ok) {
                     _singleOk = true;
@@ -807,7 +956,7 @@ contract zQuoter {
 
                 if (!chaining) {
                     // Deliver exact output amount to recipient
-                    calls[k++] = abi.encodeWithSelector(IRouterExt.sweep.selector, tokenOut, uint256(0), swapAmount, to);
+                    calls[k++] = _sweepAmt(tokenOut, swapAmount, to);
                     // Refund leftover MID (as-is, WETH stays as WETH)
                     calls[k++] = _sweepTo(plan.mid, refundTo);
                     // Refund leftover tokenIn (ERC20 only; ETH covered by ETH dust sweep)
@@ -843,7 +992,7 @@ contract zQuoter {
         uint256 amountLimit,
         uint256 deadline,
         Quote memory q
-    ) internal pure returns (bytes memory) {
+    ) internal view returns (bytes memory) {
         if (q.source == AMM.UNI_V2 || q.source == AMM.SUSHI) {
             return abi.encodeWithSelector(
                 IZRouter.swapV2.selector,
@@ -853,7 +1002,7 @@ contract zQuoter {
                 tokenOut,
                 swapAmount,
                 amountLimit,
-                q.source == AMM.SUSHI ? type(uint256).max : deadline
+                _v2Deadline(q.source == AMM.SUSHI, deadline)
             );
         } else if (q.source == AMM.ZAMM) {
             return abi.encodeWithSelector(
@@ -898,17 +1047,106 @@ contract zQuoter {
         revert NoRoute();
     }
 
-    /// @notice Build a 3-hop exactIn multicall:
+    /// @dev Enumerate every ordered (MID1, MID2) hub pair for exactIn — maximize output.
+    ///      Split from exactOut into its own helper so each version fits via-ir's stack.
+    function _discover3HopForward(address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps)
+        internal
+        view
+        returns (Route3 memory r)
+    {
+        address[6] memory HUBS = _hubs();
+        unchecked {
+            for (uint256 i; i < HUBS.length; ++i) {
+                address MID1 = HUBS[i];
+                if (MID1 == tokenIn || MID1 == tokenOut) continue;
+
+                Quote memory qa = _quoteBestSingleHop(false, tokenIn, MID1, swapAmount);
+                if (qa.amountOut == 0 || qa.source == AMM.LIDO) continue;
+                uint256 mid1Amt = SlippageLib.limit(false, qa.amountOut, slippageBps);
+
+                for (uint256 j; j < HUBS.length; ++j) {
+                    address MID2 = HUBS[j];
+                    if (MID2 == tokenIn || MID2 == tokenOut || MID2 == MID1) continue;
+                    uint256 mid2Amt;
+                    Quote memory qb = _quoteBestSingleHop(false, MID1, MID2, mid1Amt);
+                    if (qb.amountOut == 0) continue;
+                    mid2Amt = SlippageLib.limit(false, qb.amountOut, slippageBps);
+                    Quote memory qc = _quoteBestSingleHop(false, MID2, tokenOut, mid2Amt);
+                    if (qc.amountOut == 0) continue;
+
+                    if (!r.found || qc.amountOut > r.score) {
+                        r.found = true;
+                        r.a = qa;
+                        r.b = qb;
+                        r.c = qc;
+                        r.mid1 = MID1;
+                        r.mid2 = MID2;
+                        r.score = qc.amountOut;
+                    }
+                }
+            }
+        }
+    }
+
+    /// @dev Enumerate every ordered (MID1, MID2) hub pair for exactOut — minimize input
+    ///      via a backward pass from `swapAmount` of tokenOut.
+    function _discover3HopBackward(address tokenIn, address tokenOut, uint256 swapAmount, uint256 slippageBps)
+        internal
+        view
+        returns (Route3 memory r)
+    {
+        address[6] memory HUBS = _hubs();
+        r.score = type(uint256).max;
+        unchecked {
+            for (uint256 i; i < HUBS.length; ++i) {
+                address MID1 = HUBS[i];
+                if (MID1 == tokenIn || MID1 == tokenOut) continue;
+
+                for (uint256 j; j < HUBS.length; ++j) {
+                    address MID2 = HUBS[j];
+                    if (MID2 == tokenIn || MID2 == tokenOut || MID2 == MID1) continue;
+
+                    Quote memory qc = _quoteBestSingleHop(true, MID2, tokenOut, swapAmount);
+                    if (qc.amountIn == 0 || qc.source == AMM.LIDO) continue;
+
+                    Quote memory qb =
+                        _quoteBestSingleHop(true, MID1, MID2, SlippageLib.limit(true, qc.amountIn, slippageBps));
+                    if (qb.amountIn == 0 || qb.source == AMM.LIDO) continue;
+
+                    Quote memory qa =
+                        _quoteBestSingleHop(true, tokenIn, MID1, SlippageLib.limit(true, qb.amountIn, slippageBps));
+                    if (qa.amountIn == 0 || qa.source == AMM.LIDO) continue;
+
+                    if (qa.amountIn < r.score) {
+                        r.found = true;
+                        r.a = qa;
+                        r.b = qb;
+                        r.c = qc;
+                        r.mid1 = MID1;
+                        r.mid2 = MID2;
+                        r.score = qa.amountIn;
+                    }
+                }
+            }
+        }
+    }
+
+    /// @notice Build a 3-hop multicall through two hub intermediates:
     ///           tokenIn ─[Leg1]→ MID1 ─[Leg2]→ MID2 ─[Leg3]→ tokenOut
     ///
-    ///         Legs 2 & 3 use swapAmount = 0 so the router auto-consumes the
-    ///         previous leg's output via balanceOf().
+    ///         exactIn:  legs 2 & 3 pass swapAmount=0 so each router leg
+    ///                   auto-consumes the previous leg's transient balance.
+    ///         exactOut: each leg has an explicit target (backward-calc'd from
+    ///                   `swapAmount` of tokenOut). Hub leftovers + ETH dust
+    ///                   are swept to `to` in the envelope to avoid stranding
+    ///                   funds in the router.
     ///
-    ///         Route discovery: tries every ordered pair (MID1, MID2) from the
-    ///         hub list and picks the path that maximizes final output.
-    ///         All AMMs (V2/Sushi/V3/V4/zAMM/Curve) are considered for each leg.
+    ///         Discovery: tries every ordered pair (MID1, MID2) from the hub
+    ///         list. exactIn maximizes final output; exactOut minimizes required
+    ///         input. All AMMs (V2/Sushi/V3/V4/zAMM/Curve) compete per leg.
     function build3HopMulticall(
         address to,
+        bool exactOut,
         address tokenIn,
         address tokenOut,
         uint256 swapAmount,
@@ -929,78 +1167,111 @@ contract zQuoter {
         unchecked {
             tokenIn = _normalizeETH(tokenIn);
             tokenOut = _normalizeETH(tokenOut);
-            address[6] memory HUBS = _hubs();
 
-            Route3 memory r;
-
-            for (uint256 i; i < HUBS.length; ++i) {
-                address MID1 = HUBS[i];
-                if (MID1 == tokenIn || MID1 == tokenOut) continue;
-
-                Quote memory qa = _quoteBestSingleHop(false, tokenIn, MID1, swapAmount);
-                if (qa.amountOut == 0 || qa.source == AMM.LIDO) continue;
-
-                uint256 mid1Amt = SlippageLib.limit(false, qa.amountOut, slippageBps);
-
-                for (uint256 j; j < HUBS.length; ++j) {
-                    address MID2 = HUBS[j];
-                    if (MID2 == tokenIn || MID2 == tokenOut || MID2 == MID1) continue;
-
-                    Quote memory qb = _quoteBestSingleHop(false, MID1, MID2, mid1Amt);
-                    if (qb.amountOut == 0) continue;
-
-                    uint256 mid2Amt = SlippageLib.limit(false, qb.amountOut, slippageBps);
-
-                    Quote memory qc = _quoteBestSingleHop(false, MID2, tokenOut, mid2Amt);
-                    if (qc.amountOut == 0) continue;
-
-                    if (!r.found || qc.amountOut > r.score) {
-                        r.found = true;
-                        r.a = qa;
-                        r.b = qb;
-                        r.c = qc;
-                        r.mid1 = MID1;
-                        r.mid2 = MID2;
-                        r.score = qc.amountOut;
-                    }
-                }
-            }
-
+            Route3 memory r = exactOut
+                ? _discover3HopBackward(tokenIn, tokenOut, swapAmount, slippageBps)
+                : _discover3HopForward(tokenIn, tokenOut, swapAmount, slippageBps);
             if (!r.found) revert NoRoute();
 
-            calls = new bytes[](3);
+            if (!exactOut) {
+                calls = new bytes[](3);
 
-            // Leg 1: via buildBestSwap (handles all AMMs including Curve)
-            (a, calls[0],, msgValue) = buildBestSwap(ZROUTER, false, tokenIn, r.mid1, swapAmount, slippageBps, deadline);
+                // Leg 1: pin to the discovered quote (r.a) rather than re-querying via
+                // buildBestSwap. Discovery filtered LIDO for hub legs, but buildBestSwap
+                // considers LIDO and could re-select it for e.g. ETH→WSTETH, making the
+                // executed path diverge from the scored one.
+                a = r.a;
+                calls[0] = _buildCalldataFromBest(
+                    ZROUTER,
+                    false,
+                    tokenIn,
+                    r.mid1,
+                    swapAmount,
+                    SlippageLib.limit(false, r.a.amountOut, slippageBps),
+                    slippageBps,
+                    deadline,
+                    r.a
+                );
+                msgValue = tokenIn == address(0) ? swapAmount : 0;
 
-            // Legs 2 & 3: build calldata for any AMM type with swapAmount=0
-            calls[1] = _buildCalldataFromBest(
-                ZROUTER,
-                false,
-                r.mid1,
-                r.mid2,
-                0,
-                SlippageLib.limit(false, r.b.amountOut, slippageBps),
-                slippageBps,
-                deadline,
-                r.b
-            );
+                // Legs 2 & 3: swapAmount=0 → router auto-consumes previous leg's transient balance
+                calls[1] = _buildCalldataFromBest(
+                    ZROUTER,
+                    false,
+                    r.mid1,
+                    r.mid2,
+                    0,
+                    SlippageLib.limit(false, r.b.amountOut, slippageBps),
+                    slippageBps,
+                    deadline,
+                    r.b
+                );
+                calls[2] = _buildCalldataFromBest(
+                    to,
+                    false,
+                    r.mid2,
+                    tokenOut,
+                    0,
+                    SlippageLib.limit(false, r.c.amountOut, slippageBps),
+                    slippageBps,
+                    deadline,
+                    r.c
+                );
 
-            calls[2] = _buildCalldataFromBest(
-                to,
-                false,
-                r.mid2,
-                tokenOut,
-                0,
-                SlippageLib.limit(false, r.c.amountOut, slippageBps),
-                slippageBps,
-                deadline,
-                r.c
-            );
+                b = r.b;
+                c = r.c;
+                multicall = _mc(calls);
+            } else {
+                // exactOut: each leg has an explicit target, and we sweep MID1/MID2/tokenIn/ETH
+                // leftovers to `to` so no funds are stranded on the router.
+                bool chaining = (to == ZROUTER);
+                bool ethInput = (tokenIn == address(0));
+                uint256 extra = chaining ? 0 : (3 + (ethInput ? 1 : 2)); // tokenOut, mid1, mid2, [tokenIn?], ETH
+                calls = new bytes[](3 + extra);
 
-            b = r.b;
-            c = r.c;
-            multicall = _mc(calls);
+                uint256 mid1Target = SlippageLib.limit(true, r.b.amountIn, slippageBps);
+                uint256 mid2Target = SlippageLib.limit(true, r.c.amountIn, slippageBps);
+
+                // Leg 1: pin to discovered r.a (discovery filtered LIDO for hub legs;
+                // buildBestSwap would re-query and might re-select it).
+                a = r.a;
+                calls[0] = _buildCalldataFromBest(
+                    ZROUTER,
+                    true,
+                    tokenIn,
+                    r.mid1,
+                    mid1Target,
+                    SlippageLib.limit(true, r.a.amountIn, slippageBps),
+                    slippageBps,
+                    deadline,
+                    r.a
+                );
+                msgValue = ethInput ? SlippageLib.limit(true, r.a.amountIn, slippageBps) : 0;
+                // Leg 2: MID1 -> MID2, exactOut target=mid2Target
+                calls[1] = _buildCalldataFromBest(
+                    ZROUTER, true, r.mid1, r.mid2, mid2Target, mid1Target, slippageBps, deadline, r.b
+                );
+                // Leg 3: MID2 -> tokenOut. Route to ZROUTER so the tokenOut sweep below
+                // delivers exactly `swapAmount` to `to`. Without this, leg-3 would send
+                // directly to `to` and the subsequent sweep (which transfers `swapAmount`
+                // from the router) would revert on a 0 router balance.
+                calls[2] = _buildCalldataFromBest(
+                    ZROUTER, true, r.mid2, tokenOut, swapAmount, mid2Target, slippageBps, deadline, r.c
+                );
+
+                if (!chaining) {
+                    uint256 k = 3;
+                    calls[k++] = _sweepAmt(tokenOut, swapAmount, to);
+                    calls[k++] = _sweepTo(r.mid1, to);
+                    calls[k++] = _sweepTo(r.mid2, to);
+                    if (!ethInput) calls[k++] = _sweepTo(tokenIn, to);
+                    calls[k++] = _sweepTo(address(0), to);
+                }
+
+                b = r.b;
+                c = r.c;
+                multicall = _mc(calls);
+            }
         }
     }
 
@@ -1042,7 +1313,7 @@ contract zQuoter {
         if (q.source == AMM.LIDO) {
             return _buildLidoSwap(to, exactOut, tokenOut, swapAmount);
         }
-        // Default: V2/Sushi/V3/V4/ZAMM (V4_HOOKED calldata is built inline by callers)
+        // Default: V2/Sushi/V3/V4/ZAMM
         return _buildSwapFromQuote(to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, deadline, q);
     }
 
@@ -1059,7 +1330,147 @@ contract zQuoter {
         uint256 slippageBps,
         uint256 deadline
     ) public view returns (Quote[2] memory legs, bytes memory multicall, uint256 msgValue) {
-        return buildSplitSwapHooked(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline, 0, 0, address(0));
+        unchecked {
+            tokenIn = _normalizeETH(tokenIn);
+            tokenOut = _normalizeETH(tokenOut);
+
+            // ---- ETH <-> WETH trivial wrap: splitting makes no sense; delegate to buildBestSwap ----
+            if ((tokenIn == address(0) && tokenOut == WETH) || (tokenIn == WETH && tokenOut == address(0))) {
+                (legs[0], multicall, msgValue) = _fallbackBest(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
+                return (legs, multicall, msgValue);
+            }
+
+            // ---- Gather candidates ----
+            // Filter out LIDO (uses callvalue(), unsafe in multicall splits) and WETH_WRAP.
+            (, Quote[] memory baseQuotes) = getQuotes(false, tokenIn, tokenOut, swapAmount);
+            uint256 n;
+            Quote[] memory cands = new Quote[](baseQuotes.length + 1);
+            for (uint256 i; i < baseQuotes.length; ++i) {
+                if (baseQuotes[i].source == AMM.LIDO || baseQuotes[i].source == AMM.WETH_WRAP) {
+                    continue;
+                }
+                cands[n++] = baseQuotes[i];
+            }
+
+            // Curve
+            {
+                (uint256 ci_, uint256 co_, address p_,,,,) = quoteCurve(false, tokenIn, tokenOut, swapAmount, 8);
+                if (p_ != address(0) && co_ > 0) {
+                    cands[n] = _asQuote(AMM.CURVE, ci_, co_);
+                    n++;
+                }
+            }
+
+            // ---- Top 2 ----
+            uint256 idx1;
+            uint256 idx2;
+            uint256 out1;
+            uint256 out2;
+            for (uint256 i; i < n; ++i) {
+                if (cands[i].amountOut > out1) {
+                    out2 = out1;
+                    idx2 = idx1;
+                    out1 = cands[i].amountOut;
+                    idx1 = i;
+                } else if (cands[i].amountOut > out2) {
+                    out2 = cands[i].amountOut;
+                    idx2 = i;
+                }
+            }
+            if (out1 == 0) revert NoRoute();
+
+            bool ethIn = tokenIn == address(0);
+
+            // ---- Single venue fallback ----
+            // buildBestSwap may pick Curve/Lido which aren't in `cands`, so surface its
+            // actual best in legs[0] to keep the returned metadata consistent with calldata.
+            if (out2 == 0 || idx1 == idx2) {
+                (legs[0], multicall, msgValue) = _fallbackBest(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
+                return (legs, multicall, msgValue);
+            }
+
+            // ---- Try splits ----
+            Quote memory venue1 = cands[idx1];
+            Quote memory venue2 = cands[idx2];
+
+            uint256[5] memory pcts = [uint256(100), 75, 50, 25, 0];
+            uint256 bestTotal;
+            uint256 bestS;
+
+            for (uint256 s; s < 5; ++s) {
+                uint256 a1 = (swapAmount * pcts[s]) / 100;
+                uint256 a2 = swapAmount - a1;
+                uint256 o1_;
+                uint256 o2_;
+
+                if (a1 > 0) o1_ = _requoteForSource(false, tokenIn, tokenOut, a1, venue1).amountOut;
+                if (a2 > 0) o2_ = _requoteForSource(false, tokenIn, tokenOut, a2, venue2).amountOut;
+
+                uint256 t = o1_ + o2_;
+                if (t > bestTotal) {
+                    bestTotal = t;
+                    bestS = s;
+                }
+            }
+
+            // ---- Build winning split ----
+            uint256 fa1 = (swapAmount * pcts[bestS]) / 100;
+            uint256 fa2 = swapAmount - fa1;
+
+            if (fa1 == 0 || fa2 == 0) {
+                // 100/0 or 0/100 — single venue. buildBestSwap may pick Curve/Lido
+                // which aren't in `cands`; surface its actual best in the winning slot
+                // so returned metadata matches the generated calldata.
+                (legs[fa1 == 0 ? 1 : 0], multicall, msgValue) =
+                    _fallbackBest(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
+                return (legs, multicall, msgValue);
+            }
+
+            // ---- True split: build both legs ----
+            legs[0] = _requoteForSource(false, tokenIn, tokenOut, fa1, venue1);
+            legs[1] = _requoteForSource(false, tokenIn, tokenOut, fa2, venue2);
+
+            // Guard: if re-quote at partial amount returns zero, revert so frontend
+            // falls through to a non-split strategy instead of building bad calldata.
+            if (legs[0].amountOut == 0 || legs[1].amountOut == 0) revert NoRoute();
+
+            uint256 lim1 = SlippageLib.limit(false, legs[0].amountOut, slippageBps);
+            uint256 lim2 = SlippageLib.limit(false, legs[1].amountOut, slippageBps);
+
+            address legTo = ethIn ? ZROUTER : to;
+
+            // Curve legs with ETH input need a pre-wrap
+            bool wrapLeg1 = ethIn && legs[0].source == AMM.CURVE;
+            bool wrapLeg2 = ethIn && legs[1].source == AMM.CURVE;
+            uint256 nc = 2 + (ethIn ? 2 : 0) + (wrapLeg1 ? 1 : 0) + (wrapLeg2 ? 1 : 0);
+            bytes[] memory calls_ = new bytes[](nc);
+            uint256 ci;
+
+            ci = _appendLegMaybeWrap(
+                calls_,
+                ci,
+                _buildCalldataFromBest(legTo, false, tokenIn, tokenOut, fa1, lim1, slippageBps, deadline, legs[0]),
+                wrapLeg1,
+                fa1
+            );
+            ci = _appendLegMaybeWrap(
+                calls_,
+                ci,
+                _buildCalldataFromBest(legTo, false, tokenIn, tokenOut, fa2, lim2, slippageBps, deadline, legs[1]),
+                wrapLeg2,
+                fa2
+            );
+
+            // Final sweeps for ETH input
+            if (ethIn) {
+                calls_[ci++] = _sweepTo(tokenOut, to);
+                // Sweep any leftover ETH dust (prevents stealable balance in router)
+                calls_[ci++] = _sweepTo(address(0), to);
+            }
+
+            multicall = _mc(calls_);
+            msgValue = ethIn ? swapAmount : 0;
+        }
     }
 
     // ====================== HYBRID SPLIT (single-hop + 2-hop) ======================
@@ -1081,10 +1492,21 @@ contract zQuoter {
             tokenIn = _normalizeETH(tokenIn);
             tokenOut = _normalizeETH(tokenOut);
 
+            // ---- ETH <-> WETH trivial wrap: no split, delegate to buildBestSwap ----
+            if ((tokenIn == address(0) && tokenOut == WETH) || (tokenIn == WETH && tokenOut == address(0))) {
+                (legs[0], multicall, msgValue) = _fallbackBest(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
+                return (legs, multicall, msgValue);
+            }
+
             // --- 1. Best single-hop at full amount ---
             Quote memory directFull = _quoteBestSingleHop(false, tokenIn, tokenOut, swapAmount);
-            // Filter LIDO (uses callvalue(), unsafe in multicall splits)
-            if (directFull.source == AMM.LIDO) directFull = Quote(AMM.UNI_V2, 0, 0, 0);
+            // Filter LIDO (uses callvalue(), unsafe in multicall splits). When Lido was
+            // best, pick the true next-best non-Lido direct route — NOT a default-zero
+            // Quote, whose enum default is UNI_V2 and would silently mis-route partial
+            // splits through V2 when the real next-best was V3/V4/ZAMM/Curve.
+            if (directFull.source == AMM.LIDO) {
+                directFull = _bestDirectExcludingLido(tokenIn, tokenOut, swapAmount);
+            }
 
             // --- 2. Best 2-hop hub route at full amount ---
             address[6] memory HUBS = _hubs();
@@ -1114,6 +1536,16 @@ contract zQuoter {
 
             // Need at least one strategy
             if (directFull.amountOut == 0 && bestTwoHopOut == 0) revert NoRoute();
+
+            // If no 2-hop route was found, skip the hybrid split loop entirely.
+            // Without this guard, the split loop would call _requoteForSource with
+            // bestHub=address(0) — forging an unrelated tokenIn->ETH quote through a
+            // default-zero Quote (source=UNI_V2) and synthesizing calldata for a route
+            // that was never actually validated by the hub-discovery pass.
+            if (bestTwoHopOut == 0) {
+                (legs[0], multicall, msgValue) = _fallbackBest(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
+                return (legs, multicall, msgValue);
+            }
 
             // --- 3. Try hybrid splits [75/25, 50/50, 25/75] in both directions ---
             uint256[3] memory directPcts = [uint256(75), 50, 25];
@@ -1152,22 +1584,34 @@ contract zQuoter {
 
             // --- 4. Build the winning multicall ---
             if (bestSplitIdx == 6) {
-                // 100% direct wins
-                legs[0] = directFull;
-                (, bytes memory cd,, uint256 mv) =
-                    buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
-                bytes[] memory calls_ = new bytes[](1);
-                calls_[0] = cd;
-                multicall = _mc(calls_);
-                msgValue = mv;
+                // 100% direct wins. `directFull` was zeroed if LIDO was best — but
+                // buildBestSwap still considers LIDO and may emit LIDO calldata, so
+                // surface its actual best to keep legs[0] consistent with calldata.
+                (legs[0], multicall, msgValue) = _fallbackBest(to, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
             } else if (bestSplitIdx == 7) {
-                // 100% 2-hop wins
+                // 100% 2-hop wins. Pin hop-1 to the discovered `hop1Full` quote —
+                // buildBestSwap would re-query and could re-select LIDO for e.g.
+                // ETH→WSTETH, which discovery deliberately filtered out of hub legs.
                 legs[1] = _asQuote(hop2Full.source, swapAmount, bestTwoHopOut);
-                (, bytes memory cd1,, uint256 mv) =
-                    buildBestSwap(ZROUTER, false, tokenIn, bestHub, swapAmount, slippageBps, deadline);
-                Quote memory qb2 = _quoteBestSingleHop(
-                    false, bestHub, tokenOut, SlippageLib.limit(false, hop1Full.amountOut, slippageBps)
+                Quote memory qh1Full = _requoteForSource(false, tokenIn, bestHub, swapAmount, hop1Full);
+                if (qh1Full.amountOut == 0) revert NoRoute();
+                bytes memory cd1 = _buildCalldataFromBest(
+                    ZROUTER,
+                    false,
+                    tokenIn,
+                    bestHub,
+                    swapAmount,
+                    SlippageLib.limit(false, qh1Full.amountOut, slippageBps),
+                    slippageBps,
+                    deadline,
+                    qh1Full
                 );
+                // hop 2 re-quotes from the ACTUAL hop-1 output (qh1Full) — not the
+                // discovery-time estimate (hop1Full), which can diverge from qh1Full.
+                Quote memory qb2 = _quoteBestSingleHop(
+                    false, bestHub, tokenOut, SlippageLib.limit(false, qh1Full.amountOut, slippageBps)
+                );
+                if (qb2.amountOut == 0) revert NoRoute();
                 bytes memory cd2 = _buildCalldataFromBest(
                     to,
                     false,
@@ -1183,7 +1627,7 @@ contract zQuoter {
                 calls_[0] = cd1;
                 calls_[1] = cd2;
                 multicall = _mc(calls_);
-                msgValue = mv;
+                msgValue = tokenIn == address(0) ? swapAmount : 0;
             } else {
                 // True hybrid split
                 uint256 directAmt = (swapAmount * directPcts[bestSplitIdx]) / 100;
@@ -1226,17 +1670,8 @@ contract zQuoter {
                 bytes[] memory calls_ = new bytes[](numCalls);
                 uint256 ci;
 
-                if (wrapDirect) {
-                    calls_[ci++] = _wrap(directAmt);
-                }
-                if (wrapDirect) assembly ("memory-safe") { mstore(add(cdDirect, 100), WETH) }
-                calls_[ci++] = cdDirect;
-
-                if (wrapHop1) {
-                    calls_[ci++] = _wrap(twoHopAmt);
-                }
-                if (wrapHop1) assembly ("memory-safe") { mstore(add(cdHop1, 100), WETH) }
-                calls_[ci++] = cdHop1;
+                ci = _appendLegMaybeWrap(calls_, ci, cdDirect, wrapDirect, directAmt);
+                ci = _appendLegMaybeWrap(calls_, ci, cdHop1, wrapHop1, twoHopAmt);
 
                 calls_[ci++] = cdHop2;
 
@@ -1248,280 +1683,6 @@ contract zQuoter {
                 multicall = _mc(calls_);
                 msgValue = ethIn ? swapAmount : 0;
             }
-        }
-    }
-
-    // ====================== V4 HOOKED SPLIT ======================
-
-    /// @dev Quote V4 hooked pool, returning 0 on failure.
-    ///      quoteV4 simulates raw AMM math only — it does NOT simulate the hook's
-    ///      afterSwap callback, so any hook that modifies the swap delta (e.g.
-    ///      protocol fees) will make the quote overstate the user-received amount.
-    function _tryQuoteV4Hooked(address tokenIn, address tokenOut, uint256 amount, uint24 fee, int24 tick, address hook)
-        internal
-        view
-        returns (uint256 out)
-    {
-        try _BASE.quoteV4(false, tokenIn, tokenOut, fee, tick, hook, amount) returns (uint256, uint256 o) {
-            out = o;
-        } catch {
-            return 0;
-        }
-    }
-
-    /// @dev Build execute(V4_ROUTER) calldata for a V4 hooked pool swap (ETH input only).
-    function _buildV4HookedCalldata(
-        address to,
-        address tokenIn,
-        address tokenOut,
-        uint256 swapAmount,
-        uint256 amountLimit,
-        uint256 deadline,
-        uint24 hookPoolFee,
-        int24 hookTickSpacing,
-        address hookAddress
-    ) internal pure returns (bytes memory) {
-        // Sort tokens for the V4 pool key (currency0 < currency1)
-        (address c0, address c1) = tokenIn < tokenOut ? (tokenIn, tokenOut) : (tokenOut, tokenIn);
-        bool zeroForOne = tokenIn == c0;
-        bytes memory swapData = abi.encodeWithSelector(
-            IV4Router.swapExactTokensForTokens.selector,
-            swapAmount,
-            amountLimit,
-            zeroForOne,
-            IV4PoolKey(c0, c1, hookPoolFee, hookTickSpacing, hookAddress),
-            "",
-            to,
-            deadline
-        );
-        return abi.encodeWithSelector(IZRouter.execute.selector, V4_ROUTER, swapAmount, swapData);
-    }
-
-    /// @notice Build a split swap that includes a V4 hooked pool as a candidate.
-    ///         ExactIn only. Gathers standard venues + Curve + the hooked pool,
-    ///         finds the top 2, tries splits [100/0, 75/25, 50/50, 25/75, 0/100],
-    ///         and returns the optimal multicall.
-    function buildSplitSwapHooked(
-        address to,
-        address tokenIn,
-        address tokenOut,
-        uint256 swapAmount,
-        uint256 slippageBps,
-        uint256 deadline,
-        uint24 hookPoolFee,
-        int24 hookTickSpacing,
-        address hookAddress
-    ) public view returns (Quote[2] memory legs, bytes memory multicall, uint256 msgValue) {
-        unchecked {
-            tokenIn = _normalizeETH(tokenIn);
-            tokenOut = _normalizeETH(tokenOut);
-
-            // ---- Gather candidates ----
-            // Filter out LIDO (uses callvalue(), unsafe in multicall splits) and WETH_WRAP.
-            (, Quote[] memory baseQuotes) = getQuotes(false, tokenIn, tokenOut, swapAmount);
-            uint256 n;
-            Quote[] memory cands = new Quote[](baseQuotes.length + 2);
-            for (uint256 i; i < baseQuotes.length; ++i) {
-                if (baseQuotes[i].source == AMM.LIDO || baseQuotes[i].source == AMM.WETH_WRAP) {
-                    continue;
-                }
-                cands[n++] = baseQuotes[i];
-            }
-
-            // Curve
-            {
-                (uint256 ci_, uint256 co_, address p_,,,,) = quoteCurve(false, tokenIn, tokenOut, swapAmount, 8);
-                if (p_ != address(0) && co_ > 0) {
-                    cands[n] = _asQuote(AMM.CURVE, ci_, co_);
-                    n++;
-                }
-            }
-
-            // V4 Hooked — ETH input only (ERC20 input hits Unauthorized on V4_ROUTER)
-            uint256 hIdx = type(uint256).max;
-            if (tokenIn == address(0)) {
-                uint256 ho_ =
-                    _tryQuoteV4Hooked(tokenIn, tokenOut, swapAmount, hookPoolFee, hookTickSpacing, hookAddress);
-                if (ho_ > 0) {
-                    hIdx = n;
-                    cands[n] = Quote(AMM.V4_HOOKED, 0, swapAmount, ho_);
-                    n++;
-                }
-            }
-
-            // ---- Top 2 ----
-            uint256 idx1;
-            uint256 idx2;
-            uint256 out1;
-            uint256 out2;
-            for (uint256 i; i < n; ++i) {
-                if (cands[i].amountOut > out1) {
-                    out2 = out1;
-                    idx2 = idx1;
-                    out1 = cands[i].amountOut;
-                    idx1 = i;
-                } else if (cands[i].amountOut > out2) {
-                    out2 = cands[i].amountOut;
-                    idx2 = i;
-                }
-            }
-            if (out1 == 0) revert NoRoute();
-
-            bool ethIn = tokenIn == address(0);
-
-            // ---- Single venue fallback ----
-            if (out2 == 0 || idx1 == idx2) {
-                legs[0] = cands[idx1];
-                if (idx1 == hIdx) {
-                    uint256 lim = SlippageLib.limit(false, legs[0].amountOut, slippageBps);
-                    multicall = _mc1(
-                        _buildV4HookedCalldata(
-                            to, tokenIn, tokenOut, swapAmount, lim, deadline, hookPoolFee, hookTickSpacing, hookAddress
-                        )
-                    );
-                    msgValue = ethIn ? swapAmount : 0;
-                } else {
-                    (, bytes memory cd,, uint256 mv) =
-                        buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
-                    multicall = _mc1(cd);
-                    msgValue = mv;
-                }
-                return (legs, multicall, msgValue);
-            }
-
-            // ---- Try splits ----
-            bool v1h = (idx1 == hIdx);
-            bool v2h = (idx2 == hIdx);
-            Quote memory venue1 = cands[idx1];
-            Quote memory venue2 = cands[idx2];
-
-            uint256[5] memory pcts = [uint256(100), 75, 50, 25, 0];
-            uint256 bestTotal;
-            uint256 bestS;
-
-            for (uint256 s; s < 5; ++s) {
-                uint256 a1 = (swapAmount * pcts[s]) / 100;
-                uint256 a2 = swapAmount - a1;
-                uint256 o1_;
-                uint256 o2_;
-
-                if (a1 > 0) {
-                    o1_ = v1h
-                        ? _tryQuoteV4Hooked(tokenIn, tokenOut, a1, hookPoolFee, hookTickSpacing, hookAddress)
-                        : _requoteForSource(false, tokenIn, tokenOut, a1, venue1).amountOut;
-                }
-                if (a2 > 0) {
-                    o2_ = v2h
-                        ? _tryQuoteV4Hooked(tokenIn, tokenOut, a2, hookPoolFee, hookTickSpacing, hookAddress)
-                        : _requoteForSource(false, tokenIn, tokenOut, a2, venue2).amountOut;
-                }
-
-                uint256 t = o1_ + o2_;
-                if (t > bestTotal) {
-                    bestTotal = t;
-                    bestS = s;
-                }
-            }
-
-            // ---- Build winning split ----
-            uint256 fa1 = (swapAmount * pcts[bestS]) / 100;
-            uint256 fa2 = swapAmount - fa1;
-
-            if (fa1 == 0 || fa2 == 0) {
-                // 100/0 or 0/100 — single venue
-                uint256 winner = fa1 == 0 ? 1 : 0;
-                bool wh = winner == 0 ? v1h : v2h;
-                if (wh) {
-                    uint256 ho_ =
-                        _tryQuoteV4Hooked(tokenIn, tokenOut, swapAmount, hookPoolFee, hookTickSpacing, hookAddress);
-                    legs[winner] = Quote(AMM.V4_HOOKED, 0, swapAmount, ho_);
-                    uint256 lim = SlippageLib.limit(false, ho_, slippageBps);
-                    multicall = _mc1(
-                        _buildV4HookedCalldata(
-                            to, tokenIn, tokenOut, swapAmount, lim, deadline, hookPoolFee, hookTickSpacing, hookAddress
-                        )
-                    );
-                    msgValue = ethIn ? swapAmount : 0;
-                } else {
-                    Quote memory v = winner == 0 ? venue1 : venue2;
-                    legs[winner] = _requoteForSource(false, tokenIn, tokenOut, swapAmount, v);
-                    (, bytes memory cd,, uint256 mv) =
-                        buildBestSwap(to, false, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
-                    multicall = _mc1(cd);
-                    msgValue = mv;
-                }
-                return (legs, multicall, msgValue);
-            }
-
-            // ---- True split: build both legs ----
-            if (v1h) {
-                uint256 ho_ = _tryQuoteV4Hooked(tokenIn, tokenOut, fa1, hookPoolFee, hookTickSpacing, hookAddress);
-                legs[0] = Quote(AMM.V4_HOOKED, 0, fa1, ho_);
-            } else {
-                legs[0] = _requoteForSource(false, tokenIn, tokenOut, fa1, venue1);
-            }
-            if (v2h) {
-                uint256 ho_ = _tryQuoteV4Hooked(tokenIn, tokenOut, fa2, hookPoolFee, hookTickSpacing, hookAddress);
-                legs[1] = Quote(AMM.V4_HOOKED, 0, fa2, ho_);
-            } else {
-                legs[1] = _requoteForSource(false, tokenIn, tokenOut, fa2, venue2);
-            }
-
-            // Guard: if re-quote at partial amount returns zero, revert so frontend
-            // falls through to a non-split strategy instead of building bad calldata.
-            if (legs[0].amountOut == 0 || legs[1].amountOut == 0) revert NoRoute();
-
-            uint256 lim1 = SlippageLib.limit(false, legs[0].amountOut, slippageBps);
-            uint256 lim2 = SlippageLib.limit(false, legs[1].amountOut, slippageBps);
-
-            address legTo = ethIn ? ZROUTER : to;
-
-            // Curve legs with ETH input need a pre-wrap
-            bool wrapLeg1 = ethIn && !v1h && legs[0].source == AMM.CURVE;
-            bool wrapLeg2 = ethIn && !v2h && legs[1].source == AMM.CURVE;
-            uint256 nc = 2 + (ethIn ? 2 : 0) + (wrapLeg1 ? 1 : 0) + (wrapLeg2 ? 1 : 0);
-            bytes[] memory calls_ = new bytes[](nc);
-            uint256 ci;
-
-            // Leg 1
-            if (wrapLeg1) {
-                calls_[ci++] = _wrap(fa1);
-            }
-            if (v1h) {
-                calls_[ci++] = _buildV4HookedCalldata(
-                    legTo, tokenIn, tokenOut, fa1, lim1, deadline, hookPoolFee, hookTickSpacing, hookAddress
-                );
-            } else {
-                bytes memory cd1 =
-                    _buildCalldataFromBest(legTo, false, tokenIn, tokenOut, fa1, lim1, slippageBps, deadline, legs[0]);
-                if (wrapLeg1) assembly ("memory-safe") { mstore(add(cd1, 100), WETH) }
-                calls_[ci++] = cd1;
-            }
-
-            // Leg 2
-            if (wrapLeg2) {
-                calls_[ci++] = _wrap(fa2);
-            }
-            if (v2h) {
-                calls_[ci++] = _buildV4HookedCalldata(
-                    legTo, tokenIn, tokenOut, fa2, lim2, deadline, hookPoolFee, hookTickSpacing, hookAddress
-                );
-            } else {
-                bytes memory cd2 =
-                    _buildCalldataFromBest(legTo, false, tokenIn, tokenOut, fa2, lim2, slippageBps, deadline, legs[1]);
-                if (wrapLeg2) assembly ("memory-safe") { mstore(add(cd2, 100), WETH) }
-                calls_[ci++] = cd2;
-            }
-
-            // Final sweeps for ETH input
-            if (ethIn) {
-                calls_[ci++] = _sweepTo(tokenOut, to);
-                // Sweep any leftover ETH dust (prevents stealable balance in router)
-                calls_[ci++] = _sweepTo(address(0), to);
-            }
-
-            multicall = _mc(calls_);
-            msgValue = ethIn ? swapAmount : 0;
         }
     }
 
@@ -1558,10 +1719,6 @@ contract zQuoter {
     }
 }
 
-function _sortTokens(address tokenA, address tokenB) pure returns (address token0, address token1, bool zeroForOne) {
-    (token0, token1) = (zeroForOne = tokenA < tokenB) ? (tokenA, tokenB) : (tokenB, tokenA);
-}
-
 address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 address constant USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
@@ -1576,27 +1733,6 @@ interface IStETH {
 }
 
 address constant ZROUTER = 0x000000000000FB114709235f1ccBFfb925F600e4;
-address constant V4_ROUTER = 0x00000000000044a361Ae3cAc094c9D1b14Eece97;
-
-struct IV4PoolKey {
-    address currency0;
-    address currency1;
-    uint24 fee;
-    int24 tickSpacing;
-    address hooks;
-}
-
-interface IV4Router {
-    function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256 amountOutMin,
-        bool zeroForOne,
-        IV4PoolKey calldata poolKey,
-        bytes calldata hookData,
-        address to,
-        uint256 deadline
-    ) external payable returns (int256);
-}
 
 interface IRouterExt {
     function unwrap(uint256 amount) external payable;
@@ -1624,9 +1760,6 @@ interface ICurveMetaRegistry {
 interface ICurveStableLike {
     function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
     function get_dx(int128 i, int128 j, uint256 dy) external view returns (uint256);
-    // meta (underlying) variants
-    function get_dy_underlying(int128 i, int128 j, uint256 dx) external view returns (uint256);
-    function get_dx_underlying(int128 i, int128 j, uint256 dy) external view returns (uint256);
 }
 
 interface ICurveCryptoLike {
@@ -1715,5 +1848,4 @@ interface IZRouter {
     function exactETHToWSTETH(address to) external payable returns (uint256 wstOut);
     function ethToExactSTETH(address to, uint256 exactOut) external payable;
     function ethToExactWSTETH(address to, uint256 exactOut) external payable;
-    function execute(address target, uint256 value, bytes calldata data) external payable returns (bytes memory result);
 }

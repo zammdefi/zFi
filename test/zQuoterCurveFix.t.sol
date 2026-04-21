@@ -164,9 +164,8 @@ contract zQuoterCurveFixTest is Test {
     /// @notice Full multicall builder for USDC→USDT must produce valid calldata
     function test_buildBestMulticall_USDC_to_USDT() public {
         uint256 amtIn = 1000e6;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b, bytes[] memory calls, bytes memory multicall,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, _USDT, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b, bytes[] memory calls, bytes memory multicall,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, _USDT, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         emit log_named_uint("output USDT", output);
@@ -190,9 +189,8 @@ contract zQuoterCurveFixTest is Test {
     /// @notice USDC→USDT exact-out also must work
     function test_buildBestMulticall_USDC_to_USDT_exactOut() public {
         uint256 amtOut = 1000e6; // want 1000 USDT
-        (zQuoter.Quote memory a,,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, _USDC, _USDT, amtOut, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, _USDC, _USDT, amtOut, SLIPPAGE, DEADLINE);
 
         uint256 input = a.amountIn;
         emit log_named_uint("USDC needed for 1000 USDT", input);
@@ -222,9 +220,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_USDT_to_USDC() public view {
         uint256 amtIn = 1000e6;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDT, _USDC, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDT, _USDC, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 0, "USDT->USDC: must have output");
@@ -237,9 +234,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_DAI_to_USDC() public view {
         uint256 amtIn = 1000e18; // 1000 DAI
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _DAI, _USDC, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _DAI, _USDC, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 900e6, "DAI->USDC: at least 900 USDC for 1000 DAI");
@@ -248,9 +244,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_DAI_to_USDT() public view {
         uint256 amtIn = 1000e18;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _DAI, _USDT, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _DAI, _USDT, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 900e6, "DAI->USDT: at least 900 USDT");
@@ -259,9 +254,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_USDC_to_DAI() public view {
         uint256 amtIn = 1000e6;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, _DAI, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, _DAI, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 900e18, "USDC->DAI: at least 900 DAI");
@@ -274,9 +268,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_ETH_to_USDC() public view {
         uint256 amtIn = 1e18; // 1 ETH
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _USDC, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 msgValue) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 100e6, "ETH->USDC: at least $100 for 1 ETH");
@@ -285,9 +278,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_ETH_to_USDT() public view {
         uint256 amtIn = 1e18;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _USDT, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 msgValue) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDT, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 100e6, "ETH->USDT: at least $100");
@@ -296,9 +288,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_ETH_to_DAI() public view {
         uint256 amtIn = 1e18;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _DAI, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _DAI, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 100e18, "ETH->DAI: at least $100");
@@ -306,9 +297,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_ETH_to_WBTC() public view {
         uint256 amtIn = 10e18; // 10 ETH
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _WBTC, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _WBTC, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 0, "ETH->WBTC: must have output");
@@ -316,9 +306,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_USDC_to_ETH() public view {
         uint256 amtIn = 1000e6;
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, ETH, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, ETH, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 0, "USDC->ETH: must have output");
@@ -330,9 +319,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_ETH_to_WETH() public view {
         uint256 amtIn = 1e18;
-        (zQuoter.Quote memory a,,, bytes memory multicall, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _WETH, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,, bytes memory multicall, uint256 msgValue) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _WETH, amtIn, SLIPPAGE, DEADLINE);
 
         assertEq(a.amountIn, amtIn, "ETH->WETH: 1:1 input");
         assertEq(a.amountOut, amtIn, "ETH->WETH: 1:1 output");
@@ -342,9 +330,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_WETH_to_ETH() public view {
         uint256 amtIn = 1e18;
-        (zQuoter.Quote memory a,,,, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WETH, ETH, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 msgValue) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WETH, ETH, amtIn, SLIPPAGE, DEADLINE);
 
         assertEq(a.amountIn, amtIn, "WETH->ETH: 1:1");
         assertEq(a.amountOut, amtIn, "WETH->ETH: 1:1");
@@ -374,9 +361,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_exactOut_ETH_to_USDC() public view {
         uint256 wantOut = 1000e6;
-        (zQuoter.Quote memory a,,,, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _USDC, wantOut, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 msgValue) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _USDC, wantOut, SLIPPAGE, DEADLINE);
 
         assertGt(a.amountIn, 0, "exactOut ETH->USDC: needs some ETH");
         assertGt(msgValue, 0, "exactOut ETH->USDC: msgValue > 0");
@@ -384,9 +370,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_exactOut_ETH_to_USDT() public view {
         uint256 wantOut = 1000e6;
-        (zQuoter.Quote memory a,,,, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _USDT, wantOut, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 msgValue) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _USDT, wantOut, SLIPPAGE, DEADLINE);
 
         assertGt(a.amountIn, 0, "exactOut ETH->USDT: needs some ETH");
         assertGt(msgValue, 0, "exactOut ETH->USDT: msgValue > 0");
@@ -417,7 +402,7 @@ contract zQuoterCurveFixTest is Test {
 
     function test_build3Hop_ETH_to_WBTC() public {
         uint256 amtIn = 1e18;
-        try quoter.build3HopMulticall(USER, ETH, _WBTC, amtIn, SLIPPAGE, DEADLINE) returns (
+        try quoter.build3HopMulticall(USER, false, ETH, _WBTC, amtIn, SLIPPAGE, DEADLINE) returns (
             zQuoter.Quote memory a,
             zQuoter.Quote memory b,
             zQuoter.Quote memory c,
@@ -510,7 +495,7 @@ contract zQuoterCurveFixTest is Test {
 
     function test_zeroAmount_buildBestMulticall() public {
         vm.expectRevert();
-        quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 0, SLIPPAGE, DEADLINE, 0, 0, address(0));
+        quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 0, SLIPPAGE, DEADLINE);
     }
 
     function test_zeroAmount_quoteCurve() public view {
@@ -558,9 +543,8 @@ contract zQuoterCurveFixTest is Test {
 
     function test_buildBestMulticall_WBTC_to_USDC() public view {
         uint256 amtIn = 1e7; // 0.1 WBTC (8 decimals)
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WBTC, _USDC, amtIn, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WBTC, _USDC, amtIn, SLIPPAGE, DEADLINE);
 
         uint256 output = b.amountOut > 0 ? b.amountOut : a.amountOut;
         assertGt(output, 0, "WBTC->USDC: must have output");

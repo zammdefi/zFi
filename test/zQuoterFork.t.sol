@@ -18,11 +18,6 @@ contract zQuoterForkTest is Test {
     address constant _BOLD = 0x6440f144b7e50D6a8439336510312d2F54beB01D;
     address constant _ROUTER = 0x000000000000FB114709235f1ccBFfb925F600e4;
 
-    // Sample V4 hooked-pool params for the hooked-split helper
-    address constant _HOOK_ADDR = 0xfAaad5B731F52cDc9746F2414c823eca9B06E844;
-    uint24 constant HOOK_FEE = 3000;
-    int24 constant HOOK_TICK = 60;
-
     address constant USER = address(0xBEEF);
     uint256 constant DEADLINE = type(uint256).max;
     uint256 constant SLIPPAGE = 100; // 1%
@@ -121,9 +116,8 @@ contract zQuoterForkTest is Test {
     ///         single-hop and produce valid calldata.
     function test_multicall_exactOut_ETH_to_DAI_small() public {
         uint256 amount = 3e18; // 3 DAI
-        (zQuoter.Quote memory qa,,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _DAI, amount, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory qa,,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _DAI, amount, SLIPPAGE, DEADLINE);
         assertGt(qa.amountIn, 0, "must find a route");
         assertGt(mv, 0, "ETH input requires msg.value");
         // Sanity: 3 DAI ≈ $3, ETH ≈ $2000+, so amountIn should be < 0.01 ETH
@@ -245,39 +239,34 @@ contract zQuoterForkTest is Test {
     // -- ETH input pairs (exactIn) --
 
     function test_multicall_exactIn_ETH_to_USDC() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 100e6);
         assertGt(mv, 0);
     }
 
     function test_multicall_exactIn_ETH_to_USDT() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _USDT, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDT, 1e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 100e6);
         assertGt(mv, 0);
     }
 
     function test_multicall_exactIn_ETH_to_DAI() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _DAI, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _DAI, 1e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 100e18);
     }
 
     function test_multicall_exactIn_ETH_to_WBTC() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _WBTC, 10e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _WBTC, 10e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
     }
 
     function test_multicall_exactIn_ETH_to_wstETH() public {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _WSTETH, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _WSTETH, 1e18, SLIPPAGE, DEADLINE);
         uint256 out = _output(a, b);
         assertGt(out, 0, "ETH->wstETH: must have output");
         // wstETH is worth more than ETH, so output < input
@@ -285,9 +274,8 @@ contract zQuoterForkTest is Test {
     }
 
     function test_multicall_exactIn_ETH_to_stETH() public {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _STETH, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _STETH, 1e18, SLIPPAGE, DEADLINE);
         uint256 out = _output(a, b);
         assertGt(out, 0, "ETH->stETH: must have output");
         // stETH is ~1:1 with ETH
@@ -297,34 +285,30 @@ contract zQuoterForkTest is Test {
     // -- ETH input pairs (exactOut) --
 
     function test_multicall_exactOut_ETH_to_USDC() public view {
-        (zQuoter.Quote memory a,,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _USDC, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _USDC, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 0);
         assertGt(mv, 0);
     }
 
     function test_multicall_exactOut_ETH_to_USDT() public view {
-        (zQuoter.Quote memory a,,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _USDT, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _USDT, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 0);
         assertGt(mv, 0);
     }
 
     function test_multicall_exactOut_ETH_to_DAI() public {
-        (zQuoter.Quote memory a,,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _DAI, 100e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _DAI, 100e18, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 1e16);
         assertLt(a.amountIn, 1e18);
         assertGt(mv, 0);
     }
 
     function test_multicall_exactOut_ETH_to_wstETH() public {
-        (zQuoter.Quote memory a,,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, ETH, _WSTETH, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, ETH, _WSTETH, 1e18, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 1e18, "wstETH is worth > 1 ETH");
         assertLt(a.amountIn, 2e18, "but < 2 ETH");
         assertGt(mv, 0);
@@ -333,99 +317,86 @@ contract zQuoterForkTest is Test {
     // -- ERC20 → ETH (reverse paths) --
 
     function test_multicall_exactIn_USDC_to_ETH() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, ETH, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, ETH, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
         assertEq(mv, 0, "ERC20 input: no ETH needed");
     }
 
     function test_multicall_exactIn_DAI_to_ETH() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _DAI, ETH, 1000e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _DAI, ETH, 1000e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
     }
 
     function test_multicall_exactIn_WBTC_to_ETH() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WBTC, ETH, 1e7, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WBTC, ETH, 1e7, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
     }
 
     function test_multicall_exactIn_USDT_to_ETH() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDT, ETH, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDT, ETH, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
     }
 
     // -- ERC20 → ERC20 --
 
     function test_multicall_exactIn_USDC_to_USDT() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, _USDT, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, _USDT, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 900e6);
     }
 
     function test_multicall_exactIn_USDT_to_USDC() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDT, _USDC, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDT, _USDC, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 900e6);
     }
 
     function test_multicall_exactIn_DAI_to_USDC() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _DAI, _USDC, 1000e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _DAI, _USDC, 1000e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 900e6);
     }
 
     function test_multicall_exactIn_DAI_to_USDT() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _DAI, _USDT, 1000e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _DAI, _USDT, 1000e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 900e6);
     }
 
     function test_multicall_exactIn_USDC_to_DAI() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, _DAI, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, _DAI, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 900e18);
     }
 
     function test_multicall_exactIn_WBTC_to_USDC() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WBTC, _USDC, 1e7, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WBTC, _USDC, 1e7, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
     }
 
     function test_multicall_exactIn_USDC_to_WBTC() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _USDC, _WBTC, 10000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _USDC, _WBTC, 10000e6, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0);
     }
 
     // -- ERC20 → ERC20 exactOut --
 
     function test_multicall_exactOut_USDC_to_USDT() public {
-        (zQuoter.Quote memory a,,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, _USDC, _USDT, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, _USDC, _USDT, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 900e6);
         assertLt(a.amountIn, 1100e6);
     }
 
     function test_multicall_exactOut_USDC_to_DAI() public {
-        (zQuoter.Quote memory a,,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, true, _USDC, _DAI, 1000e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, true, _USDC, _DAI, 1000e18, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 900e6);
         assertLt(a.amountIn, 1100e6);
     }
@@ -433,9 +404,8 @@ contract zQuoterForkTest is Test {
     // -- ETH/WETH wrap/unwrap --
 
     function test_multicall_ETH_to_WETH() public view {
-        (zQuoter.Quote memory a,,, bytes memory mc, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _WETH, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,, bytes memory mc, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _WETH, 1e18, SLIPPAGE, DEADLINE);
         assertEq(a.amountIn, 1e18);
         assertEq(a.amountOut, 1e18);
         assertEq(mv, 1e18);
@@ -443,9 +413,8 @@ contract zQuoterForkTest is Test {
     }
 
     function test_multicall_WETH_to_ETH() public view {
-        (zQuoter.Quote memory a,,,, uint256 mv) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WETH, ETH, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,,, uint256 mv) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WETH, ETH, 1e18, SLIPPAGE, DEADLINE);
         assertEq(a.amountIn, 1e18);
         assertEq(a.amountOut, 1e18);
         assertEq(mv, 0);
@@ -454,16 +423,14 @@ contract zQuoterForkTest is Test {
     // -- Large amounts (triggers 2-hop hub routing) --
 
     function test_multicall_exactIn_ETH_to_USDC_large() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _USDC, 100e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 100e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 10000e6, "100 ETH should get >$10k USDC");
     }
 
     function test_multicall_exactIn_ETH_to_WBTC_large() public view {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _WBTC, 100e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _WBTC, 100e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0, "100 ETH should get some WBTC");
     }
 
@@ -471,9 +438,8 @@ contract zQuoterForkTest is Test {
 
     function test_multicall_exactOut_refundTo_differs() public {
         address refundAddr = address(0xCAFE);
-        (zQuoter.Quote memory a,,, bytes memory mc,) = quoter.buildBestSwapViaETHMulticall(
-            USER, refundAddr, true, ETH, _USDC, 1000e6, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,, bytes memory mc,) =
+            quoter.buildBestSwapViaETHMulticall(USER, refundAddr, true, ETH, _USDC, 1000e6, SLIPPAGE, DEADLINE);
         assertGt(a.amountIn, 0);
         assertGt(mc.length, 0);
     }
@@ -481,9 +447,8 @@ contract zQuoterForkTest is Test {
     // -- to=ZROUTER (chaining mode, used by dapp for multi-step flows) --
 
     function test_multicall_to_router_chaining() public view {
-        (zQuoter.Quote memory a,,, bytes memory mc,) = quoter.buildBestSwapViaETHMulticall(
-            _ROUTER, _ROUTER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a,,, bytes memory mc,) =
+            quoter.buildBestSwapViaETHMulticall(_ROUTER, _ROUTER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE);
         assertGt(a.amountOut, 0);
         assertGt(mc.length, 0);
     }
@@ -699,7 +664,7 @@ contract zQuoterForkTest is Test {
     // ================================================================
 
     function test_3hop_ETH_to_WBTC() public {
-        try quoter.build3HopMulticall(USER, ETH, _WBTC, 1e18, SLIPPAGE, DEADLINE) returns (
+        try quoter.build3HopMulticall(USER, false, ETH, _WBTC, 1e18, SLIPPAGE, DEADLINE) returns (
             zQuoter.Quote memory a, zQuoter.Quote memory, zQuoter.Quote memory c, bytes[] memory, bytes memory, uint256
         ) {
             assertGt(c.amountOut, 0);
@@ -710,7 +675,7 @@ contract zQuoterForkTest is Test {
     }
 
     function test_3hop_USDC_to_WBTC() public {
-        try quoter.build3HopMulticall(USER, _USDC, _WBTC, 10000e6, SLIPPAGE, DEADLINE) returns (
+        try quoter.build3HopMulticall(USER, false, _USDC, _WBTC, 10000e6, SLIPPAGE, DEADLINE) returns (
             zQuoter.Quote memory,
             zQuoter.Quote memory,
             zQuoter.Quote memory c,
@@ -724,7 +689,7 @@ contract zQuoterForkTest is Test {
     }
 
     function test_3hop_DAI_to_WBTC() public {
-        try quoter.build3HopMulticall(USER, _DAI, _WBTC, 10000e18, SLIPPAGE, DEADLINE) returns (
+        try quoter.build3HopMulticall(USER, false, _DAI, _WBTC, 10000e18, SLIPPAGE, DEADLINE) returns (
             zQuoter.Quote memory, zQuoter.Quote memory, zQuoter.Quote memory c, bytes[] memory, bytes memory, uint256
         ) {
             assertGt(c.amountOut, 0);
@@ -785,7 +750,7 @@ contract zQuoterForkTest is Test {
 
     function test_zeroAmount_multicall_reverts() public {
         vm.expectRevert();
-        quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 0, SLIPPAGE, DEADLINE, 0, 0, address(0));
+        quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 0, SLIPPAGE, DEADLINE);
     }
 
     function test_zeroAmount_quoteCurve_graceful() public view {
@@ -802,44 +767,18 @@ contract zQuoterForkTest is Test {
     }
 
     // ================================================================
-    //  12. V4 hooked pool helper
-    // ================================================================
-
-    function test_splitSwapHooked_ETH_to_USDC() public {
-        // Even without a real hooked pool, this should fall back to standard split
-        (zQuoter.Quote[2] memory legs, bytes memory mc, uint256 mv) =
-            quoter.buildSplitSwapHooked(USER, ETH, _USDC, 5e18, SLIPPAGE, DEADLINE, HOOK_FEE, HOOK_TICK, _HOOK_ADDR);
-        assertGt(legs[0].amountOut + legs[1].amountOut, 0);
-        assertGt(mc.length, 0);
-        assertGt(mv, 0);
-    }
-
-    function test_splitSwapHooked_noHook_equals_splitSwap() public {
-        // Without a hook address, should behave identically to buildSplitSwap
-        (zQuoter.Quote[2] memory legs1,,) = quoter.buildSplitSwap(USER, ETH, _USDC, 5e18, SLIPPAGE, DEADLINE);
-        (zQuoter.Quote[2] memory legs2,,) =
-            quoter.buildSplitSwapHooked(USER, ETH, _USDC, 5e18, SLIPPAGE, DEADLINE, 0, 0, address(0));
-
-        uint256 total1 = legs1[0].amountOut + legs1[1].amountOut;
-        uint256 total2 = legs2[0].amountOut + legs2[1].amountOut;
-        assertEq(total1, total2, "no hook: identical output");
-    }
-
-    // ================================================================
-    //  13. wstETH pairs (staking token swaps used in dapp)
+    //  12. wstETH pairs (staking token swaps used in dapp)
     // ================================================================
 
     function test_multicall_exactIn_wstETH_to_USDC() public {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WSTETH, _USDC, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WSTETH, _USDC, 1e18, SLIPPAGE, DEADLINE);
         assertGt(_output(a, b), 0, "wstETH->USDC: must have output");
     }
 
     function test_multicall_exactIn_wstETH_to_ETH() public {
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _WSTETH, ETH, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, _WSTETH, ETH, 1e18, SLIPPAGE, DEADLINE);
         uint256 out = _output(a, b);
         assertGt(out, 1e18, "wstETH->ETH: wstETH is worth > 1 ETH");
     }
@@ -849,9 +788,7 @@ contract zQuoterForkTest is Test {
     // ================================================================
 
     function test_multicall_exactIn_ETH_to_BOLD() public {
-        try quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _BOLD, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        ) returns (
+        try quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _BOLD, 1e18, SLIPPAGE, DEADLINE) returns (
             zQuoter.Quote memory a, zQuoter.Quote memory b, bytes[] memory, bytes memory, uint256
         ) {
             assertGt(_output(a, b), 0, "ETH->BOLD: must have output");
@@ -861,9 +798,7 @@ contract zQuoterForkTest is Test {
     }
 
     function test_multicall_exactIn_BOLD_to_ETH() public {
-        try quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, _BOLD, ETH, 1000e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        ) returns (
+        try quoter.buildBestSwapViaETHMulticall(USER, USER, false, _BOLD, ETH, 1000e18, SLIPPAGE, DEADLINE) returns (
             zQuoter.Quote memory a, zQuoter.Quote memory b, bytes[] memory, bytes memory, uint256
         ) {
             assertGt(_output(a, b), 0, "BOLD->ETH: must have output");
@@ -876,9 +811,8 @@ contract zQuoterForkTest is Test {
 
     function test_consistency_single_vs_multicall_ETH_USDC() public {
         (zQuoter.Quote memory bestSingle,,,) = quoter.buildBestSwap(USER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE);
-        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) = quoter.buildBestSwapViaETHMulticall(
-            USER, USER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE, 0, 0, address(0)
-        );
+        (zQuoter.Quote memory a, zQuoter.Quote memory b,,,) =
+            quoter.buildBestSwapViaETHMulticall(USER, USER, false, ETH, _USDC, 1e18, SLIPPAGE, DEADLINE);
 
         uint256 mcOutput = _output(a, b);
         // Multicall should be >= single-hop (it tries single-hop first, then hub routing)
@@ -917,5 +851,115 @@ contract zQuoterForkTest is Test {
     function test_quoteV3_exactIn_ETH_USDC_3000() public view {
         (, uint256 ao) = _BASE.quoteV3(false, ETH, _USDC, 3000, 1e18);
         assertGt(ao, 0, "V3 3000bp ETH->USDC");
+    }
+
+    // ================================================================
+    //  17. Deadline sentinel collision (DEADLINE=type(uint256).max)
+    //      The router interprets deadline==max on swapV2 as "use Sushi".
+    //      When a caller passes max, the quoter must normalize to a finite
+    //      deadline for UNI_V2 routes, while still forwarding the sentinel
+    //      for explicit SUSHI routes.
+    // ================================================================
+
+    /// @dev Decode the trailing `deadline` from a swapV2 calldata blob.
+    ///      Layout: sel(4) + to(32) + exactOut(32) + tokenIn(32) + tokenOut(32)
+    ///            + swapAmount(32) + amountLimit(32) + deadline(32) = 228 bytes.
+    function _extractV2Deadline(bytes memory cd) internal pure returns (bytes4 sel, uint256 dl) {
+        assembly {
+            sel := mload(add(cd, 32))
+            dl := mload(add(cd, add(32, sub(mload(cd), 32))))
+        }
+    }
+
+    function test_deadlineMax_V2_route_does_not_become_sushi() public {
+        // Find a pair that the base quoter tends to route through UNI_V2.
+        // If the best isn't V2 at this block, skip the assertion softly.
+        (zQuoter.Quote memory best, bytes memory cd,,) =
+            quoter.buildBestSwap(USER, false, _WBTC, _USDC, 1e6, SLIPPAGE, type(uint256).max);
+        if (best.source != zQuoter.AMM.UNI_V2) {
+            // No V2 route selected at this fork — nothing to verify here.
+            return;
+        }
+        (bytes4 sel, uint256 dl) = _extractV2Deadline(cd);
+        assertEq(sel, IZRouter.swapV2.selector, "expected swapV2 calldata");
+        assertTrue(dl != type(uint256).max, "UNI_V2 must not carry sushi sentinel");
+        assertGt(dl, block.timestamp, "deadline must be in the future");
+    }
+
+    // ================================================================
+    //  18. Split/hybrid ETH<->WETH trivial-wrap fast path.
+    //      Previously reverted NoRoute; now should delegate to buildBestSwap.
+    // ================================================================
+
+    function test_splitSwap_ETH_WETH_trivial_wrap() public view {
+        (zQuoter.Quote[2] memory legs, bytes memory mc, uint256 mv) =
+            quoter.buildSplitSwap(USER, ETH, _WETH, 1e18, SLIPPAGE, DEADLINE);
+        assertEq(uint256(legs[0].source), uint256(zQuoter.AMM.WETH_WRAP));
+        assertGt(mc.length, 0);
+        assertEq(mv, 1e18);
+    }
+
+    function test_hybridSplit_WETH_ETH_trivial_wrap() public view {
+        (zQuoter.Quote[2] memory legs, bytes memory mc, uint256 mv) =
+            quoter.buildHybridSplit(USER, _WETH, ETH, 1e18, SLIPPAGE, DEADLINE);
+        assertEq(uint256(legs[0].source), uint256(zQuoter.AMM.WETH_WRAP));
+        assertGt(mc.length, 0);
+        assertEq(mv, 0);
+    }
+
+    // ================================================================
+    //  19. Split fallback leg metadata must match actual calldata source.
+    //      buildBestSwap may select Curve/Lido which aren't in the split
+    //      candidate set; the returned legs[] must reflect the actual pick.
+    // ================================================================
+
+    function test_splitSwap_fallback_legs_match_best() public view {
+        // USDC<->USDT is the canonical case where buildBestSwap tends to pick
+        // Curve while the base candidate set doesn't contain Curve. At low
+        // amounts the split degrades to a single-venue fallback.
+        (zQuoter.Quote[2] memory legs,,) = quoter.buildSplitSwap(USER, _USDC, _USDT, 100e6, SLIPPAGE, DEADLINE);
+        // If a Curve route was the actual best, legs[0] must advertise Curve,
+        // not whatever the _BASE candidates named.
+        (zQuoter.Quote memory actualBest,,,) =
+            quoter.buildBestSwap(USER, false, _USDC, _USDT, 100e6, SLIPPAGE, DEADLINE);
+        // Either it's a true split (both legs populated) or the fallback set legs[0]=actualBest.
+        bool trueSplit = legs[0].amountOut != 0 && legs[1].amountOut != 0;
+        if (!trueSplit) {
+            assertEq(uint256(legs[0].source), uint256(actualBest.source), "legs[0] source must match buildBestSwap");
+        }
+    }
+
+    // ================================================================
+    //  20. buildHybridSplit must not synthesize a hub via address(0)
+    //      when no 2-hop hub route exists. BOLD<->BOLD-only pairs that
+    //      have single-hop but no hub route should just emit the direct.
+    // ================================================================
+
+    function test_hybridSplit_no_hub_falls_back_to_direct() public view {
+        // ETH -> BOLD has a V4 single-hop but limited hub alternatives.
+        // We just need this call to not revert and to produce a sensible result.
+        try quoter.buildHybridSplit(USER, ETH, _BOLD, 1e18, SLIPPAGE, DEADLINE) returns (
+            zQuoter.Quote[2] memory legs, bytes memory mc, uint256 mv
+        ) {
+            uint256 total = legs[0].amountOut + legs[1].amountOut;
+            assertGt(total, 0, "hybrid must produce output");
+            assertGt(mc.length, 0);
+            mv; // unused
+        } catch {
+            // Acceptable if even buildBestSwap can't route — BOLD may be thin.
+        }
+    }
+
+    function test_deadlineMax_SUSHI_route_keeps_sentinel() public view {
+        // If SUSHI is the best source for some pair, verify the builder forwards max.
+        // We piggy-back on quoteV2(sushi=true) to probe liquidity without hard-coding
+        // a pool; if the router has no SUSHI best, skip quietly.
+        (, uint256 ao) = _BASE.quoteV2(false, ETH, _USDC, 1e18, true);
+        if (ao == 0) return;
+        (zQuoter.Quote memory best, bytes memory cd,,) =
+            quoter.buildBestSwap(USER, false, ETH, _USDC, 1e18, SLIPPAGE, type(uint256).max);
+        if (best.source != zQuoter.AMM.SUSHI) return;
+        (, uint256 dl) = _extractV2Deadline(cd);
+        assertEq(dl, type(uint256).max, "SUSHI route must preserve sentinel");
     }
 }

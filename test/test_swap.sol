@@ -12,8 +12,7 @@ interface IQuoter {
         UNI_V4,
         CURVE,
         LIDO,
-        WETH_WRAP,
-        V4_HOOKED
+        WETH_WRAP
     }
 
     struct Quote {
@@ -31,10 +30,7 @@ interface IQuoter {
         address tokenOut,
         uint256 swapAmount,
         uint256 slippageBps,
-        uint256 deadline,
-        uint24 hookPoolFee,
-        int24 hookTickSpacing,
-        address hookAddress
+        uint256 deadline
     )
         external
         view
@@ -75,7 +71,7 @@ contract TestSwap is Test {
 
     function test_buildMulticall() public {
         (IQuoter.Quote memory a, IQuoter.Quote memory b,, bytes memory multicall, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            address(this), address(this), true, address(0), DAI, 3e18, 50, type(uint256).max, 0, 0, address(0)
+            address(this), address(this), true, address(0), DAI, 3e18, 50, type(uint256).max
         );
         emit log_named_uint("leg_a.source", uint256(a.source));
         emit log_named_uint("leg_a.feeBps", a.feeBps);
@@ -90,7 +86,7 @@ contract TestSwap is Test {
     function test_executeSwap() public {
         vm.deal(address(this), 1 ether);
         (,,, bytes memory multicall, uint256 msgValue) = quoter.buildBestSwapViaETHMulticall(
-            address(this), address(this), true, address(0), DAI, 3e18, 50, type(uint256).max, 0, 0, address(0)
+            address(this), address(this), true, address(0), DAI, 3e18, 50, type(uint256).max
         );
         emit log_named_uint("msgValue", msgValue);
         (bool ok, bytes memory ret) = ZROUTER.call{value: msgValue}(multicall);

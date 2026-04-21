@@ -2660,7 +2660,7 @@ function ppRequestZapEstimate() {
             ZROUTER_ADDRESS, _connectedAddress || ZERO_ADDRESS, false,
             ZERO_ADDRESS, WSTETH_ADDRESS,
             wei, 50n, deadline,
-            0, 0, ZERO_ADDRESS, { blockTag: "latest" }
+            { blockTag: "latest" }
           );
         }),
       ]);
@@ -3137,7 +3137,7 @@ async function ppBuildZapDepositPlan(intent, { quiet = false } = {}) {
         ZROUTER_ADDRESS, _connectedAddress, false,
         ZERO_ADDRESS, WSTETH_ADDRESS,
         intent.amount, BigInt(slippageBps), deadline,
-        0, 0, ZERO_ADDRESS, { blockTag: 'latest' }
+        { blockTag: 'latest' }
       );
     })),
   ]);
