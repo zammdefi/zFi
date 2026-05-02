@@ -10,9 +10,45 @@ const ERC20_TRANSFER_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)"
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)"
 ];
 const INDEXER_BASE = "https://coinchan-indexer-production.up.railway.app";
+
+// SLOW protocol — time-delayed transfers with reverse / clawback / optional keeper tip.
+// Verified source: 0x000000000000888741B254d37e1b27128AfEAaBC
+const SLOW_ADDRESS = "0x000000000000888741B254d37e1b27128AfEAaBC";
+const SLOW_ABI = [
+  "function gate() view returns (address)",
+  "function depositTo(address token, address to, uint256 amount, uint96 delay, bytes data) payable returns (uint256)",
+  "function depositToWithTip(address token, address to, uint256 amount, uint96 delay, uint256 tip, bytes data) payable returns (uint256)",
+  "function getOutboundTransfers(address user) view returns (uint256[])",
+  "function getInboundTransfers(address user) view returns (uint256[])",
+  "function outboundTransferCount(address user) view returns (uint256)",
+  "function inboundTransferCount(address user) view returns (uint256)",
+  "function pendingTransfers(uint256) view returns (uint96 timestamp, address from, address to, uint256 id, uint256 amount)",
+  "function guardians(address) view returns (address)",
+  "function predictTransferId(address from, address to, uint256 id, uint256 amount) view returns (uint256)",
+  "function decodeId(uint256 id) pure returns (address token, uint256 delay)",
+  "function claim(uint256 transferId)",
+  "function unlock(uint256 transferId)",
+  "function reverse(uint256 transferId)",
+  "function clawback(uint256 transferId)",
+  "function withdrawFrom(address from, address to, uint256 id, uint256 amount)",
+  "function balanceOf(address account, uint256 id) view returns (uint256)",
+  "function multicall(bytes[] data) returns (bytes[])",
+  "event TransferPending(uint256 indexed transferId, uint256 indexed delay)",
+  "event TransferClaimed(uint256 indexed transferId)",
+  "event TransferReversed(uint256 indexed transferId)",
+  "event TransferClawedBack(uint256 indexed transferId)"
+];
+const SLOW_GATE_ABI = [
+  "function tips(uint256) view returns (uint96 amount, address sender)",
+  "function claim(uint256 transferId)",
+  "function claimMany(uint256[] transferIds)",
+  "function refundTip(uint256 transferId)"
+];
+const SLOW_CLAWBACK_GRACE = 30 * 86400; // sender clawback unlocks at expiry + 30d
 
 let _sendToken = 'ETH';
 let _sendResolvedAddr = null;
@@ -20,6 +56,15 @@ let _sendResolveSeq = 0;
 let _sendDebounce = null;
 let _sendTokenBal = null;
 let _sendTokenDec = 18;
+
+// SLOW delay state
+let _sendDelaySecs = 0;
+let _sendAutoClaim = false;
+let _sendTipWei = 0n;
+let _slowGateAddr = null;
+let _slowHasGuardian = false; // refreshed on sendLoadSlowTransfers
+let _slowFocusTransferId = null; // deep-link target — set via ?xfer=, cleared after first highlight
+const _slowTokenMetaCache = new Map();
 
 function sendUpdateTokenDisplay() {
   const t = tokens[_sendToken];
@@ -64,7 +109,144 @@ function sendUpdateButton() {
   const btn = $('sendBtn');
   if (!_connectedAddress) { btn.disabled = false; btn.textContent = 'Connect Wallet'; return; }
   btn.disabled = false;
-  btn.textContent = $('sendUnlockTime').value ? 'Create Timelock' : 'Send';
+  if ($('sendUnlockTime').value) btn.textContent = 'Create Timelock';
+  else if (_sendDelaySecs > 0) btn.textContent = _sendAutoClaim ? 'Send via SLOW (auto-claim)' : 'Send via SLOW';
+  else btn.textContent = 'Send';
+}
+
+// Open one option panel (Lock or Delay) and close the other — they're mutually exclusive.
+function sendToggleOption(which) {
+  const isLock = which === 'Lock';
+  const myWrap = $(isLock ? 'sendLockWrap' : 'sendDelayWrap');
+  const myChev = $(isLock ? 'sendLockChevron' : 'sendDelayChevron');
+  const otherWrap = $(isLock ? 'sendDelayWrap' : 'sendLockWrap');
+  const otherChev = $(isLock ? 'sendDelayChevron' : 'sendLockChevron');
+  const opening = myWrap.style.maxHeight === '0px' || myWrap.style.maxHeight === '';
+  // Close the other panel and reset its state
+  otherWrap.style.maxHeight = '0px';
+  otherWrap.style.opacity = '0';
+  if (otherChev) otherChev.innerHTML = '&#9654;';
+  if (isLock && opening) {
+    sendClearDelaySelection();
+  } else if (!isLock && opening) {
+    if ($('sendUnlockTime')) $('sendUnlockTime').value = '';
+  }
+  // Toggle this panel
+  myWrap.style.maxHeight = opening ? (isLock ? '60px' : '260px') : '0px';
+  myWrap.style.opacity = opening ? '1' : '0';
+  if (myChev) myChev.innerHTML = opening ? '&#9660;' : '&#9654;';
+  if (!opening) {
+    if (isLock) { if ($('sendUnlockTime')) $('sendUnlockTime').value = ''; }
+    else { sendClearDelaySelection(); }
+  }
+  sendUpdateButton();
+}
+
+function sendClearDelaySelection() {
+  _sendDelaySecs = 0;
+  _sendAutoClaim = false;
+  _sendTipWei = 0n;
+  document.querySelectorAll('#sendDelayChips .delay-chip').forEach(b => b.classList.remove('active'));
+  const c = $('sendDelayCustom'); if (c) c.value = '';
+  const ac = $('sendAutoClaim'); if (ac) ac.checked = false;
+  const r = $('sendDelayResolved'); if (r) r.textContent = '';
+  const tp = $('sendTipPreview'); if (tp) tp.textContent = '';
+}
+
+// Parse "10m", "2h", "1d", "30s", "90", "1.5h" → seconds (integer, >0). Returns 0 if invalid.
+function sendParseDelay(input) {
+  if (!input) return 0;
+  const s = String(input).trim().toLowerCase().replace(/\s+/g, '');
+  const m = s.match(/^(\d+(?:\.\d+)?)([smhdw])?$/);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  if (!isFinite(n) || n <= 0) return 0;
+  const mult = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 }[m[2] || 's'];
+  return Math.floor(n * mult);
+}
+
+function sendFormatDelay(secs) {
+  if (secs >= 604800 && secs % 604800 === 0) { const n = secs / 604800; return n + (n === 1 ? ' week' : ' weeks'); }
+  if (secs >= 86400) { const n = Math.round(secs / 86400 * 10) / 10; return n + (n === 1 ? ' day' : ' days'); }
+  if (secs >= 3600) { const n = Math.round(secs / 3600 * 10) / 10; return n + (n === 1 ? ' hour' : ' hours'); }
+  if (secs >= 60) { const n = Math.round(secs / 60 * 10) / 10; return n + (n === 1 ? ' minute' : ' minutes'); }
+  return secs + (secs === 1 ? ' second' : ' seconds');
+}
+
+function sendApplyDelay(secs) {
+  _sendDelaySecs = secs;
+  const r = $('sendDelayResolved');
+  if (r) {
+    if (secs > 0) {
+      const matures = new Date(Date.now() + secs * 1000);
+      r.innerHTML = 'Recipient can claim after <strong style="color:var(--fg)">' + esc(matures.toLocaleString()) + '</strong> &middot; reversible until then';
+    } else {
+      r.textContent = '';
+    }
+  }
+  sendUpdateTipPreview();
+  sendUpdateButton();
+  if (typeof syncSendURL === 'function') syncSendURL();
+}
+
+// Setter for the deep-link transfer focus target. Used by the URL parser in
+// index.html, which lives in a different script tag and can't write to send.js's
+// top-level `let` directly.
+function sendSetFocusTransferId(id) {
+  _slowFocusTransferId = (id == null) ? null : String(id);
+}
+
+// Apply a SLOW delay spec from a deep-link or external caller. Accepts either a
+// human shorthand ("10m", "1h", "1.5d") or raw integer seconds. Opens the Delay
+// panel, selects a matching chip if one exists, otherwise fills the custom input.
+function sendApplyDeepLinkDelay(spec, autoClaim) {
+  const secs = sendParseDelay(spec);
+  if (secs <= 0) return;
+  // Open the Delay panel if it isn't open. sendToggleOption toggles, so only call
+  // when currently closed.
+  const wrap = $('sendDelayWrap');
+  if (wrap && (wrap.style.maxHeight === '0px' || wrap.style.maxHeight === '')) {
+    sendToggleOption('Delay');
+  }
+  // Match a chip by data-secs. If a chip matches, activate it; otherwise fill custom.
+  let matched = null;
+  document.querySelectorAll('#sendDelayChips .delay-chip').forEach(b => {
+    b.classList.remove('active');
+    if (parseInt(b.dataset.secs, 10) === secs) matched = b;
+  });
+  const cust = $('sendDelayCustom');
+  if (matched) {
+    matched.classList.add('active');
+    if (cust) cust.value = '';
+  } else if (cust) {
+    cust.value = String(spec).trim();
+  }
+  sendApplyDelay(secs);
+  if (autoClaim) {
+    const ac = $('sendAutoClaim');
+    if (ac && !ac.checked) { ac.checked = true; ac.dispatchEvent(new Event('change')); }
+  }
+}
+
+// Suggest a sensible default keeper tip based on current gas price. Tip is paid in ETH
+// regardless of token. Heuristic: ~120k gas at current gasPrice × 1.5 buffer.
+async function sendUpdateTipPreview() {
+  const tp = $('sendTipPreview');
+  if (!tp) return;
+  if (_sendDelaySecs === 0 || !_sendAutoClaim) { tp.textContent = ''; _sendTipWei = 0n; return; }
+  tp.textContent = 'Estimating keeper tip...';
+  try {
+    const rpc = await quoteRPC.call(r => r);
+    const fee = await rpc.getFeeData();
+    const gp = fee.maxFeePerGas || fee.gasPrice || 2_000_000_000n;
+    // 120k gas × 1.5 (keeper margin) = effective 180k
+    const tipWei = gp * 180_000n;
+    _sendTipWei = tipWei;
+    tp.textContent = 'Keeper tip ≈ ' + (+ethers.formatEther(tipWei)).toFixed(6) + ' ETH (refundable if you/recipient settle directly)';
+  } catch {
+    _sendTipWei = ethers.parseEther('0.0005');
+    tp.textContent = 'Keeper tip ≈ ' + (+ethers.formatEther(_sendTipWei)).toFixed(6) + ' ETH (estimate; refundable if not used)';
+  }
 }
 
 // Recipient resolution
@@ -90,6 +272,34 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const ut = $('sendUnlockTime');
   if (ut) ut.addEventListener('input', sendUpdateButton);
+
+  // SLOW delay UI bindings
+  document.querySelectorAll('#sendDelayChips .delay-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const secs = parseInt(btn.dataset.secs, 10);
+      document.querySelectorAll('#sendDelayChips .delay-chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const cust = $('sendDelayCustom'); if (cust) cust.value = '';
+      sendApplyDelay(secs);
+    });
+  });
+  const dCustom = $('sendDelayCustom');
+  if (dCustom) {
+    dCustom.addEventListener('input', () => {
+      document.querySelectorAll('#sendDelayChips .delay-chip').forEach(b => b.classList.remove('active'));
+      const secs = sendParseDelay(dCustom.value);
+      sendApplyDelay(secs);
+    });
+  }
+  const ac = $('sendAutoClaim');
+  if (ac) {
+    ac.addEventListener('change', () => {
+      _sendAutoClaim = ac.checked;
+      sendUpdateTipPreview();
+      sendUpdateButton();
+      if (typeof syncSendURL === 'function') syncSendURL();
+    });
+  }
 });
 
 async function sendResolveName(name) {
@@ -151,9 +361,64 @@ async function doSendOrLock() {
   try { amount = ethers.parseUnits(amtStr, dec); } catch { statusEl.textContent = 'Invalid amount'; statusEl.className = 'status show error'; return; }
   if (_sendTokenBal != null && amount > _sendTokenBal) { statusEl.textContent = 'Insufficient ' + sym + ' balance'; statusEl.className = 'status show error'; return; }
   const isTimelock = !!unlockStr;
+  const isDelayed = !isTimelock && _sendDelaySecs > 0;
+
+  // For SLOW with auto-claim on ETH, the tip is added to msg.value alongside the amount.
+  if (isDelayed && _sendAutoClaim && _sendTipWei > 0n && isETH && _sendTokenBal != null && amount + _sendTipWei > _sendTokenBal) {
+    statusEl.textContent = 'Insufficient ETH for amount + keeper tip'; statusEl.className = 'status show error'; return;
+  }
 
   try {
-    if (isTimelock) {
+    if (isDelayed) {
+      const delay = _sendDelaySecs;
+      const useTip = _sendAutoClaim && _sendTipWei > 0n;
+      const slow = new ethers.Contract(SLOW_ADDRESS, SLOW_ABI, _signer);
+
+      // Approve ERC20 to SLOW if needed
+      if (!isETH) {
+        statusEl.textContent = 'Checking approval...'; statusEl.className = 'status show';
+        const erc20 = new ethers.Contract(tokenAddr, ERC20_TRANSFER_ABI, _signer);
+        const allowance = await erc20.allowance(_connectedAddress, SLOW_ADDRESS);
+        if (allowance < amount) {
+          statusEl.textContent = 'Approving token...'; statusEl.className = 'status show';
+          const approveTx = await erc20.approve(SLOW_ADDRESS, ethers.MaxUint256);
+          await approveTx.wait();
+        }
+      }
+
+      statusEl.textContent = useTip ? 'Creating delayed transfer (with keeper tip)...' : 'Creating delayed transfer...';
+      statusEl.className = 'status show';
+      let tx;
+      if (useTip) {
+        // ETH: msg.value = amount + tip; ERC20: msg.value = tip
+        const value = isETH ? (amount + _sendTipWei) : _sendTipWei;
+        tx = await slow.depositToWithTip(
+          isETH ? ZERO_ADDRESS : tokenAddr,
+          toAddr, amount, delay, _sendTipWei, '0x',
+          { value }
+        );
+      } else {
+        // SLOW.depositTo: for ETH, must pass amount=0 — contract sets amount := msg.value.
+        // For ERC20, pass amount and msg.value=0; contract pulls amount via safeTransferFrom.
+        tx = await slow.depositTo(
+          isETH ? ZERO_ADDRESS : tokenAddr,
+          toAddr,
+          isETH ? 0n : amount,
+          delay,
+          '0x',
+          { value: isETH ? amount : 0n }
+        );
+      }
+      statusEl.innerHTML = 'Confirming... <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline">view tx &#8599;</a>'; statusEl.className = 'status show';
+      await waitForTx(tx);
+      const matures = new Date(Date.now() + delay * 1000).toLocaleString();
+      statusEl.innerHTML = 'Delayed transfer created &middot; matures ' + esc(matures) + ' <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline">view tx &#8599;</a>';
+      statusEl.className = 'status show success';
+      $('sendAmount').value = '';
+      sendClearDelaySelection();
+      sendUpdateBalance();
+      setTimeout(sendLoadSlowTransfers, 3000);
+    } else if (isTimelock) {
       const unlockTime = Math.floor(new Date(unlockStr).getTime() / 1000);
       if (unlockTime <= Math.floor(Date.now() / 1000)) {
         statusEl.textContent = 'Unlock time must be in the future';
@@ -319,5 +584,289 @@ async function claimTimelock(token, to, coinId, amount, unlockTime, btn) {
     btn.disabled = false;
     btn.textContent = 'Claim';
     alert('Claim failed: ' + (e.reason || e.message));
+  }
+}
+
+// ---- SLOW: Delayed Transfers ----
+
+async function _slowTokenMeta(rpc, tokenAddr) {
+  const key = (tokenAddr || ZERO_ADDRESS).toLowerCase();
+  if (key === ZERO_ADDRESS.toLowerCase()) return { symbol: 'ETH', decimals: 18 };
+  if (_slowTokenMetaCache.has(key)) return _slowTokenMetaCache.get(key);
+  // Fast path: registered token
+  for (const sym of Object.keys(tokens)) {
+    const t = tokens[sym];
+    if (t.address && t.address.toLowerCase() === key) {
+      const meta = { symbol: t.symbol || sym, decimals: t.decimals != null ? Number(t.decimals) : 18 };
+      _slowTokenMetaCache.set(key, meta);
+      return meta;
+    }
+  }
+  try {
+    const c = new ethers.Contract(tokenAddr, ERC20_TRANSFER_ABI, rpc);
+    const [sym, dec] = await Promise.all([
+      c.symbol().catch(() => 'TKN'),
+      c.decimals().catch(() => 18n)
+    ]);
+    const meta = { symbol: String(sym), decimals: Number(dec) };
+    _slowTokenMetaCache.set(key, meta);
+    return meta;
+  } catch {
+    const meta = { symbol: 'TKN', decimals: 18 };
+    _slowTokenMetaCache.set(key, meta);
+    return meta;
+  }
+}
+
+function _slowFormatRelative(secs) {
+  const abs = Math.abs(secs);
+  if (abs < 60) return secs >= 0 ? `in ${secs}s` : `${abs}s ago`;
+  if (abs < 3600) { const m = Math.round(abs / 60); return secs >= 0 ? `in ${m}m` : `${m}m ago`; }
+  if (abs < 86400) { const h = Math.round(abs / 3600 * 10) / 10; return secs >= 0 ? `in ${h}h` : `${h}h ago`; }
+  const d = Math.round(abs / 86400 * 10) / 10;
+  return secs >= 0 ? `in ${d}d` : `${d}d ago`;
+}
+
+async function sendLoadSlowTransfers() {
+  const el = $('slowList');
+  if (!el) return;
+  if (!_connectedAddress) { el.textContent = 'Connect wallet to view delayed transfers'; return; }
+  el.innerHTML = '<div style="color:var(--fg-dim);font-size:12px">Loading...</div>';
+  try {
+    const rpc = await quoteRPC.call(r => r);
+    const slow = new ethers.Contract(SLOW_ADDRESS, SLOW_ABI, rpc);
+    if (!_slowGateAddr) { try { _slowGateAddr = await slow.gate(); } catch {} }
+    const [outIds, inIds, guardian] = await Promise.all([
+      slow.getOutboundTransfers(_connectedAddress).catch(() => []),
+      slow.getInboundTransfers(_connectedAddress).catch(() => []),
+      slow.guardians(_connectedAddress).catch(() => ZERO_ADDRESS)
+    ]);
+    _slowHasGuardian = guardian && guardian !== ZERO_ADDRESS;
+    // Dedupe (a self-send would appear in both); preserve direction info
+    const idMap = new Map(); // id(string) → { sent, received }
+    for (const id of outIds) { idMap.set(id.toString(), { sent: true, received: false }); }
+    for (const id of inIds) {
+      const k = id.toString();
+      if (idMap.has(k)) idMap.get(k).received = true;
+      else idMap.set(k, { sent: false, received: true });
+    }
+    if (idMap.size === 0) { el.textContent = 'No delayed transfers'; return; }
+
+    const ids = [...idMap.keys()];
+    const transfers = await Promise.all(
+      ids.map(id => slow.pendingTransfers(id).then(p => ({ id, p })).catch(() => null))
+    );
+    const tipsByTransfer = {};
+    if (_slowGateAddr && _slowGateAddr !== ZERO_ADDRESS) {
+      const gate = new ethers.Contract(_slowGateAddr, SLOW_GATE_ABI, rpc);
+      await Promise.all(ids.map(async (id) => {
+        try {
+          const t = await gate.tips(id);
+          if (t.amount && t.amount > 0n) tipsByTransfer[id] = { amount: t.amount, sender: t.sender };
+        } catch {}
+      }));
+    }
+
+    // Filter live transfers (timestamp != 0). Build rows.
+    const live = [];
+    for (const r of transfers) {
+      if (!r) continue;
+      const { id, p } = r;
+      const ts = Number(p.timestamp);
+      if (ts === 0) continue; // settled / reversed / cleared
+      const direction = idMap.get(id);
+      // SLOW id encoding: low 160 = token, high 96 = delay
+      const idBig = BigInt(p.id);
+      const tokenAddr = ethers.getAddress('0x' + (idBig & ((1n << 160n) - 1n)).toString(16).padStart(40, '0'));
+      const delay = Number(idBig >> 160n);
+      const expiry = ts + delay;
+      live.push({ transferId: id, ts, delay, expiry, tokenAddr, from: p.from, to: p.to, slot: p.id, amount: BigInt(p.amount), direction });
+    }
+    live.sort((a, b) => b.ts - a.ts);
+    if (live.length === 0) { el.textContent = 'No delayed transfers'; return; }
+
+    const metas = await Promise.all(live.map(t => _slowTokenMeta(rpc, t.tokenAddr)));
+    const now = Math.floor(Date.now() / 1000);
+    const focusId = _slowFocusTransferId;
+    let html = '';
+    let focusRow = null;
+    for (let i = 0; i < live.length; i++) {
+      const t = live[i];
+      const meta = metas[i];
+      const fmtAmt = (+ethers.formatUnits(t.amount, meta.decimals)).toFixed(5);
+      const tilExpiry = t.expiry - now;
+      const tilClawback = (t.expiry + SLOW_CLAWBACK_GRACE) - now;
+      let status, label, hint;
+      if (tilExpiry > 0) {
+        status = 'pending'; label = 'PENDING';
+        hint = 'Matures ' + _slowFormatRelative(tilExpiry) + ' &middot; ' + new Date(t.expiry * 1000).toLocaleString();
+      } else if (tilClawback > 0) {
+        status = 'matured'; label = 'CLAIMABLE';
+        hint = 'Matured ' + _slowFormatRelative(tilExpiry) + ' &middot; sender can clawback ' + _slowFormatRelative(tilClawback);
+      } else {
+        status = 'clawback-ready'; label = 'CLAWBACK READY';
+        hint = 'Past grace &middot; sender may clawback';
+      }
+      const dirParts = [];
+      if (t.direction.sent) dirParts.push('sent &middot; to ' + t.to.slice(0, 6) + '...' + t.to.slice(-4));
+      if (t.direction.received) dirParts.push('inbound &middot; from ' + t.from.slice(0, 6) + '...' + t.from.slice(-4));
+      const dirStr = dirParts.join(' / ');
+      const delayLbl = sendFormatDelay(t.delay);
+      const tipInfo = tipsByTransfer[t.transferId];
+      const tipNote = tipInfo ? ` &middot; <span style="color:var(--fg-dim)">keeper tip ${(+ethers.formatEther(tipInfo.amount)).toFixed(5)} ETH</span>` : '';
+
+      let actions = '';
+      const tid = escAttr(t.transferId);
+      const slotStr = escAttr(t.slot.toString());
+      const amtStr = escAttr(t.amount.toString());
+      const tippedFlag = tipInfo ? '1' : '0';
+      if (t.direction.received && status !== 'pending') {
+        actions += `<button onclick="slowClaim('${tid}','${slotStr}','${amtStr}','${tippedFlag}',this)">Claim</button>`;
+      }
+      if (t.direction.sent && status === 'pending') {
+        actions += `<button class="danger" onclick="slowReverse('${tid}','${slotStr}','${amtStr}','${tippedFlag}',this)">Reverse</button>`;
+      }
+      if (t.direction.sent && status === 'clawback-ready') {
+        actions += `<button class="secondary" onclick="slowClawback('${tid}','${slotStr}','${amtStr}','${tippedFlag}',this)">Clawback</button>`;
+      }
+      // Refund tip is available to original tip-payer once transfer cleared — not shown here
+      // because the entry must be gone for refund to succeed; we surface it after clear instead.
+
+      const isFocus = focusId && focusId === t.transferId;
+      const rowId = `slowRow-${tid}`;
+      if (isFocus) focusRow = rowId;
+      html += `<div id="${rowId}" class="timelock-item${isFocus ? ' slow-focus' : ''}">
+        <div class="timelock-head">
+          <span class="timelock-amount">${fmtAmt} <span style="font-weight:400;font-size:12px;letter-spacing:0.04em">${esc(meta.symbol)}</span></span>
+          <span class="timelock-status ${status}">${label}</span>
+        </div>
+        <div class="timelock-meta">
+          ${esc(delayLbl)} delay &middot; ${dirStr}${tipNote}
+        </div>
+        <div class="timelock-countdown">${hint}</div>
+        ${actions ? `<div class="timelock-claim">${actions}</div>` : ''}
+      </div>`;
+    }
+    el.innerHTML = html;
+    if (focusId) {
+      if (focusRow) {
+        const node = document.getElementById(focusRow);
+        if (node) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      _slowFocusTransferId = null; // one-shot — clear whether or not the row was present
+    }
+  } catch (e) {
+    console.error(e);
+    el.textContent = 'Failed to load delayed transfers';
+  }
+}
+
+// Best-effort tip refund after a sender-side settlement (reverse / clawback).
+// Reverts silently if no tip exists or the entry is still pending.
+async function _slowRefundTipBestEffort(transferId) {
+  if (!_slowGateAddr || _slowGateAddr === ZERO_ADDRESS) return false;
+  try {
+    const gate = new ethers.Contract(_slowGateAddr, SLOW_GATE_ABI, _signer);
+    const tx = await gate.refundTip(BigInt(transferId));
+    await tx.wait();
+    return true;
+  } catch { return false; }
+}
+
+async function slowClaim(transferId, idStr, amtStr, tippedFlag, btn) {
+  if (!_signer) { connectWallet(); return; }
+  btn.disabled = true;
+  const orig = btn.textContent;
+  try {
+    const slow = new ethers.Contract(SLOW_ADDRESS, SLOW_ABI, _signer);
+    // Mirror canonical SLOW dapp: when recipient has a guardian, claim is blocked —
+    // call unlock instead. The wrapper stays at recipient; redeeming requires the
+    // guardian to co-sign withdrawFrom (out of scope here).
+    btn.textContent = _slowHasGuardian ? 'Unlocking...' : 'Claiming...';
+    const tx = _slowHasGuardian
+      ? await slow.unlock(BigInt(transferId))
+      : await slow.claim(BigInt(transferId));
+    btn.innerHTML = 'Confirming... <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline;font-size:11px">tx &#8599;</a>';
+    await tx.wait();
+    btn.innerHTML = (_slowHasGuardian
+      ? 'Unlocked &middot; coordinate withdrawal with guardian'
+      : 'Claimed!') + ' <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline;font-size:11px">tx &#8599;</a>';
+    setTimeout(sendLoadSlowTransfers, 2000);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = orig || 'Claim';
+    alert('Claim failed: ' + (e.reason || e.shortMessage || e.message));
+  }
+}
+
+// Reverse a pending transfer. Mirrors canonical SLOW dapp: when sender has no
+// guardian, atomically chain reverse + withdrawFrom via multicall so the user
+// receives raw underlying in one transaction. With a guardian set, withdrawFrom
+// requires guardian co-sign of the predicted withdrawal id — fall back to a
+// single reverse() and surface guidance.
+async function slowReverse(transferId, idStr, amtStr, tippedFlag, btn) {
+  if (!_signer) { connectWallet(); return; }
+  if (!confirm('Reverse this transfer? Funds will be returned to your wallet (callable only before maturity).')) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'Reversing...';
+  try {
+    const slow = new ethers.Contract(SLOW_ADDRESS, SLOW_ABI, _signer);
+    const iface = slow.interface;
+    let tx;
+    if (_slowHasGuardian) {
+      tx = await slow.reverse(BigInt(transferId));
+    } else {
+      const reverseData = iface.encodeFunctionData('reverse', [BigInt(transferId)]);
+      const withdrawData = iface.encodeFunctionData('withdrawFrom',
+        [_connectedAddress, _connectedAddress, BigInt(idStr), BigInt(amtStr)]);
+      tx = await slow.multicall([reverseData, withdrawData]);
+    }
+    btn.innerHTML = 'Confirming... <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline;font-size:11px">tx &#8599;</a>';
+    await tx.wait();
+    let tipNote = '';
+    if (tippedFlag === '1') { if (await _slowRefundTipBestEffort(transferId)) tipNote = ' &middot; tip refunded'; }
+    btn.innerHTML = (_slowHasGuardian ? 'Reversed &middot; coordinate withdrawal with guardian' : 'Reversed and returned!') + tipNote +
+      ' <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline;font-size:11px">tx &#8599;</a>';
+    sendUpdateBalance();
+    setTimeout(sendLoadSlowTransfers, 2000);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = orig || 'Reverse';
+    const m = e.reason || e.shortMessage || e.message || '';
+    alert('Reverse failed: ' + (m.toLowerCase().includes('timelockexpired') ? 'past maturity — use clawback after grace period' : m));
+  }
+}
+
+async function slowClawback(transferId, idStr, amtStr, tippedFlag, btn) {
+  if (!_signer) { connectWallet(); return; }
+  if (!confirm('Clawback unclaimed transfer? Funds will return to your wallet (callable only after maturity + 30 day grace).')) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'Clawing back...';
+  try {
+    const slow = new ethers.Contract(SLOW_ADDRESS, SLOW_ABI, _signer);
+    const iface = slow.interface;
+    let tx;
+    if (_slowHasGuardian) {
+      tx = await slow.clawback(BigInt(transferId));
+    } else {
+      const clawbackData = iface.encodeFunctionData('clawback', [BigInt(transferId)]);
+      const withdrawData = iface.encodeFunctionData('withdrawFrom',
+        [_connectedAddress, _connectedAddress, BigInt(idStr), BigInt(amtStr)]);
+      tx = await slow.multicall([clawbackData, withdrawData]);
+    }
+    btn.innerHTML = 'Confirming... <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline;font-size:11px">tx &#8599;</a>';
+    await tx.wait();
+    let tipNote = '';
+    if (tippedFlag === '1') { if (await _slowRefundTipBestEffort(transferId)) tipNote = ' &middot; tip refunded'; }
+    btn.innerHTML = (_slowHasGuardian ? 'Recovered &middot; coordinate withdrawal with guardian' : 'Recovered!') + tipNote +
+      ' <a href="https://etherscan.io/tx/' + escAttr(tx.hash) + '" target="_blank" style="color:inherit;text-decoration:underline;font-size:11px">tx &#8599;</a>';
+    sendUpdateBalance();
+    setTimeout(sendLoadSlowTransfers, 2000);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = orig || 'Clawback';
+    alert('Clawback failed: ' + (e.reason || e.shortMessage || e.message));
   }
 }

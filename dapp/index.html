@@ -1034,6 +1034,33 @@ body.modal-open { overflow: hidden; }
 }
 .timelock-claim button:hover { background:var(--btn-hover); }
 .timelock-claim button:disabled { background:var(--btn-dis-bg); border-color:var(--btn-dis-border); color:var(--btn-dis-fg); cursor:not-allowed; }
+.timelock-claim button + button { margin-left:6px; }
+.timelock-status.pending { color:#3b82f6; }
+.timelock-status.recoverable { color:var(--green, #22c55e); }
+.timelock-status.matured { color:var(--green, #22c55e); }
+.timelock-status.clawback-ready { color:#f59e0b; }
+.timelock-countdown { font-size:10px; color:var(--fg-dim); margin-top:2px; font-variant-numeric:tabular-nums; }
+.timelock-claim button.secondary { background:transparent; color:var(--fg); border-color:var(--card-border); }
+.timelock-claim button.secondary:hover { background:var(--card-border); }
+.timelock-claim button.danger { background:transparent; color:#ef4444; border-color:#ef4444; }
+.timelock-claim button.danger:hover { background:#ef4444; color:var(--bg); }
+.timelock-item.slow-focus { animation:slowFocusPulse 2.4s ease-out 1; box-shadow:0 0 0 2px var(--fg) inset; }
+@keyframes slowFocusPulse { 0% { background:var(--fg); color:var(--bg); } 35% { background:var(--fg); color:var(--bg); } 100% { background:var(--bg); color:var(--fg); } }
+/* Delayed transfer (SLOW) options */
+.delay-chip {
+  background:none; border:1px solid var(--card-border); color:var(--fg-muted);
+  padding:5px 9px; font-size:11px; cursor:pointer; font-family:inherit;
+  letter-spacing:0.04em; text-transform:uppercase; transition:all .15s ease;
+}
+.delay-chip:hover { color:var(--fg); border-color:var(--fg); }
+.delay-chip.active { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.send-suboption-label { color:var(--fg-dim); font-size:10px; letter-spacing:0; text-transform:none; font-weight:400; margin-left:6px; }
+#sendDelayCustom {
+  width:100%; padding:6px 0; font-size:13px; font-family:inherit;
+  border:none; border-bottom:1.5px solid var(--card-border); outline:none;
+  background:transparent; color:var(--fg);
+}
+#sendDelayCustom:focus { border-bottom-color:var(--fg); }
 
 /* Privacy tab details/summary — match receiver-toggle pattern */
 #privacyTab details { margin-bottom: 12px; font-size: 12px; }
@@ -1577,12 +1604,35 @@ body.modal-open { overflow: hidden; }
   </div>
 
   <div>
-    <div class="receiver-toggle" onclick="const w=$('sendLockWrap');const open=w.style.maxHeight==='0px';w.style.maxHeight=open?'60px':'0px';w.style.opacity=open?'1':'0';this.querySelector('.chevron').textContent=open?'\u25BC':'\u25B6'">
-      <span class="chevron" style="font-size:9px;color:var(--fg-muted)">&#9654;</span>
-      <label style="margin:0;cursor:pointer;pointer-events:none">Timelock</label>
+    <div class="receiver-toggle" onclick="sendToggleOption('Lock')">
+      <span class="chevron" id="sendLockChevron" style="font-size:9px;color:var(--fg-muted)">&#9654;</span>
+      <label style="margin:0;cursor:pointer;pointer-events:none">Timelock<span class="send-suboption-label">vesting until date</span></label>
     </div>
     <div id="sendLockWrap" style="max-height:0px;opacity:0;overflow:hidden;transition:max-height .2s ease,opacity .2s ease;margin-top:4px">
       <input type="datetime-local" id="sendUnlockTime" class="send-datetime" placeholder="Unlock date">
+    </div>
+  </div>
+
+  <div style="margin-top:8px">
+    <div class="receiver-toggle" onclick="sendToggleOption('Delay')">
+      <span class="chevron" id="sendDelayChevron" style="font-size:9px;color:var(--fg-muted)">&#9654;</span>
+      <label style="margin:0;cursor:pointer;pointer-events:none">Delayed Transfer<span class="send-suboption-label">security buffer &middot; reversible via SLOW</span></label>
+    </div>
+    <div id="sendDelayWrap" style="max-height:0px;opacity:0;overflow:hidden;transition:max-height .25s ease,opacity .25s ease;margin-top:4px">
+      <div id="sendDelayChips" style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 8px">
+        <button class="delay-chip" data-secs="600" type="button">10 min</button>
+        <button class="delay-chip" data-secs="3600" type="button">1 hour</button>
+        <button class="delay-chip" data-secs="21600" type="button">6 hours</button>
+        <button class="delay-chip" data-secs="86400" type="button">1 day</button>
+        <button class="delay-chip" data-secs="259200" type="button">3 days</button>
+        <button class="delay-chip" data-secs="604800" type="button">1 week</button>
+      </div>
+      <input type="text" id="sendDelayCustom" placeholder="Custom delay (e.g. 2h, 30m, 90s)">
+      <div id="sendDelayResolved" style="font-size:11px;margin-top:6px;color:var(--fg-muted);min-height:14px"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:8px;cursor:pointer;color:var(--fg-muted)">
+        <input type="checkbox" id="sendAutoClaim" style="cursor:pointer;accent-color:var(--fg)"> Auto-claim (pay keeper tip; refundable if recipient settles directly)
+      </label>
+      <div id="sendTipPreview" style="font-size:10px;color:var(--fg-dim);margin-top:2px;min-height:12px"></div>
     </div>
   </div>
 
@@ -1593,6 +1643,11 @@ body.modal-open { overflow: hidden; }
 <div style="margin-top:24px">
   <h2 style="font-size:14px;font-weight:400;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:14px">Timelocks</h2>
   <div id="timelockList" style="font-size:12px;color:var(--fg-muted)">Connect wallet to view timelocks</div>
+</div>
+
+<div style="margin-top:24px">
+  <h2 style="font-size:14px;font-weight:400;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:14px">Delayed Transfers</h2>
+  <div id="slowList" style="font-size:12px;color:var(--fg-muted)">Connect wallet to view delayed transfers</div>
 </div>
 </div><!-- end sendTab -->
 
@@ -7461,6 +7516,11 @@ function syncSendURL() {
   if (_sa && _sa.value && +_sa.value > 0) _sp.set('amt', _sa.value);
   const _st = ($('sendTo')?.value || '').trim();
   if (_st) _sp.set('to', _st);
+  // SLOW deep-link params: delay (raw seconds, parseable both ways) and autoclaim flag.
+  if (typeof _sendDelaySecs === 'number' && _sendDelaySecs > 0) {
+    _sp.set('delay', String(_sendDelaySecs));
+    if (_sendAutoClaim) _sp.set('autoclaim', '1');
+  }
   history.replaceState(null, '', '?' + _sp.toString() + '#send');
 }
 
@@ -7722,7 +7782,10 @@ document.addEventListener("DOMContentLoaded", () => {
       toEl.addEventListener("blur", () => { if (toEl.value && !isNaN(toEl.value)) toEl.value = +toEl.value; });
     }
     (window.requestIdleCallback || setTimeout)(() => loadWeiLists());
-    // Parse send deeplink params: ?token=ETH&amt=1.5&to=0x...#send
+    // Parse send deeplink params:
+    //   ?token=ETH&amt=1.5&to=0x...#send                  — direct send
+    //   ?...&delay=1h&autoclaim=1#send                     — SLOW-delayed send
+    //   ?xfer=<transferId>#send                            — focus a specific delayed transfer
     if (_dlTabHash === '#send') {
       const _dlToken = _sp.get('token');
       if (_dlToken) {
@@ -7745,7 +7808,19 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
       }
-      // Update OG meta for social cards: "Send 1.5 ETH to alice.wei"
+      // SLOW: open the Delay panel and pre-fill delay/auto-claim.
+      const _dlDelay = _sp.get('delay');
+      if (_dlDelay && typeof sendApplyDeepLinkDelay === 'function') {
+        const _dlAuto = _sp.get('autoclaim') === '1';
+        // Defer one tick so the form elements are wired up by send.js's DOMContentLoaded.
+        setTimeout(() => sendApplyDeepLinkDelay(_dlDelay, _dlAuto), 0);
+      }
+      // SLOW: focus a specific transfer in the Delayed Transfers list.
+      const _dlXfer = _sp.get('xfer');
+      if (_dlXfer && /^\d+$/.test(_dlXfer) && typeof sendSetFocusTransferId === 'function') {
+        sendSetFocusTransferId(_dlXfer);
+      }
+      // Update OG meta for social cards: "Send 1.5 ETH to alice.wei [via SLOW · 1h delay]"
       const _ogTok = _sendToken || 'ETH';
       const _ogAmt = _sp.get('amt');
       const _ogTo = _sp.get('to');
@@ -7753,7 +7828,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (_ogAmt && +_ogAmt > 0) _ogTitle += ' ' + _ogAmt;
       _ogTitle += ' ' + _ogTok;
       if (_ogTo) _ogTitle += ' to ' + _ogTo;
-      updateOGMeta(_ogTitle, 'Send tokens on zFi');
+      if (_dlDelay) _ogTitle += ' via SLOW';
+      updateOGMeta(_ogTitle, _dlDelay ? 'Delayed transfer on zFi · reversible until maturity' : 'Send tokens on zFi');
     }
     // Coin launch deeplink:
     //   Curve:  ?name=X&symbol=Y&desc=Z#coin
@@ -8178,7 +8254,7 @@ walletInit({
     updateBalances();
     handleAmountChange();
     if(typeof tbOnWalletConnect === 'function') tbOnWalletConnect();
-    if ($('sendTab')?.style.display !== 'none') { sendUpdateBalance(); sendUpdateButton(); sendLoadTimelocks(); }
+    if ($('sendTab')?.style.display !== 'none') { sendUpdateBalance(); sendUpdateButton(); sendLoadTimelocks(); sendLoadSlowTransfers(); }
     ppHandlePrivacyWalletConnected();
   }],
   onDisconnect: [() => {
@@ -8236,6 +8312,7 @@ function switchTab(tab) {
     sendUpdateTokenDisplay();
     sendUpdateBalance();
     sendLoadTimelocks();
+    sendLoadSlowTransfers();
     syncSendURL();
   }
   ppwSyncBackgroundRefreshLoop();
