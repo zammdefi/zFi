@@ -1252,6 +1252,7 @@ body.modal-open { overflow: hidden; }
 
 <div id="liveSalesSection" class="live-sales" style="display:none"></div>
 <div id="fwDaicoSection" class="live-sales" style="display:none"></div>
+<div id="liveCurveSection" class="live-sales" style="display:none"></div>
 <div id="featuredPmSection" class="live-sales" style="display:none"></div>
 <!-- Chat (MiniMeet) — lazy-loads on first open -->
 <div id="trollbox" class="trollbox collapsed">
@@ -2041,6 +2042,155 @@ async function loadFeaturedPm() {
 // setTimeout(loadLiveSale, 500); // DAICO banner hidden for now
 setTimeout(loadFeaturedPm, 100);
 
+// ---- Curve coins tile + dropdown integration ----
+// Surfaces ClassicalCurveSale coins created via /coin so they're discoverable + swappable
+// from the swap tab. Tile shows the 3 most recent; the broader fetch is also injected into
+// the `tokens` dropdown so users can search by symbol/name/address and trade in either direction.
+const CURVE_SALE = '0x000000005d9b18764E12E5aeefD6dA73110F85eb';
+const CURVE_SALE_IFACE = new ethers.Interface([
+  'function curves(address token) view returns (address creator, uint256 cap, uint256 sold, uint256 virtualReserve, uint256 startPrice, uint256 endPrice, uint16 feeBps, uint16 poolFeeBps, uint256 raisedETH, uint256 graduationTarget, uint256 lpTokens, address lpRecipient, bool graduated, bool seeded, uint16 sniperFeeBps, uint16 sniperDuration, uint16 maxBuyBps, uint40 launchTime)',
+  'function quote(address token, uint256 amount) view returns (uint256)',
+  'function quoteSell(address token, uint256 amount) view returns (uint256)',
+  'function effectiveFee(address token) view returns (uint256)',
+  'function creatorFees(address token) view returns (address beneficiary, uint16 buyBps, uint16 sellBps, bool buyOnInput, bool sellOnInput)',
+  'function buyExactIn(address token, uint256 minAmountOut, uint256 deadline) payable',
+  'function sell(address token, uint256 amount, uint256 minProceeds, uint256 deadline)',
+  'function swapExactIn(tuple(uint256 id0, uint256 id1, address token0, address token1, uint256 feeOrHook) poolKey, uint256 amountIn, uint256 amountOutMin, bool zeroForOne, address to, uint256 deadline) payable returns (uint256 amountOut)',
+]);
+// Pool key for graduated curve coins on ZAMM: feeOrHook = uint160(CURVE_SALE) | (1<<255).
+const CURVE_HOOK_FEE = BigInt(CURVE_SALE) | (1n << 255n);
+const CURVE_TILE_DB_URL = 'https://zfi-pin.rosscampbell9.workers.dev';
+const CURVE_TILE_IPFS_GW = 'https://content.wrappr.wtf/ipfs/';
+const CURVE_TILE_MAX = 3;
+
+async function loadLiveCurveCoins() {
+  const el = $('liveCurveSection');
+  try {
+    // Pull recent curve launches from Supabase (token_address + display metadata).
+    // Falls back silently to nothing if the worker is down — tile just stays hidden.
+    const res = await fetch(`${CURVE_TILE_DB_URL}/db/launched_tokens?launch_type=eq.curve&order=created_at.desc&limit=50`);
+    if (!res.ok) return;
+    const rows = await res.json();
+    if (!Array.isArray(rows) || rows.length === 0) return;
+
+    // Dedupe by token_address (in case launch retries created multiple rows) and take the newest entry.
+    const seen = new Set();
+    const ordered = [];
+    for (const r of rows) {
+      const a = (r.token_address || '').toLowerCase();
+      if (!a || seen.has(a)) continue;
+      seen.add(a);
+      ordered.push(r);
+    }
+
+    // Multicall curves() for each token in one round-trip.
+    const rpc = new ethers.JsonRpcProvider('https://ethereum.publicnode.com', 1, { staticNetwork: true });
+    const calls = ordered.map(r => [
+      CURVE_SALE,
+      true,
+      CURVE_SALE_IFACE.encodeFunctionData('curves', [r.token_address])
+    ]);
+    const mcRaw = await rpc.call({
+      to: MULTICALL3_ADDRESS,
+      data: MULTICALL3_IFACE.encodeFunctionData('aggregate3', [calls])
+    });
+    const mcRes = MULTICALL3_IFACE.decodeFunctionResult('aggregate3', mcRaw)[0];
+
+    const cards = [];
+    for (let i = 0; i < ordered.length; i++) {
+      const r = ordered[i];
+      if (!mcRes[i].success) continue;
+      let curve;
+      try { curve = CURVE_SALE_IFACE.decodeFunctionResult('curves', mcRes[i].returnData); }
+      catch { continue; }
+      // Skip uninitialised slots (creator==0 means the token isn't actually configured here).
+      if (!curve.creator || curve.creator === ethers.ZeroAddress) continue;
+
+      const sold = BigInt(curve.sold);
+      const cap = BigInt(curve.cap);
+      const vr = BigInt(curve.virtualReserve);
+      const startPrice = BigInt(curve.startPrice);
+      const remaining = vr - sold;
+      const spotPrice = remaining > 0n ? (startPrice * vr * vr) / (remaining * remaining) : 0n;
+      const perMilEth = (Number(spotPrice) / 1e18) * 1e6;
+      const pct = cap > 0n ? Number((sold * 10000n) / cap) / 100 : 0;
+      const status = curve.seeded ? 'graduated' : curve.graduated ? 'ready to LP' : 'live';
+
+      const rawSym = String(r.symbol || '???').trim();
+      // Sanitise symbol for use as a tokens[] key + URL param (matches validateTokenList rules).
+      const safeSym = rawSym.replace(/[^A-Za-z0-9.$_-]/g, '').slice(0, 24) || 'COIN';
+      const icon = r.image ? (r.image.startsWith('ipfs://') ? CURVE_TILE_IPFS_GW + r.image.slice(7) : r.image) : null;
+      const displayName = r.name || rawSym;
+
+      // Inject into the dropdown so users can search/select. Collide-safe key:
+      // if the symbol is already taken by a different address, suffix with .curve-{addr-prefix}.
+      // Keep `symbol` as the raw user-supplied string so non-ASCII symbols still display correctly
+      // (the picker falls back to the key when sanitisation strips the symbol entirely).
+      try {
+        const checksummed = ethers.getAddress(r.token_address);
+        let key = safeSym;
+        const existing = tokens[key];
+        if (existing && existing.address.toLowerCase() !== checksummed.toLowerCase()) {
+          key = safeSym + '.curve-' + r.token_address.slice(2, 6).toLowerCase();
+        }
+        // Skip if collision still hits a non-curve token (e.g. user-added custom).
+        if (!tokens[key] || tokens[key]._isCurveCoin) {
+          tokens[key] = {
+            address: checksummed,
+            symbol: rawSym || safeSym,
+            decimals: 18,
+            name: displayName,
+            _isCurveCoin: true,
+            _curveSeeded: !!curve.seeded,
+            _curveGraduated: !!curve.graduated,
+          };
+          if (icon && (icon.startsWith('https://') || icon.startsWith('data:image/'))) {
+            tokens[key].icon = icon;
+          }
+        }
+      } catch {} // bad address — skip injection but still allow the tile card
+
+      cards.push({
+        addr: r.token_address,
+        name: r.name || curve.creator.slice(0, 8),
+        symbol: rawSym,
+        icon,
+        perMilEth, pct, status, seeded: curve.seeded, graduated: curve.graduated
+      });
+    }
+
+    // Re-render an open token modal in case the user is searching while curves arrive.
+    try { if (currentModal && $('tokenSearchInput')) renderTokenList($('tokenSearchInput').value || ''); } catch {}
+
+    if (!el || cards.length === 0) return;
+    const tileCards = cards.slice(0, CURVE_TILE_MAX);
+
+    // Format: lowercase header (matches existing tiles) + stacked cards.
+    const fmtPrice = v => v >= 1 ? v.toFixed(3) : v >= 0.01 ? v.toFixed(4) : v >= 0.0001 ? v.toFixed(6) : v.toExponential(2);
+    let html = `<div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-dim);margin-bottom:6px">curve coins</div>`;
+    for (const c of tileCards) {
+      const logo = c.icon
+        ? `<img class="live-sale-logo" src="${escAttr(c.icon)}" alt="" onerror="this.outerHTML='<div class=\\'live-sale-logo-ph\\'>${escAttr((c.symbol[0]||'?').toUpperCase())}</div>'">`
+        : `<div class="live-sale-logo-ph">${esc((c.symbol[0]||'?').toUpperCase())}</div>`;
+      // Color the % by status: green for live progress, muted once graduated.
+      const pctColor = c.seeded ? 'var(--fg-muted)' : 'var(--green, #22c55e)';
+      html += `<a class="live-sale-card" href="coin/#${c.addr}" style="margin-bottom:4px">
+        ${logo}
+        <div class="live-sale-info">
+          <div class="live-sale-name">${esc(c.name)} <span style="color:var(--fg-muted);font-weight:400">$${esc(c.symbol)}</span></div>
+          <div class="live-sale-meta">${fmtPrice(c.perMilEth)} ETH/1M &middot; ${esc(c.status)}</div>
+        </div>
+        <div class="live-sale-pct" style="color:${pctColor}">${c.pct.toFixed(1)}%</div>
+        <div class="live-sale-bar"><div class="live-sale-bar-fill" style="width:${Math.min(c.pct, 100).toFixed(1)}%;background:${pctColor}"></div></div>
+      </a>`;
+    }
+    el.innerHTML = html;
+    if (_activeTab === 'swap') el.style.display = '';
+  } catch (e) { console.warn('Curve tile load failed:', e); }
+}
+
+setTimeout(loadLiveCurveCoins, 200);
+
 // FW DAICO — sale complete, now trading
 setTimeout(async () => {
   const FW_DAO = '0xE7Aa6cA3a9Ca3fe92a425dFeaD24900B9BF49853';
@@ -2251,7 +2401,14 @@ try {
 
 function saveCustomTokens() {
   try {
-    const custom = Object.values(tokens).filter(t => !BUILTIN_ADDRS.has(t.address.toLowerCase()) && !weiListTokenSource.has(t.symbol));
+    // Exclude DAICO/curve coins — those are re-discovered on every page load and would
+    // otherwise leak into the "Custom" group via localStorage with their flags stripped.
+    const custom = Object.values(tokens).filter(t =>
+      !BUILTIN_ADDRS.has(t.address.toLowerCase())
+      && !weiListTokenSource.has(t.symbol)
+      && !t._isDaicoCoin
+      && !t._isCurveCoin
+    );
     localStorage.setItem('zswap_custom_tokens', JSON.stringify(custom));
   } catch (_) {}
 }
@@ -2496,9 +2653,12 @@ function renderTokenList(filter) {
     searchDaicoCoins().then(() => renderTokenList(q));
   }
 
-  function matchesFilter(sym, addr) {
+  function matchesFilter(sym, addr, name) {
     if (!q) return true;
-    return sym.toLowerCase().includes(q) || addr.toLowerCase().includes(q);
+    if (sym.toLowerCase().includes(q)) return true;
+    if (addr.toLowerCase().includes(q)) return true;
+    if (name && String(name).toLowerCase().includes(q)) return true;
+    return false;
   }
 
   function makeRow(symbol) {
@@ -2511,7 +2671,9 @@ function renderTokenList(filter) {
     iconSpan.innerHTML = iconForSymbol(symbol);
     const nameSpan = document.createElement('span');
     nameSpan.className = 'token-symbol';
-    nameSpan.textContent = symbol;
+    // Curve coins may have non-ASCII symbols sanitised away in their tokens[] key —
+    // show the original symbol when it differs from the key.
+    nameSpan.textContent = (t && t.symbol && t.symbol !== symbol) ? t.symbol : symbol;
     const balSpan = document.createElement('span');
     balSpan.className = 'token-balance';
     if (_connectedAddress && t) {
@@ -2530,7 +2692,7 @@ function renderTokenList(filter) {
   let hasAny = false;
   for (const sym of Object.keys(tokens)) {
     if (!builtInAddrs.has(tokens[sym].address.toLowerCase())) continue;
-    if (!matchesFilter(sym, tokens[sym].address)) continue;
+    if (!matchesFilter(sym, tokens[sym].address, tokens[sym].name)) continue;
     frag.appendChild(makeRow(sym));
     hasAny = true;
   }
@@ -2548,7 +2710,7 @@ function renderTokenList(filter) {
     const srcTokens = _weiByList.get(listName) || [];
     const listTokens = [];
     for (const sym of srcTokens) {
-      if (!matchesFilter(sym, tokens[sym].address)) continue;
+      if (!matchesFilter(sym, tokens[sym].address, tokens[sym].name)) continue;
       listTokens.push(sym);
     }
     if (listTokens.length === 0) continue;
@@ -2564,7 +2726,7 @@ function renderTokenList(filter) {
   const daicoTokens = [];
   for (const sym of Object.keys(tokens)) {
     if (!tokens[sym]._isDaicoCoin) continue;
-    if (!matchesFilter(sym, tokens[sym].address)) continue;
+    if (!matchesFilter(sym, tokens[sym].address, tokens[sym].name)) continue;
     daicoTokens.push(sym);
   }
   if (daicoTokens.length > 0) {
@@ -2576,14 +2738,31 @@ function renderTokenList(filter) {
     hasAny = true;
   }
 
-  // Custom tokens (not built-in, not from .wei lists)
+  // Curve coins (ClassicalCurveSale launches — ETH ↔ coin via curve sale or post-grad zAMM hook).
+  const curveTokens = [];
+  for (const sym of Object.keys(tokens)) {
+    if (!tokens[sym]._isCurveCoin) continue;
+    if (!matchesFilter(sym, tokens[sym].address, tokens[sym].name)) continue;
+    curveTokens.push(sym);
+  }
+  if (curveTokens.length > 0) {
+    const label = document.createElement('div');
+    label.className = 'token-group-label';
+    label.textContent = 'Curve coins';
+    frag.appendChild(label);
+    for (const sym of curveTokens) frag.appendChild(makeRow(sym));
+    hasAny = true;
+  }
+
+  // Custom tokens (not built-in, not from .wei lists, not DAICO/curve coins)
   const customTokens = [];
   for (const sym of Object.keys(tokens)) {
     if (tokens[sym]._isZammStake) continue; // ZAMM is in built-in section, skip here
     if (tokens[sym]._isDaicoCoin) continue;
+    if (tokens[sym]._isCurveCoin) continue;
     if (builtInAddrs.has(tokens[sym].address.toLowerCase())) continue;
     if (weiListTokenSource.has(sym)) continue;
-    if (!matchesFilter(sym, tokens[sym].address)) continue;
+    if (!matchesFilter(sym, tokens[sym].address, tokens[sym].name)) continue;
     customTokens.push(sym);
   }
   if (customTokens.length > 0) {
@@ -3421,6 +3600,23 @@ async function handleAmountChange() {
     return;
   }
 
+  // Curve coins only trade against ETH (pre-grad uses CURVE_SALE.buyExactIn/sell directly,
+  // post-grad uses CURVE_SALE.swapExactIn against the ETH-quoted hooked pool). Anything else —
+  // e.g. user landed via ?from=USDC&to=COIN, or flipped a non-ETH pair into a curve coin —
+  // would otherwise fall through to ZRouter and surface a generic "Quote failed". Surface a
+  // specific error so the user knows the actual constraint.
+  const _fromIsCurve = tokens[fromToken]?._isCurveCoin;
+  const _toIsCurve = tokens[toToken]?._isCurveCoin;
+  const _otherSide = _fromIsCurve ? toToken : (_toIsCurve ? fromToken : null);
+  if ((_fromIsCurve || _toIsCurve) && _otherSide && tokens[_otherSide]?.address !== ZERO_ADDRESS) {
+    dstEl.value = "";
+    setShown(quoteInfoEl, false);
+    stopQuoteRefresh();
+    setText(swapBtn, "Curve coins trade against ETH only");
+    setDisabled(swapBtn, true);
+    return;
+  }
+
   // ETH ↔ WETH wrap/unwrap: 1:1, no DEX needed (only when sending to self)
   const _receiverRaw = ($("receiverAddress")?.value || "").trim();
   const _resolvedAddr = getReceiver();
@@ -3765,6 +3961,9 @@ async function handleAmountChange() {
         if (allowance < amountIn) btnLabel = "Approve & " + btnLabel;
       } else if (isRagequit) {
         // No approval needed for ragequit — DAO burns msg.sender's shares directly
+      } else if (isCurvePath(fromSnap, toSnap)) {
+        // No approval needed for curve sells — launch() clones exempt CURVE_SALE (the hook)
+        // from the allowance check, so transferFrom succeeds with zero allowance.
       } else if (isZOrgSell) {
         // Ragequit doesn't need approval, but second step (ZAMM sell) might
         // Check ZAMM allowance against router for the sell leg
@@ -4046,11 +4245,24 @@ function isZOrgSellPath(fromSym, toSym) {
 function isDaicoCoinBuyPath(fromSym, toSym) {
   return tokens[fromSym]?.address === ZERO_ADDRESS && tokens[toSym]?._isDaicoCoin === true;
 }
+// Curve coin (ClassicalCurveSale launch): ETH ↔ coin only.
+// Pre-graduation routes through CURVE_SALE.buyExactIn / .sell; post-graduation routes through
+// CURVE_SALE.swapExactIn (which forwards to the ZAMM hooked pool and skims the creator fee).
+function isCurveBuyPath(fromSym, toSym) {
+  return tokens[fromSym]?.address === ZERO_ADDRESS && tokens[toSym]?._isCurveCoin === true;
+}
+function isCurveSellPath(fromSym, toSym) {
+  return tokens[fromSym]?._isCurveCoin === true && tokens[toSym]?.address === ZERO_ADDRESS;
+}
+function isCurvePath(fromSym, toSym) {
+  return isCurveBuyPath(fromSym, toSym) || isCurveSellPath(fromSym, toSym);
+}
 function isExactOutDisabled(fromSym, toSym) {
   return isDirectZOrgStake(fromSym, toSym) || isRagequitPath(fromSym, toSym)
     || isZOrgSwap(toSym) || isZammBuyPath(fromSym, toSym)
     || isZammSellPath(fromSym, toSym) || isZOrgSellPath(fromSym, toSym)
-    || isDaicoCoinBuyPath(fromSym, toSym);
+    || isDaicoCoinBuyPath(fromSym, toSym)
+    || isCurvePath(fromSym, toSym);
 }
 
 // ---- DAICO graduated coin buy: ETH → coin via ZAMM hooked pool ----
@@ -4112,6 +4324,182 @@ async function getDaicoCoinBuyQuote(fromAmountStr, fromSym, toSym) {
     }).catch(() => null);
 
     return result;
+  });
+}
+
+// ---- ClassicalCurveSale quote: ETH ↔ curve coin ----
+// Mirrors coin/index.html's _curveEstTokens — feeds an estimate into on-chain quote() to verify cost.
+function curveEstTokens(curve, netETH) {
+  const vr = BigInt(curve.virtualReserve);
+  const sold = BigInt(curve.sold);
+  const cap = BigInt(curve.cap);
+  const R = vr - sold;
+  if (R <= 0n) return 0n;
+  const startPrice = BigInt(curve.startPrice);
+  const endPrice = BigInt(curve.endPrice);
+  if (startPrice <= 0n) return 0n;
+  let tokens;
+  if (endPrice === startPrice) tokens = netETH * (10n ** 18n) / startPrice;
+  else { const A = startPrice * vr * vr / (R * (10n ** 18n)); tokens = netETH * R / (A + netETH); }
+  const remaining = cap - sold;
+  if (tokens > remaining) tokens = remaining;
+  const maxBuy = BigInt(curve.maxBuyBps);
+  if (maxBuy > 0n) { const mx = cap * maxBuy / 10000n; if (tokens > mx) tokens = mx; }
+  return tokens;
+}
+
+async function getCurveQuote(fromAmountStr, fromSym, toSym) {
+  const isBuy = isCurveBuyPath(fromSym, toSym);
+  const coinSym = isBuy ? toSym : fromSym;
+  const coinData = tokens[coinSym];
+  const tokenAddr = coinData.address;
+  const fromData = tokens[fromSym];
+  const amountIn = safeParseUnits(fromAmountStr, fromData.decimals);
+  readSlippage(true);
+  const slip = BigInt(slippageBps);
+  const receiver = getReceiver();
+  const deadline = BigInt(Math.trunc(Date.now() / 1000) + 600);
+
+  return await quoteRPC.call(async (rpc) => {
+    // Single batch: curves() + creatorFees() + effectiveFee() — fresh state on every quote.
+    const stateCalls = [
+      [CURVE_SALE, true, CURVE_SALE_IFACE.encodeFunctionData('curves', [tokenAddr])],
+      [CURVE_SALE, true, CURVE_SALE_IFACE.encodeFunctionData('creatorFees', [tokenAddr])],
+      [CURVE_SALE, true, CURVE_SALE_IFACE.encodeFunctionData('effectiveFee', [tokenAddr])],
+    ];
+    const sRaw = await rpc.call({ to: MULTICALL3_ADDRESS, data: MULTICALL3_IFACE.encodeFunctionData('aggregate3', [stateCalls]) });
+    const sRes = MULTICALL3_IFACE.decodeFunctionResult('aggregate3', sRaw)[0];
+    if (!sRes[0].success) throw new Error('Curve state unavailable');
+    const curve = CURVE_SALE_IFACE.decodeFunctionResult('curves', sRes[0].returnData);
+    const cFee = sRes[1].success ? CURVE_SALE_IFACE.decodeFunctionResult('creatorFees', sRes[1].returnData) : null;
+    const effFee = sRes[2].success
+      ? Number(CURVE_SALE_IFACE.decodeFunctionResult('effectiveFee', sRes[2].returnData)[0])
+      : Number(curve.feeBps);
+    // Refresh cached state (used by tile, dropdown rendering).
+    coinData._curveSeeded = !!curve.seeded;
+    coinData._curveGraduated = !!curve.graduated;
+    const buyBps = cFee ? Number(cFee.buyBps) : 0;
+    const sellBps = cFee ? Number(cFee.sellBps) : 0;
+
+    const refAmount = isBuy ? 10n ** 16n : 10n ** 18n; // 0.01 ETH for buy spot, 1 token for sell spot
+
+    if (curve.seeded) {
+      // Post-grad: route through CURVE_SALE.swapExactIn → ZAMM hooked pool.
+      // Buy: contract takes buyBps from input ETH (poolSeesAmount = amountIn * (1 - buyBps/10000))
+      // Sell: contract takes sellBps from output ETH after swap (userOut = ammOut * (1 - sellBps/10000))
+      const tokenIn = isBuy ? ZERO_ADDRESS : tokenAddr;
+      const tokenOut = isBuy ? tokenAddr : ZERO_ADDRESS;
+      const poolSees = isBuy ? amountIn * (10000n - BigInt(buyBps)) / 10000n : amountIn;
+
+      const quoter = getQuoterBaseContract(rpc);
+      let amountOut = 0n;
+      if (amountIn > 0n) {
+        const q = await quoter.quoteZAMM(false, CURVE_HOOK_FEE, tokenIn, tokenOut, 0, 0, poolSees, { blockTag: 'latest' });
+        amountOut = q.amountOut;
+        if (!isBuy) amountOut = amountOut * (10000n - BigInt(sellBps)) / 10000n;
+      }
+      const minOut = amountOut * (10000n - slip) / 10000n;
+      const poolKey = { id0: 0, id1: 0, token0: ZERO_ADDRESS, token1: tokenAddr, feeOrHook: CURVE_HOOK_FEE };
+      const calldata = CURVE_SALE_IFACE.encodeFunctionData('swapExactIn', [
+        poolKey, amountIn, minOut, isBuy, receiver, deadline
+      ]);
+      const value = isBuy ? amountIn : 0n;
+
+      let spotOut = 0n;
+      try {
+        const spotPoolSees = isBuy ? refAmount * (10000n - BigInt(buyBps)) / 10000n : refAmount;
+        const sq = await quoter.quoteZAMM(false, CURVE_HOOK_FEE, tokenIn, tokenOut, 0, 0, spotPoolSees, { blockTag: 'latest' });
+        spotOut = sq.amountOut;
+        if (!isBuy) spotOut = spotOut * (10000n - BigInt(sellBps)) / 10000n;
+      } catch {}
+
+      return {
+        expectedOutput: amountOut,
+        directCurve: true,
+        curveTarget: CURVE_SALE,
+        curveCalldata: calldata,
+        curveValue: value,
+        msgValue: value,
+        multicall: null, calls: null,
+        isTwoHop: false, isSplit: false, splitLegs: null,
+        sourceA: 'Curve LP', sourceB: null,
+        allQuotes: [{ source: 'Curve LP', sourceId: 99, feeBps: BigInt(isBuy ? buyBps : sellBps), amountIn, amountOut }],
+        spotRate: spotOut > 0n ? spotOut : null,
+        spotRefAmount: refAmount,
+      };
+    }
+
+    // Pre-graduation: bonding-curve trade via buyExactIn / sell.
+    if (isBuy) {
+      let expectedOutput = 0n;
+      if (amountIn > 0n) {
+        const netETH = amountIn * 10000n / BigInt(10000 + effFee);
+        expectedOutput = curveEstTokens(curve, netETH);
+      }
+      if (expectedOutput <= 0n) throw new Error('Curve sold out or invalid amount');
+      const minOut = expectedOutput * (10000n - slip) / 10000n;
+      const calldata = CURVE_SALE_IFACE.encodeFunctionData('buyExactIn', [tokenAddr, minOut, deadline]);
+
+      let spotOut = 0n;
+      try {
+        const spotNet = refAmount * 10000n / BigInt(10000 + effFee);
+        spotOut = curveEstTokens(curve, spotNet);
+      } catch {}
+
+      return {
+        expectedOutput,
+        directCurve: true,
+        curveTarget: CURVE_SALE,
+        curveCalldata: calldata,
+        curveValue: amountIn,
+        msgValue: amountIn,
+        multicall: null, calls: null,
+        isTwoHop: false, isSplit: false, splitLegs: null,
+        sourceA: 'Curve', sourceB: null,
+        allQuotes: [{ source: 'Curve', sourceId: 99, feeBps: BigInt(effFee), amountIn, amountOut: expectedOutput }],
+        spotRate: spotOut > 0n ? spotOut : null,
+        spotRefAmount: refAmount,
+      };
+    }
+
+    // Pre-grad sell: ETH out from selling tokens.
+    let expectedOutput = 0n;
+    if (amountIn > 0n) {
+      const sellRaw = await rpc.call({
+        to: CURVE_SALE,
+        data: CURVE_SALE_IFACE.encodeFunctionData('quoteSell', [tokenAddr, amountIn])
+      });
+      const gross = CURVE_SALE_IFACE.decodeFunctionResult('quoteSell', sellRaw)[0];
+      const fee = gross * BigInt(effFee) / 10000n;
+      expectedOutput = gross - fee;
+    }
+    const minOut = expectedOutput * (10000n - slip) / 10000n;
+    const calldata = CURVE_SALE_IFACE.encodeFunctionData('sell', [tokenAddr, amountIn, minOut, deadline]);
+
+    let spotOut = 0n;
+    try {
+      const sRaw2 = await rpc.call({
+        to: CURVE_SALE,
+        data: CURVE_SALE_IFACE.encodeFunctionData('quoteSell', [tokenAddr, refAmount])
+      });
+      const sGross = CURVE_SALE_IFACE.decodeFunctionResult('quoteSell', sRaw2)[0];
+      spotOut = sGross - sGross * BigInt(effFee) / 10000n;
+    } catch {}
+
+    return {
+      expectedOutput,
+      directCurve: true,
+      curveTarget: CURVE_SALE,
+      curveCalldata: calldata,
+      curveValue: 0n,
+      msgValue: 0n,
+      multicall: null, calls: null,
+      isTwoHop: false, isSplit: false, splitLegs: null,
+      sourceA: 'Curve', sourceB: null,
+      allQuotes: [{ source: 'Curve', sourceId: 99, feeBps: BigInt(effFee), amountIn, amountOut: expectedOutput }],
+      spotRate: spotOut > 0n ? spotOut : null,
+      spotRefAmount: refAmount,
+    };
   });
 }
 
@@ -4718,6 +5106,11 @@ async function getQuote(fromAmountStr, fromSym, toSym) {
   // DAICO graduated coin buy: ETH → coin via ZAMM hooked pool
   if (isDaicoCoinBuyPath(fromSym, toSym)) {
     return await getDaicoCoinBuyQuote(fromAmountStr, fromSym, toSym);
+  }
+
+  // Curve coin (ClassicalCurveSale): ETH ↔ coin, pre-grad via curve / post-grad via hooked zAMM
+  if (isCurvePath(fromSym, toSym)) {
+    return await getCurveQuote(fromAmountStr, fromSym, toSym);
   }
 
   const receiver = getReceiver();
@@ -6488,6 +6881,72 @@ async function executeSwap() {
       return;
     }
 
+    // ---- Curve coin (ETH ↔ ClassicalCurveSale token): direct contract call, no router ----
+    // No ERC20 approval is needed for the sell side: launch() clones make CURVE_SALE the immutable
+    // hook and exempt it from the allowance check, so transferFrom succeeds with zero allowance.
+    if (isCurvePath(fromToken, toToken)) {
+      const isBuy = isCurveBuyPath(fromToken, toToken);
+      const fromSnap = fromToken, toSnap = toToken;
+      swapBtn.innerHTML = `${zfiLoadingSVG(14)} ${isBuy ? 'Preparing buy...' : 'Preparing sell...'}`;
+      swapBtn.disabled = true;
+
+      const fromData = tokens[fromSnap];
+      const amountIn = safeParseUnits(amtStr, fromData.decimals);
+      // Pre-swap balance check (curve sells must hold the coin; buys must hold ETH for value+gas).
+      let tokenBal = getCachedBalance(fromData.address);
+      if (tokenBal == null) {
+        tokenBal = fromData.address === ZERO_ADDRESS
+          ? await _walletProvider.getBalance(_connectedAddress)
+          : await erc20Read(fromData.address).balanceOf(_connectedAddress);
+        setCachedBalance(fromData.address, tokenBal);
+      }
+      if (tokenBal < amountIn) {
+        swapBtn.textContent = `Insufficient ${fromSnap} balance`;
+        swapBtn.disabled = false;
+        _swapResetTimer = setTimeout(() => { handleAmountChange(); }, 3000);
+        _swapBusy = false;
+        return;
+      }
+
+      // Re-quote at exec time so minOut reflects fresh curve state (sold/graduated may have moved).
+      let quote;
+      try {
+        quote = await withRetry(() => getCurveQuote(amtStr, fromSnap, toSnap));
+      } catch (qErr) {
+        showStatus(qErr?.shortMessage || qErr?.message || "Quote failed", "error");
+        swapBtn.textContent = "Quote failed";
+        swapBtn.disabled = false;
+        _swapBusy = false;
+        return;
+      }
+
+      swapBtn.innerHTML = `${zfiLoadingSVG(14)} Confirming...`;
+      const tx = await wcTransaction(
+        _signer.sendTransaction({
+          to: quote.curveTarget,
+          data: quote.curveCalldata,
+          value: quote.curveValue,
+        }),
+        `Confirm ${isBuy ? 'buy' : 'sell'} in your wallet`
+      );
+      swapBtn.innerHTML = `Confirming... <a href="https://etherscan.io/tx/${escAttr(tx.hash)}" target="_blank" style="color:inherit;text-decoration:underline;font-weight:400">view tx &#8599;</a>`;
+
+      const receipt = await waitForTx(tx);
+      if (receipt.status === 0) throw new Error(`${isBuy ? 'Buy' : 'Sell'} transaction failed`);
+
+      swapBtn.textContent = isBuy ? "Buy Complete!" : "Sell Complete!";
+      $("fromAmount").value = "";
+      $("toAmount").value = "";
+      $("quoteInfo").style.display = "none";
+      stopQuoteRefresh();
+      _swapResetTimer = setTimeout(() => {
+        updateBalances();
+        swapBtn.textContent = "Enter an amount";
+        swapBtn.disabled = true;
+      }, 1500);
+      return;
+    }
+
     swapBtn.innerHTML = `${zfiLoadingSVG(14)} Getting quote...`;
     swapBtn.disabled = true;
 
@@ -7689,6 +8148,19 @@ function selectToken(symbol) {
     if (_srcField && _srcField.value) reQuoteDebounced();
     return;
   }
+  // Curve coins are ETH-paired: selecting one forces the other side to ETH (both buy and sell allowed).
+  if (tokens[symbol]?._isCurveCoin) {
+    if (currentModal === "from") { fromToken = symbol; toToken = "ETH"; }
+    else { fromToken = "ETH"; toToken = symbol; }
+    updateTokenDisplay();
+    updateBalances();
+    closeTokenModal();
+    currentModal = null;
+    const _srcField = $("fromAmount");
+    if (_srcField) _srcField.focus();
+    if (_srcField && _srcField.value) reQuoteDebounced();
+    return;
+  }
   if (currentModal === "from") {
     if (symbol === toToken) toToken = fromToken;
     fromToken = symbol;
@@ -8286,6 +8758,8 @@ function switchTab(tab) {
   if (lsEl && lsEl.innerHTML) lsEl.style.display = tab === 'swap' ? '' : 'none';
   const fwEl = $('fwDaicoSection');
   if (fwEl && fwEl.innerHTML) fwEl.style.display = tab === 'swap' ? '' : 'none';
+  const lcEl = $('liveCurveSection');
+  if (lcEl && lcEl.innerHTML) lcEl.style.display = tab === 'swap' ? '' : 'none';
   const pmEl = $('featuredPmSection');
   if (pmEl && pmEl.innerHTML) pmEl.style.display = tab === 'swap' ? '' : 'none';
   if (typeof tbSyncVisibility === 'function') tbSyncVisibility();
