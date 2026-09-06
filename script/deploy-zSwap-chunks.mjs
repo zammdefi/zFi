@@ -77,8 +77,20 @@ async function main() {
       continue;
     }
 
-    const tx = await wallet.sendTransaction({ data: creations[i] });
-    const rc = await tx.wait();
+    // A real tip and an explicit pending nonce: this key is shared with other senders, and a
+    // transaction that idles in the mempool has its nonce taken from under it. Mine promptly, and
+    // if the nonce is taken anyway, stop with a clear message - the run is resumable.
+    const fd = await provider.getFeeData();
+    const tip = (fd.maxPriorityFeePerGas || 0n) > 500000000n ? fd.maxPriorityFeePerGas : 500000000n;
+    const nonce = await provider.getTransactionCount(wallet.address, 'pending');
+    const tx = await wallet.sendTransaction({ data: creations[i], nonce, gasLimit: 5300000n, maxPriorityFeePerGas: tip, maxFeePerGas: ((fd.maxFeePerGas || 0n) - (fd.maxPriorityFeePerGas || 0n)) + tip });
+    let rc;
+    try { rc = await tx.wait(1, 10 * 60 * 1000); }
+    catch (e) {
+      const now = await provider.getTransactionCount(wallet.address, 'latest');
+      if (now > nonce) throw new Error(`chunk${n}: tx ${tx.hash} was never mined - nonce ${nonce} was used by another sender from this key; re-run to resume`);
+      throw e;
+    }
     const addr = rc.contractAddress;
     const code = await provider.getCode(addr);
     if (code.toLowerCase() !== want.toLowerCase()) {
