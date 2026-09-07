@@ -1,0 +1,439 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TokenList admin</title>
+<style>
+:root{--bg:#0b0b0c;--fg:#e8e8ea;--m:#8a8a92;--ln:#26262b;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24;--acc:#60a5fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif;padding:1.5em}
+main{max-width:60em;margin:0 auto}
+h1{font-size:1.1em;font-weight:600;margin:0 0 .2em}
+p.sub{color:var(--m);margin:0 0 1.5em}
+fieldset{border:1px solid var(--ln);border-radius:8px;padding:1em;margin:0 0 1em}
+legend{color:var(--m);padding:0 .5em;font-size:.85em}
+label{display:block;color:var(--m);font-size:.8em;margin:.6em 0 .2em}
+input,select,textarea{width:100%;background:#141417;border:1px solid var(--ln);color:var(--fg);border-radius:6px;
+padding:.5em .6em;font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em}
+textarea{min-height:4em;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:1px solid var(--acc);border-color:var(--acc)}
+.row{border:1px solid var(--ln);border-radius:6px;padding:.75em;margin-bottom:.6em;background:#101013}
+.row h4{margin:0 0 .3em;font-size:.85em;color:var(--acc);display:flex;justify-content:space-between;align-items:center}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 .8em}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 .8em}
+@media(max-width:40em){.grid,.grid3{grid-template-columns:1fr}}
+button{background:#1b1b20;border:1px solid var(--ln);color:var(--fg);border-radius:6px;
+padding:.55em 1em;font:inherit;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--acc)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--acc);border-color:var(--acc);color:#06121f;font-weight:600}
+.bar{display:flex;gap:.5em;flex-wrap:wrap;align-items:center;margin-top:1em}
+pre{background:#101013;border:1px solid var(--ln);border-radius:6px;padding:.75em;
+overflow-x:auto;font-size:.75em;color:var(--m);white-space:pre-wrap;word-break:break-all;max-height:16em}
+.st{margin-top:1em;padding:.75em;border-radius:6px;border:1px solid var(--ln);font-size:.85em;white-space:pre-wrap}
+.st.ok{border-color:var(--ok);color:var(--ok)}
+.st.bad{border-color:var(--bad);color:var(--bad)}
+.st.warn{border-color:var(--warn);color:var(--warn)}
+small.hint{color:var(--m);font-size:.78em;display:block;margin-top:.3em}
+code{font-family:ui-monospace,Menlo,monospace;color:var(--fg)}
+.del{background:transparent;border:0;color:var(--m);cursor:pointer;font-size:.85em;padding:0 .3em}
+.del:hover{color:var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:.8em}
+th{text-align:left;color:var(--m);font-weight:400;border-bottom:1px solid var(--ln);padding:.35em .5em}
+td{padding:.35em .5em;border-bottom:1px solid #17171b;font-family:ui-monospace,Menlo,monospace}
+tr.pick{cursor:pointer}
+tr.pick:hover td{background:#16161a}
+.tag{font-size:.72em;padding:.05em .4em;border-radius:4px;border:1px solid var(--ln);color:var(--m)}
+</style>
+<main>
+<h1>TokenList &mdash; compose an owner batch</h1>
+<p class="sub">The registry at <code>0x0000006013dF75A31678B786061C2B54bf531524</code> is owned by a Safe behind a timelock, so this page does not send: it builds ONE
+<code>multicall(bytes[])</code> and simulates it <em>as the owner</em>. Paste the result into the Safe. Solver lanes have their own page at <a href="./admin/">admin/</a>.</p>
+
+<fieldset>
+<legend>registry</legend>
+<div class="grid">
+  <div><label>registry address</label><input id="reg" value="0x0000006013dF75A31678B786061C2B54bf531524"></div>
+  <div><label>mainnet RPC (the registry lives here)</label><input id="rpc" value="https://ethereum-rpc.publicnode.com"></div>
+</div>
+<div class="bar"><button id="load">Load listings</button><span id="regmeta" style="color:var(--m);font-size:.85em"></span></div>
+<div id="who" class="st" style="display:none"></div>
+</fieldset>
+
+<fieldset>
+<legend>what is listed</legend>
+<div class="grid">
+  <div><label>show chain</label><select id="filter"><option value="">all</option><option value="1">1 &mdash; Ethereum</option><option value="8453">8453 &mdash; Base</option><option value="4663">4663 &mdash; Robinhood</option></select></div>
+  <div><label>&nbsp;</label><small class="hint">Click a row to load its id into an action below. Ranked order is the dropdown order.</small></div>
+</div>
+<div style="max-height:22em;overflow:auto;margin-top:.6em"><table id="listing"><tbody></tbody></table></div>
+</fieldset>
+
+<fieldset>
+<legend>queued owner calls</legend>
+<div id="rows"></div>
+<div class="bar">
+  <button data-add="listForeign">+ list a foreign token</button>
+  <button data-add="setExtra">+ set an extra</button>
+  <button data-add="setRank">+ set rank</button>
+  <button data-add="setArt">+ set art / link / blurb</button>
+  <button data-add="setStandard">+ set standard</button>
+  <button data-add="delist">+ delist</button>
+  <button data-add="sync">+ sync</button>
+</div>
+</fieldset>
+
+<fieldset>
+<legend>the transaction</legend>
+<pre id="data">nothing queued</pre>
+<div class="bar">
+  <button id="sim" class="primary">Simulate as the owner</button>
+  <button id="copy">Copy calldata</button>
+</div>
+<div id="status" class="st" style="display:none"></div>
+<small class="hint">Safe fields &mdash; to: the registry above &middot; value: <code>0</code> &middot; operation: CALL (not delegatecall) &middot; data: the calldata above.</small>
+</fieldset>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const strip=h=>String(h||"").replace(/^0x/,"");
+const pad=(s,n)=>strip(s).padStart(n||64,"0");
+const encUint=v=>pad(BigInt(v).toString(16));
+const encAddr=a=>pad(String(a).toLowerCase(),64);
+/* Accept 627eea, #627eea or 0x627eea and keep only the six hex digits. */
+const encColor=c=>{
+  const h=String(c||"").replace(/[^0-9a-fA-F]/g,"").slice(-6).padStart(6,"0");
+  return encUint(BigInt("0x"+h));
+};
+const encB32=b=>{const h=strip(b).toLowerCase();if(!/^[0-9a-f]{64}$/.test(h))throw Error("not a bytes32: "+b);return h};
+const bytesOf=s=>new TextEncoder().encode(s);
+const hexOf=u8=>Array.from(u8,b=>b.toString(16).padStart(2,"0")).join("");
+/* A dynamic string: length word, then the bytes right-padded to a word. */
+const encString=s=>{const b=bytesOf(s);return encUint(b.length)+(hexOf(b)+"0".repeat(64)).slice(0,Math.ceil(b.length/32)*64||0)};
+const encBytes=encString;
+
+/* Selectors, taken from the deployed ABI. */
+const SEL={
+  rankedIds:"df7ca268", json:"74e18e96", total:"2ddbd13a", owner:"8da5cb5b",
+  isListed:"fcce4883", idOf:"7695a541", listForeign:"99c4f235", setStandard:"4a63bb9b",
+  setArt:"df47d810", setLogoSVG:"1ba41b3d", setExtra:"bc341f98", setRank:"f45d6b86",
+  delist:"964bc33f", sync:"b1357bf9", multicall:"ac9650d8",
+  name:"06fdde03", symbol:"95d89b41", decimals:"313ce567",
+};
+/* keccak256("zfi.v4pool"). Passed as a HASH: the renderer prints an
+   all-printable-ASCII key as a word and anything else as hex, and the page
+   matches the hex. Written as bytes32("zfi.v4pool") it stores fine, renders
+   fine and is never read. */
+const V4POOL_KEY="0x95a932c205571d4d1ca72715c642a2eca21dde79ffc28ff11509681f9383385f";
+/* `TokenList.EXTRA_MAX`. setExtra TRUNCATES past this rather than reverting. */
+const EXTRA_MAX=256;
+const STANDARDS=["UNKNOWN","NATIVE","ERC20","ERC721","ERC1155","TACIT","RUNE","ORDINAL","BRC20"];
+const CHAINS={
+  1:{name:"Ethereum",rpc:"https://ethereum-rpc.publicnode.com"},
+  8453:{name:"Base",rpc:"https://mainnet.base.org"},
+  4663:{name:"Robinhood",rpc:"https://rpc.mainnet.chain.robinhood.com"},
+};
+
+let id=0;
+const rpcCall=async(url,method,params)=>{
+  const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({jsonrpc:"2.0",id:++id,method,params})});
+  const j=await r.json();
+  if(j.error)throw Error(j.error.message||"rpc error");
+  return j.result;
+};
+const call=(url,to,data,from)=>rpcCall(url,"eth_call",[{to,data,...(from?{from}:{})},"latest"]);
+const reg=()=>$("reg").value.trim();
+const rpc=()=>$("rpc").value.trim();
+
+const decStr=hex=>{
+  const b=strip(hex);
+  const off=Number(BigInt("0x"+b.slice(0,64)))*2;
+  const len=Number(BigInt("0x"+b.slice(off,off+64)));
+  const body=b.slice(off+64,off+64+len*2);
+  return new TextDecoder().decode(new Uint8Array((body.match(/../g)||[]).map(x=>parseInt(x,16))));
+};
+const decUintArr=hex=>{
+  const b=strip(hex),n=Number(BigInt("0x"+b.slice(64,128))),out=[];
+  for(let i=0;i<n;i++)out.push(BigInt("0x"+b.slice(128+i*64,192+i*64)));
+  return out;
+};
+
+const say=(m,cls)=>{const s=$("status");s.style.display="";s.className="st "+(cls||"");s.textContent=m};
+
+/* ---------------------------------------------------------------- reading */
+
+let listings=[];
+$("load").onclick=async()=>{
+  try{
+    say("reading…");
+    const owner="0x"+strip(await call(rpc(),reg(),"0x"+SEL.owner)).slice(24);
+    const total=Number(BigInt(await call(rpc(),reg(),"0x"+SEL.total)));
+    $("regmeta").textContent=`${total} listings · owner ${owner}`;
+    const ids=decUintArr(await call(rpc(),reg(),"0x"+SEL.rankedIds));
+    const rows=[];
+    for(const i of ids){
+      let t=null;
+      try{t=JSON.parse(decStr(await call(rpc(),reg(),"0x"+SEL.json+encUint(i))))}catch(e){}
+      if(t)rows.push({id:i,...t});
+    }
+    listings=rows;
+    paintListings();
+    say(`read ${rows.length} listings`,"ok");
+  }catch(e){say("read failed: "+e.message,"bad")}
+};
+$("filter").onchange=paintListings;
+
+function paintListings(){
+  const f=$("filter").value;
+  const body=$("listing").querySelector("tbody");
+  body.innerHTML="";
+  const head=document.createElement("tr");
+  for(const h of ["symbol","chain","std","rank","synced","extras","id"]){
+    const th=document.createElement("th");th.textContent=h;head.appendChild(th);
+  }
+  body.appendChild(head);
+  for(const t of listings){
+    if(f&&String(t.c)!==f)continue;
+    const tr=document.createElement("tr");
+    tr.className="pick";
+    const hex="0x"+t.id.toString(16).padStart(64,"0");
+    const cells=[t.s||"—",String(t.c),t.p||"—",String(t.r),t.v?"yes":"owner-attested",
+      (t.e||[]).map(x=>x.k).join(" ")||"—",hex.slice(0,10)+"…"];
+    /* textContent, never innerHTML: a symbol is text the registry took from a
+       token contract, and this is the page that signs. */
+    for(const c of cells){const td=document.createElement("td");td.textContent=c;tr.appendChild(td)}
+    tr.onclick=()=>{
+      const target=[...document.querySelectorAll('[data-f="id"]')].pop();
+      if(target){target.value=hex;target.dispatchEvent(new Event("input",{bubbles:true}));}
+      else say("add an action below first, then click a row to fill its id","warn");
+    };
+    body.appendChild(tr);
+  }
+}
+
+/* ---------------------------------------------------------------- queueing */
+
+const FIELDS={
+  listForeign:[["chainId","8453"],["token",""],["name",""],["symbol",""],["decimals",""],["color","627eea"],["rank","900000"]],
+  setExtra:[["id",""],["key","origin"],["value",""]],
+  setRank:[["id",""],["rank",""]],
+  setArt:[["id",""],["color","627eea"],["rank",""],["url",""],["description",""]],
+  setStandard:[["id",""],["standard","2"]],
+  delist:[["id",""]],
+  sync:[["id",""]],
+};
+let queue=[];
+
+document.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{
+  const kind=b.dataset.add;
+  const v={};
+  for(const [f,d] of FIELDS[kind])v[f]=d;
+  queue.push({kind,v});
+  paintQueue();
+});
+
+function paintQueue(){
+  const host=$("rows");
+  host.innerHTML="";
+  queue.forEach((q,i)=>{
+    const d=document.createElement("div");
+    d.className="row";
+    const h=document.createElement("h4");
+    const label=document.createElement("span");
+    label.textContent=`${i+1}. ${q.kind}`;
+    const del=document.createElement("button");
+    del.className="del";del.textContent="remove";
+    del.onclick=()=>{queue.splice(i,1);paintQueue()};
+    h.appendChild(label);h.appendChild(del);
+    d.appendChild(h);
+    const grid=document.createElement("div");
+    grid.className=FIELDS[q.kind].length>4?"grid":"grid3";
+    for(const [f] of FIELDS[q.kind]){
+      const wrap=document.createElement("div");
+      const lab=document.createElement("label");lab.textContent=f;
+      const inp=(f==="description"||f==="value")?document.createElement("textarea"):document.createElement("input");
+      inp.dataset.f=f;inp.dataset.i=i;inp.value=q.v[f]??"";
+      wrap.appendChild(lab);wrap.appendChild(inp);grid.appendChild(wrap);
+    }
+    d.appendChild(grid);
+    if(q.kind==="listForeign"){
+      const bar=document.createElement("div");
+      bar.className="bar";
+      const b=document.createElement("button");
+      b.textContent="Read name/symbol/decimals from that chain";
+      b.onclick=()=>pull(i);
+      bar.appendChild(b);
+      const hint=document.createElement("small");
+      hint.className="hint";
+      hint.textContent="Foreign text is owner-attested — nothing on mainnet can read it. The page re-checks decimals against the token on its own chain and drops a row that disagrees, so never type these by hand.";
+      d.appendChild(bar);d.appendChild(hint);
+    }
+    if(q.kind==="setExtra"){
+      const hint=document.createElement("small");
+      hint.className="hint";
+      hint.textContent='key: a word (origin, eq) or a 0x-prefixed bytes32. Type "v4pool" to use keccak256("zfi.v4pool") — that one is a HASH, and written as a word it is never read. Values are capped at 256 characters and setExtra truncates rather than reverting.';
+      d.appendChild(hint);
+    }
+    host.appendChild(d);
+  });
+  build();
+}
+
+$("rows").addEventListener("input",e=>{
+  const t=e.target,i=+t.dataset.i,f=t.dataset.f;
+  if(f===undefined||Number.isNaN(i))return;
+  queue[i].v[f]=t.value;
+  build();
+});
+
+async function pull(i){
+  const q=queue[i];
+  const c=CHAINS[Number(q.v.chainId)];
+  if(!c)return say("unknown chain "+q.v.chainId,"bad");
+  const token=q.v.token.trim();
+  if(!/^0x[0-9a-fA-F]{40}$/.test(token))return say("token is not an address","bad");
+  try{
+    const code=await rpcCall(c.rpc,"eth_getCode",[token,"latest"]);
+    if(!code||code.length<=2)throw Error(`${token} has no code on ${c.name}`);
+    const [n,s,d]=await Promise.all([
+      call(c.rpc,token,"0x"+SEL.name),
+      call(c.rpc,token,"0x"+SEL.symbol),
+      call(c.rpc,token,"0x"+SEL.decimals),
+    ]);
+    q.v.name=decStr(n);q.v.symbol=decStr(s);
+    q.v.decimals=String(Number(BigInt(d)));
+    if(q.v.name.length>40||q.v.symbol.length>12)throw Error("name must be <= 40 and symbol <= 12 characters");
+    paintQueue();
+    say(`read ${q.v.symbol} (${q.v.decimals} decimals) from ${c.name}`,"ok");
+  }catch(e){say("read failed: "+e.message,"bad")}
+}
+
+/* The key a word maps to. `v4pool` is the one that MUST be a hash. */
+function extraKey(raw){
+  const k=String(raw||"").trim();
+  if(k==="v4pool"||k==="zfi.v4pool")return V4POOL_KEY;
+  if(/^0x[0-9a-fA-F]{64}$/.test(k))return k.toLowerCase();
+  const b=bytesOf(k);
+  if(!b.length||b.length>32)throw Error("extra key must be 1-32 bytes, or a 0x bytes32");
+  if(b.some(c=>c<0x20||c>0x7e))throw Error("extra key must be printable ASCII, or a 0x bytes32");
+  return "0x"+(hexOf(b)+"0".repeat(64)).slice(0,64);
+}
+
+/* One queued action -> one owner call. */
+function encodeOne(q){
+  const v=q.v;
+  const idWord=()=>{
+    const s=String(v.id||"").trim();
+    if(!/^0x[0-9a-fA-F]{1,64}$/.test(s))throw Error("id must be 0x-hex — click a row above to fill it");
+    return pad(s);
+  };
+  switch(q.kind){
+    case "listForeign":{
+      const token=String(v.token||"").trim();
+      if(!/^0x[0-9a-fA-F]{40}$/.test(token))throw Error("token is not an address");
+      if(!v.symbol)throw Error("read name/symbol/decimals from the chain first");
+      const dec=Number(v.decimals);
+      if(!Number.isInteger(dec)||dec<0||dec>36)throw Error("decimals out of range");
+      /* listForeign(kind, chainId, account, name, symbol, decimals, color, rank, logo).
+         Four dynamic tails, so the head is nine words and the offsets count
+         from the start of the argument block. */
+      const head=[encUint(0),encUint(BigInt(v.chainId)),encAddr(token),
+        null,null,encUint(dec),encColor(v.color||"627eea"),
+        encUint(BigInt(v.rank||0)),null];
+      const tails=[encString(v.name),encString(v.symbol),encString("")];
+      let off=9*32,body="";
+      const slots=[3,4,8];
+      slots.forEach((s,k)=>{head[s]=encUint(off);off+=tails[k].length/2;body+=tails[k]});
+      return "0x"+SEL.listForeign+head.join("")+body;
+    }
+    case "setExtra":{
+      const val=String(v.value||"");
+      if(bytesOf(val).length>EXTRA_MAX)throw Error(`value is ${bytesOf(val).length} bytes; setExtra truncates past ${EXTRA_MAX}`);
+      return "0x"+SEL.setExtra+idWord()+encB32(extraKey(v.key))+encUint(96)+encString(val);
+    }
+    case "setRank":
+      return "0x"+SEL.setRank+idWord()+encUint(BigInt(v.rank||0));
+    case "setStandard":
+      return "0x"+SEL.setStandard+idWord()+encUint(BigInt(v.standard||0));
+    case "delist":
+      return "0x"+SEL.delist+idWord();
+    case "sync":
+      return "0x"+SEL.sync+idWord();
+    case "setArt":{
+      /* setArt(id, color, rank, logo, url, description) — three dynamic tails. */
+      const head=[idWord(),encColor(v.color||"627eea"),
+        encUint(BigInt(v.rank||0)),null,null,null];
+      const tails=[encString(""),encString(v.url||""),encString(v.description||"")];
+      let off=6*32,body="";
+      [3,4,5].forEach((s,k)=>{head[s]=encUint(off);off+=tails[k].length/2;body+=tails[k]});
+      return "0x"+SEL.setArt+head.join("")+body;
+    }
+  }
+  throw Error("unknown action "+q.kind);
+}
+
+/* listForeign leaves `standard` UNKNOWN, and the page drops any row that is not
+   ERC-20/ERC-721/Native. A listing without a following setStandard never
+   appears, so it is added here rather than left to be remembered. */
+async function expand(q){
+  const out=[encodeOne(q)];
+  if(q.kind==="listForeign"){
+    const account=pad(String(q.v.token).trim(),64);
+    const idHex=await call(rpc(),reg(),"0x"+SEL.idOf+encUint(0)+encUint(BigInt(q.v.chainId))+account);
+    out.push("0x"+SEL.setStandard+pad(idHex)+encUint(2));
+  }
+  return out;
+}
+
+let calldata="";
+let expanded=[];
+async function buildAsync(){
+  const calls=[];
+  for(const q of queue)calls.push(...await expand(q));
+  expanded=calls;
+  let off=calls.length*32,heads="",tails="";
+  for(const c of calls){
+    const d=strip(c),len=d.length/2;
+    const body=encUint(len)+(d+"0".repeat(64)).slice(0,Math.ceil(d.length/64)*64);
+    heads+=encUint(off);tails+=body;off+=body.length/2;
+  }
+  calldata="0x"+SEL.multicall+encUint(32)+encUint(calls.length)+heads+tails;
+  return calls;
+}
+let buildSeq=0;
+async function build(){
+  const my=++buildSeq;
+  if(!queue.length){calldata="";expanded=[];$("data").textContent="nothing queued";return}
+  try{
+    const calls=await buildAsync();
+    if(my!==buildSeq)return;
+    $("data").textContent=calldata+"\n\n"+((calldata.length-2)/2)+" bytes · "+calls.length+
+      " owner call"+(calls.length===1?"":"s")+" in one multicall";
+  }catch(e){
+    if(my!==buildSeq)return;
+    calldata="";$("data").textContent="cannot encode: "+e.message;
+  }
+}
+
+$("sim").onclick=async()=>{
+  if(!calldata)return say("nothing encoded","bad");
+  try{
+    const owner="0x"+strip(await call(rpc(),reg(),"0x"+SEL.owner)).slice(24);
+    await call(rpc(),reg(),calldata,owner);
+    say(`simulation passed as the owner (${owner}).\n\n`+
+      `${expanded.length} call(s), ${(calldata.length-2)/2} bytes. Paste into the Safe:\n`+
+      `  to        ${reg()}\n  value     0\n  operation CALL (not delegatecall)`,"ok");
+  }catch(e){
+    say("simulation REVERTED as the owner: "+(e.message||e)+
+      "\n\nCommon causes: the listing already exists (Exists), the id is not listed (Unknown), "+
+      "a frozen listing (NotEditable), or a live local token sent through listForeign (NotSyncable).","bad");
+  }
+};
+
+$("copy").onclick=async()=>{
+  if(!calldata)return say("nothing encoded","bad");
+  try{await navigator.clipboard.writeText(calldata);say("calldata copied","ok")}
+  catch{say("could not copy — select it from the box above","bad")}
+};
+
+paintQueue();
+</script>

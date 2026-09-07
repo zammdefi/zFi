@@ -51,8 +51,15 @@ page = page
 // lens fell through to emptyBook() and the Orders tab rendered blank, which
 // reads as "no liquidity" rather than "the preview is stale". Read the
 // constants out of the page so the two cannot drift again.
+// The boards moved into the per-chain `MB` table when the page went
+// multi-chain, so a bare `NAME="0x..."` match stopped finding them and the
+// preview could no longer be rebuilt at all - which is how it drifted into a
+// hand-patched, pre-multichain snapshot. Look in both places.
+const MB_KEY = { SB2: 'sb', SB1: 's1', SWAPBOL: 'sw', DUTCH: 'du', ORDERBOL: 'ob', FLOOR: 'fl', PROUTE: 'pr', PLAUNCH: 'la' };
 function pageConst(name) {
-  const m = page.match(new RegExp(name + '="(0x[0-9a-fA-F]{40})"'));
+  let m = page.match(new RegExp('(?:const|let) ' + name + '="(0x[0-9a-fA-F]{40})"'));
+  if (!m && MB_KEY[name]) m = page.match(new RegExp(`const MB=\\{[^;]*\\b${MB_KEY[name]}:"(0x[0-9a-fA-F]{40})"`));
+  if (!m) m = page.match(new RegExp(name + '="(0x[0-9a-fA-F]{40})"'));
   if (!m) throw Error(`preview cannot find ${name} in zSwap.html`);
   return m[1].toLowerCase();
 }

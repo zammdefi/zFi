@@ -21,6 +21,7 @@
 //     --like 0xA0b8…eB48            # copy logo, colour and rank from this mainnet listing
 //     [--logo path.svg] [--color 2775ca] [--rank 995000] [--url …] [--desc …]
 //     [--extra origin=bitcoin]      # any bytes32-keyed note, repeatable
+//     [--v4pool v1:0:0:60:0x2C67…6444]  # a v4 pool key, hooked or not
 //     [--token 0x… --like 0x… …]    # more tokens: one multicall lists them all
 //     [--out deploy/USDC-8453-list]
 //
@@ -41,6 +42,7 @@ const CHAINS = {
   4663: {name: "Robinhood", rpc: "https://rpc.mainnet.chain.robinhood.com"},
 };
 const FOREIGN_FLAG = 1n << 255n;
+const ZERO_ADDR = "0x" + "00".repeat(20);
 const KIND_EVM = 0;
 const STANDARD_ERC20 = 2;
 
@@ -78,6 +80,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === "--url" && jobs.length) jobs.at(-1).url = argv[++i];
   else if (argv[i] === "--desc" && jobs.length) jobs.at(-1).desc = argv[++i];
   else if (argv[i] === "--extra" && jobs.length) jobs.at(-1).extras.push(argv[++i]);
+  else if (argv[i] === "--v4pool" && jobs.length) jobs.at(-1).v4pool = argv[++i];
 }
 if (!jobs.length) { console.error("at least one --token is required"); process.exit(1); }
 const outBase = flag("--out");
@@ -89,10 +92,69 @@ const l1 = new JsonRpcProvider(MAINNET, 1, {staticNetwork: true});
 const call = async (p, to, iface, fn, args = []) => iface.decodeFunctionResult(fn, await p.call({to, data: iface.encodeFunctionData(fn, args)}));
 const foreignId = (id, account) =>
   (BigInt(keccak256(AbiCoder.defaultAbiCoder().encode(["uint8", "uint64", "bytes32"], [KIND_EVM, id, account]))) | FOREIGN_FLAG);
+// An extra key is a raw bytes32. The renderer prints it as a WORD when every
+// byte is printable ASCII and as HEX otherwise, and the page matches on what it
+// printed - so a key that is a hash has to be passed as its hash. `zfi.v4pool`
+// is one: writing it as `bytes32("zfi.v4pool")` renders the word `zfi.v4pool`,
+// which the page never looks for, and the pool is silently invisible.
 const label = (s) => {
+  if (/^0x[0-9a-fA-F]{64}$/.test(s)) return s.toLowerCase();
   const b = Buffer.from(s, "utf8");
-  if (!b.length || b.length > 32) throw Error(`extra key must be 1-32 bytes: ${s}`);
+  if (!b.length || b.length > 32) throw Error(`extra key must be 1-32 bytes or a 0x-prefixed bytes32: ${s}`);
+  if (b.some((c) => c < 0x20 || c > 0x7e)) throw Error(`extra key must be printable ASCII or a bytes32: ${s}`);
   return "0x" + b.toString("hex").padEnd(64, "0");
+};
+
+// `TokenList.EXTRA_MAX`. `setExtra` TRUNCATES past it rather than reverting, so
+// an over-long value is stored sheared - and a pool key cut mid-address routes
+// nowhere while still looking like a listing that has one.
+const EXTRA_MAX = 256;
+
+/// keccak256("zfi.v4pool") - the key zSwap reads pool keys from.
+const V4POOL_KEY = "0x95a932c205571d4d1ca72715c642a2eca21dde79ffc28ff11509681f9383385f";
+
+// Chains where a published v4 pool can actually be quoted. zSwap prices every
+// pool it reads from this extra by running it through a V4QuoteLens; where none
+// is deployed the page's `V4LENS === ZERO` guard drops them all and the swapper
+// sees no route, so publishing one there is writing a promise nothing can keep.
+// One CREATE3 address on every chain, each holding that chain's build bound to
+// that chain's Uniswap V4Quoter. See deploy/V4QuoteLensL2.md.
+const V4LENS_ADDRESS = "0x00000000Dc6f467A7AA88e216a904Cf758453EbC";
+const V4LENS = {1: V4LENS_ADDRESS, 8453: V4LENS_ADDRESS, 4663: V4LENS_ADDRESS};
+
+/**
+ * Parse a `zfi.v4pool` value EXACTLY as zSwap's `parseV4Pools` does, and refuse
+ * anything it would drop.
+ *
+ *   v1 : other : fee : tickSpacing : hooks   (`;`-separated, up to 8)
+ *
+ * `other` is the currency paired against the LISTED token (`0` for native ETH)
+ * and the listed token is not repeated - the entry is already on its listing.
+ * The page sorts the pair to recover currency0/currency1.
+ *
+ * Every rejection here is a pool the page would silently skip: it has no way to
+ * report a malformed spec, so the only place a typo can be caught is before the
+ * multisig signs it.
+ */
+const parseV4Pools = (spec, token) => {
+  const specs = spec.split(";").map((x) => x.trim()).filter(Boolean);
+  if (!specs.length) throw Error("--v4pool is empty");
+  if (specs.length > 8) throw Error(`--v4pool carries ${specs.length} pools; the page reads 8`);
+  return specs.map((one) => {
+    const p = one.split(":");
+    if (p.length !== 5 || p[0] !== "v1") throw Error(`--v4pool: expected v1:other:fee:tickSpacing:hooks, got ${one}`);
+    const addr = (x, what) => {
+      if (x === "0") return "0x" + "00".repeat(20);
+      if (!/^0x[0-9a-fA-F]{40}$/.test(x)) throw Error(`--v4pool: ${what} is not an address or 0: ${x}`);
+      return getAddress(x);
+    };
+    const other = addr(p[1], "other");
+    const hooks = addr(p[4], "hooks");
+    if (!/^\d{1,7}$/.test(p[2]) || !/^\d{1,7}$/.test(p[3])) throw Error(`--v4pool: fee and tickSpacing are 1-7 digits: ${one}`);
+    if (Number(p[3]) < 1) throw Error(`--v4pool: tickSpacing must be at least 1: ${one}`);
+    if (other.toLowerCase() === token.toLowerCase()) throw Error(`--v4pool: a pool cannot pair ${token} with itself`);
+    return {other, fee: Number(p[2]), ts: Number(p[3]), hooks};
+  });
 };
 const svgFromDataUrl = (u) => {
   const m = /^data:image\/svg\+xml;base64,(.+)$/.exec(u || "");
@@ -131,6 +193,28 @@ for (const j of jobs) {
   const desc = j.desc ?? (like ? `${like.n || symbol} on ${CHAINS[chainId].name}` : "");
   const extras = j.extras.map((e) => { const i = e.indexOf("="); return [e.slice(0, i), e.slice(i + 1)]; });
   if (like) extras.unshift(["eq", `eip155:1:${j.like.toLowerCase()}`]);
+
+  // A v4 pool key, checked against the chain it names before it is written.
+  // The page cannot report a bad one - it drops what it cannot parse and routes
+  // through what is left - so a hook address that is an EOA, or a pool nobody
+  // can quote, has to be refused here or not at all.
+  if (j.v4pool) {
+    const pools = parseV4Pools(j.v4pool, j.token);
+    for (const q of pools) {
+      if (q.hooks !== ZERO_ADDR && (await l2.getCode(q.hooks)).length <= 2) throw Error(`${symbol}: hook ${q.hooks} has no code on ${CHAINS[chainId].name}`);
+      if (q.other !== ZERO_ADDR && (await l2.getCode(q.other)).length <= 2) throw Error(`${symbol}: paired currency ${q.other} has no code on ${CHAINS[chainId].name}`);
+    }
+    // Not only the hooked ones. The page reads EVERY pool it takes from this
+    // extra through the lens, so with `V4LENS` zero it quotes none of them and
+    // the listing carries a route the swapper can never be offered.
+    if (!V4LENS[chainId]) {
+      throw Error(`${symbol}: chain ${chainId} has no V4QuoteLens, so zSwap quotes nothing from a zfi.v4pool entry there - see deploy/L2Listing.md`);
+    }
+    extras.push([V4POOL_KEY, j.v4pool.split(";").map((x) => x.trim()).filter(Boolean).join(";")]);
+  }
+  for (const [k, v] of extras) {
+    if (v.length > EXTRA_MAX) throw Error(`${symbol}: extra ${k} is ${v.length} characters; setExtra truncates past ${EXTRA_MAX}`);
+  }
 
   const mine = [];
   mine.push(registry.encodeFunctionData("listForeign", [KIND_EVM, chainId, account, name, symbol, decimals, color, rank, ""]));

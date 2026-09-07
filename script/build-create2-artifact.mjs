@@ -40,6 +40,7 @@ const SOURCES = {
   Fwabol: "src/forwarders/Fwabol.sol",
   FwabolV2: "src/forwarders/FwabolV2.sol",
   V4QuoteLens: "src/V4QuoteLens.sol",
+  DeepstateQuoteLens: "src/DeepstateQuoteLens.sol",
   V4Port: "src/forwarders/V4Port.sol",
   zQuoterV4: "src/zQuoterV4.sol",
   PrecisionPoolFactory: "src/pools/PrecisionPoolFactory.sol",

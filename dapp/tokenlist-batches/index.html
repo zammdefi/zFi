@@ -1,0 +1,149 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TokenList owner batches</title>
+<style>
+:root{--bg:#0b0b0c;--fg:#e8e8ea;--m:#8a8a92;--ln:#26262b;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24;--acc:#60a5fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif;padding:1.5em}
+main{max-width:52em;margin:0 auto}
+h1{font-size:1.15em;font-weight:600;margin:0 0 .2em}
+p.sub{color:var(--m);margin:0 0 1.4em}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
+.fields{border:1px solid var(--ln);border-radius:8px;padding:.9em 1.1em;margin:0 0 1.4em;background:#101013}
+.fields div{display:flex;gap:1em;padding:.18em 0}
+.fields span:first-child{color:var(--m);min-width:8.5em}
+.card{border:1px solid var(--ln);border-radius:8px;padding:1em 1.1em;margin:0 0 1em;background:#101013}
+.card h2{font-size:.95em;margin:0 0 .1em;color:var(--acc);display:flex;justify-content:space-between;align-items:baseline;gap:1em}
+.card h2 em{font-style:normal;font-size:.8em;color:var(--m)}
+.meta{color:var(--m);font-size:.82em;margin:.35em 0 .8em}
+.toks{font-family:ui-monospace,Menlo,monospace;font-size:.8em;color:var(--fg);margin:.2em 0 .8em;line-height:1.7}
+.toks b{color:var(--ok);font-weight:400}
+.toks s{color:var(--bad);text-decoration-color:var(--bad)}
+button{background:#1b1b20;border:1px solid var(--ln);color:var(--fg);border-radius:6px;padding:.55em 1.1em;font:inherit;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#06121f;font-weight:600}
+.bar{display:flex;gap:.6em;align-items:center;flex-wrap:wrap}
+.hash{color:var(--m);font-family:ui-monospace,Menlo,monospace;font-size:.75em;word-break:break-all;margin-top:.7em}
+.note{border-left:2px solid var(--warn);padding:.15em 0 .15em .85em;margin:.9em 0 0;color:var(--m);font-size:.85em}
+.said{color:var(--ok);font-size:.85em}
+</style>
+<main>
+<h1>TokenList &mdash; owner batches</h1>
+<p class="sub">Two transactions, both on <b>Ethereum mainnet</b>, both to the TokenList registry. They describe tokens that live on Base and Robinhood; nothing is sent on those chains.</p>
+
+<div class="fields">
+  <div><span>to</span><code>0x0000006013dF75A31678B786061C2B54bf531524</code></div>
+  <div><span>value</span><code>0</code></div>
+  <div><span>operation</span><code>CALL</code> &mdash; not delegatecall</div>
+  <div><span>from</span><code>0x006CD14F36F65eCbB29b2519cCBe63A0DC8549F2</code> (owner Safe)</div>
+</div>
+
+<div class="card">
+  <h2>Artwork for seven listings <em>ready to send</em></h2>
+  <div class="meta">7 &times; <code>setLogoSVG</code> &middot; 7,140 bytes &middot; gas ~2.6M (budget 3.5M)</div>
+  <div class="toks">
+    <img src="../assets/usdg.svg" width="20" height="20" style="vertical-align:-5px"> <b>USDG</b> &nbsp;
+    <img src="../assets/nvda.svg" width="20" height="20" style="vertical-align:-5px"> <b>NVDA</b> &nbsp;
+    <img src="../assets/marian.svg" width="20" height="20" style="vertical-align:-5px"> <b>MARIAN</b> &nbsp;
+    <img src="../assets/state.svg" width="20" height="20" style="vertical-align:-5px"> <b>STATE</b><br>
+    <img src="../assets/cbbtc.svg" width="20" height="20" style="vertical-align:-5px"> <b>cbBTC</b> &nbsp;
+    <img src="../assets/cbeth.svg" width="20" height="20" style="vertical-align:-5px"> <b>cbETH</b> &nbsp;
+    <img src="../assets/aero.svg" width="20" height="20" style="vertical-align:-5px"> <b>AERO</b>
+    &nbsp;<span style="color:var(--m)">&mdash; four on Robinhood, three on Base</span>
+  </div>
+  <div class="bar"><button class="primary" data-copy="logos.txt">Copy calldata</button><span class="said" data-said="logos.txt"></span></div>
+  <div class="hash">sha256 <span data-hash="logos.txt">&hellip;</span></div>
+  <div class="note">Every one of these draws a grey generated initial today. <code>setLogoSVG</code> does not store what it is given &mdash;
+  it base64s the markup into a <code>data:image/svg+xml</code> URI and stores that &mdash; so the fork test asserts the stored URI
+  <b>decodes back to the exact source bytes</b> for all seven, not merely that the call succeeded. Sources live in
+  <code>dapp/assets/</code>. AERO was redrawn from a 139&nbsp;KB trace whose base64 alone would be seven times the registry's
+  24,576&nbsp;B cap; at 500&nbsp;B it is the same mark. NVDA is the eye symbol with the wordmark dropped, since a 5.5:1 wordmark
+  is illegible at 20px.</div>
+</div>
+
+<div class="card" style="opacity:.55">
+  <h2>List STATE on Robinhood <em>SENT</em></h2>
+  <div class="meta">4 calls &middot; 1,476 bytes &middot; gas 397,189 (budget 600k)</div>
+  <div class="toks"><b>STATE</b> 988000 &mdash; <code>0xbfb7b3Ff3D498a559b946B836d26F0E168f273D5</code>, 18 dec, "Deepstate Governance", <code>origin=robinhood</code></div>
+  <div class="bar"><button class="primary" data-copy="state.txt">Copy calldata</button><span class="said" data-said="state.txt"></span></div>
+  <div class="hash">sha256 <span data-hash="state.txt">&hellip;</span></div>
+  <div class="note">Found by scanning, not assumed: <code>script/find-deep-markets.mjs</code> probes every token Deepstate's own front end
+  mentions for a live book, and STATE was the one with liquidity that zSwap does not list. It is Deepstate's governance token and also the
+  <code>feeConfig</code> recipient. The quote holds against a real fill on a fork &mdash; 219,780 USDG quoted, 219,780 filled &mdash; so the
+  market is reachable, not just present. No logo: the token exposes no metadata and the project publishes no mark for it, so it will draw a
+  generated initial until one is supplied.</div>
+</div>
+
+<div class="card" style="opacity:.55">
+  <h2>List DEEP on Robinhood <em>SENT 2026-09-06</em></h2>
+  <div class="meta">5 calls &middot; 2,052 bytes &middot; gas 826,145 (budget 1.2M)</div>
+  <div class="toks"><b>DEEP</b> 989000 &mdash; <code>0x1DA24f6Bb623b9d1aFEae3F3146659A2662D6d27</code>, 18 dec, <code>origin=robinhood</code>, with logo
+  <img src="../assets/deep.svg" width="18" height="18" style="vertical-align:-4px;border-radius:3px" alt=""></div>
+  <div class="bar"><button class="primary" data-copy="deep.txt">Copy calldata</button><span class="said" data-said="deep.txt"></span></div>
+  <div class="hash">sha256 <span data-hash="deep.txt">&hellip;</span></div>
+  <div class="note">Left out of the first Robinhood batch because nothing could price it. It is priced now: <code>DeepstateQuoteLens</code> is live at
+  <code>0x0000001E02789eaC19b11120A2017677dA7F91af</code> on 4663 (Sourcify <b>exact_match</b>), and zSwap reads it as a venue alongside the AMMs.
+  DEEP's only market is the Deepstate order book &mdash; ~2.0M DEEP resting on the ask, no AMM pool anywhere &mdash; so this listing and that lens
+  only make sense together. Replayed on a mainnet fork: 6 rows on Robinhood afterwards, nothing dropped, and the logo reads back out of
+  <code>logoOf(id)</code> as the exact 458-byte data URI that went in.</div>
+</div>
+
+<div class="card" style="opacity:.55">
+  <h2>Robinhood &mdash; 4663 <em>SENT 2026-09-06</em></h2>
+  <div class="meta">18 calls &middot; 8,004 bytes &middot; gas 3,199,738 (budget 4.2M)</div>
+  <div class="toks"><b>ETH</b> 1000000 &middot; <b>WETH</b> 999000 &middot; <b>USDG</b> 995000 &middot; <b>NVDA</b> 990000 &middot; <b>MARIAN</b> 985000</div>
+  <div class="bar"><button class="primary" data-copy="robinhood-nodeep.txt">Copy calldata</button><span class="said" data-said="robinhood-nodeep.txt"></span></div>
+  <div class="hash">keccak256 <span data-hash="robinhood-nodeep.txt">…</span></div>
+  <div class="note">DEEP is left out. It is Deepstate&rsquo;s own token and quotes through the Deepstate CLOB, which zQuoter does not integrate &mdash; measured: no route against ETH, WETH or USDG, in either direction. It would sit in the dropdown and never quote. Listing ids are hashes of (kind, chainId, account), so re-listing it later returns the identical id.</div>
+</div>
+
+<div class="card" style="opacity:.35">
+  <h2>Robinhood &mdash; 4663 <em>with DEEP &mdash; superseded, not sent</em></h2>
+  <div class="meta">21 calls &middot; 9,188 bytes &middot; gas 3,532,404 (budget 4.6M)</div>
+  <div class="toks"><b>ETH</b> &middot; <b>WETH</b> &middot; <b>USDG</b> &middot; <b>NVDA</b> &middot; <s>DEEP</s> &middot; <b>MARIAN</b></div>
+  <div class="bar"><button data-copy="robinhood.txt">Copy calldata</button><span class="said" data-said="robinhood.txt"></span></div>
+  <div class="hash">keccak256 <span data-hash="robinhood.txt">…</span></div>
+</div>
+
+<div class="card" style="opacity:.55">
+  <h2>Base &mdash; 8453 <em>SENT 2026-09-06</em></h2>
+  <div class="meta">45 calls &middot; 20,772 bytes &middot; gas 9,870,182 (budget 13M)</div>
+  <div class="toks"><b>ETH</b> 1000000 &middot; <b>WETH</b> 999000 &middot; <b>wstETH</b> 998000 &middot; <b>cbETH</b> 997250 &middot; <b>rETH</b> 997000 &middot; <b>cbBTC</b> 996000 &middot; <b>USDC</b> 995000 &middot; <b>USDT</b> 994000 &middot; <b>DAI</b> 993500 &middot; <b>AERO</b> 985000</div>
+  <div class="bar"><button class="primary" data-copy="base.txt">Copy calldata</button><span class="said" data-said="base.txt"></span></div>
+  <div class="hash">keccak256 <span data-hash="base.txt">…</span></div>
+  <div class="note">Carries <code>origin=bitcoin</code> on cbBTC and the <code>zfi.v4pool</code> key on USDC (<code>v1:0:3000:10:0</code>) &mdash; a live ETH/USDC pool at fee 3000, tickSpacing 10, which the four-tier sweep cannot reach. rETH is thin on the venues zQuoter sees (~$25 of local depth); the solver lanes may cover it.</div>
+</div>
+
+<p class="sub" style="margin-top:1.6em">The registry holds <b>38</b> listings. The artwork batch changes no listings &mdash; it only gives seven of them their marks. The faded cards are already on chain, kept for the record.</p>
+</main>
+<script>
+/* Fetched, never inlined: the page and the bytes stay one file each, so what you
+   copy is the file the fork test replayed and not a transcription of it. */
+const text = {};
+async function load(name) {
+  if (text[name]) return text[name];
+  const r = await fetch(name);
+  if (!r.ok) throw Error(name + ": HTTP " + r.status);
+  return text[name] = (await r.text()).trim();
+}
+async function sha(name) {
+  /* keccak is not in SubtleCrypto; the digest here is only a paste check, so it
+     is computed over the same bytes on both sides by the same function. */
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(await load(name)));
+  return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+for (const el of document.querySelectorAll("[data-hash]")) {
+  sha(el.dataset.hash).then(h => { el.textContent = "sha256 " + h; }).catch(e => { el.textContent = e.message; });
+}
+for (const b of document.querySelectorAll("[data-copy]")) {
+  b.onclick = async () => {
+    const name = b.dataset.copy;
+    const said = document.querySelector(`[data-said="${name}"]`);
+    try {
+      const t = await load(name);
+      await navigator.clipboard.writeText(t);
+      said.textContent = `copied — ${t.length.toLocaleString()} characters, starts ${t.slice(0, 10)}`;
+    } catch (e) { said.textContent = "copy failed: " + e.message; }
+  };
+}
+</script>

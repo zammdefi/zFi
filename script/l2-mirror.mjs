@@ -47,9 +47,38 @@ const CREATEX = "0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed";
 const EXECUTOR = "0x25Fc36455aa30D012bbFB86f283975440D7Ee8Db";
 
 export const CHAINS = {
-  8453: {name: "Base", rpc: "https://mainnet.base.org", weth: "0x4200000000000000000000000000000000000006"},
-  4663: {name: "Robinhood", rpc: "https://rpc.mainnet.chain.robinhood.com", weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"},
+  // Mainnet is in this table for the entries that opt into it (see `chains` on a
+  // manifest entry). The book and pool suite are NOT among them - those are the
+  // mainnet contracts being mirrored, and they are already deployed there at
+  // their own CREATE2 addresses. What mainnet is here for is a contract that has
+  // to sit at the SAME address on all three, which is what CREATE3 buys.
+  1: {
+    name: "Ethereum",
+    rpc: "https://ethereum-rpc.publicnode.com",
+    weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    v4Quoter: "0x52F0E24D1c21C8A0cB1e5a5dD6198556BD9E1203",
+    v4PoolManager: "0x000000000004444c5dc75cB358380D2e3dE08A90",
+  },
+  8453: {
+    name: "Base",
+    rpc: "https://mainnet.base.org",
+    weth: "0x4200000000000000000000000000000000000006",
+    v4Quoter: "0x0d5e0F971ED27FBfF6c2837bf31316121532048D",
+    v4PoolManager: "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+  },
+  4663: {
+    name: "Robinhood",
+    rpc: "https://rpc.mainnet.chain.robinhood.com",
+    weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    v4Quoter: "0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94",
+    v4PoolManager: "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+  },
 };
+
+// Which chains an entry is built and deployed for. The mirror is an L2 mirror by
+// default; an entry says otherwise with `"chains": [...]` in the manifest.
+const L2_ONLY = [8453, 4663];
+const chainsFor = (entry) => (entry.chains || L2_ONLY).map(Number);
 
 // Order matters within each list: a dependent's constructor reads its
 // dependency's code, so the factory precedes the pool suite and the boards
@@ -76,6 +105,7 @@ const SOURCES = {
   OrderbolL2: "src/forwarders/OrderbolL2.sol",
   SwapbolL2: "src/forwarders/SwapbolL2.sol",
   PrecisionRouteL2: "src/pools/PrecisionRouteL2.sol",
+  V4QuoteLensL2: "src/V4QuoteLensL2.sol",
 };
 const OPTIMIZER_RUNS = {
   Swapboard: 200,
@@ -84,6 +114,10 @@ const OPTIMIZER_RUNS = {
   OrderbolL2: 9_999_999,
   SwapbolL2: 9_999_999,
   PrecisionRouteL2: 200,
+  // The default, matching its mainnet sibling `V4QuoteLens`. Size is not the
+  // constraint here - the whole contract is 3.3 KB - and there is no
+  // compilation restriction to keep in step.
+  V4QuoteLensL2: 9_999_999,
 };
 
 // Constructor arguments per chain. `weth` is the chain's; every other address
@@ -102,6 +136,11 @@ const argsFor = (name, chainId, addr) => {
       return [addr("Swapboard"), addr("Dutchboard"), addr("Floorboard"), weth];
     case "PrecisionRouteL2":
       return [mainnetAddress("PrecisionPoolFactory"), EXECUTOR, weth];
+    // Uniswap's own V4Quoter, plus the PoolManager it answers for. The
+    // constructor checks the second against the first, so a quoter pasted from
+    // the wrong chain fails at deployment instead of returning (0, 0) forever.
+    case "V4QuoteLensL2":
+      return [CHAINS[chainId].v4Quoter, CHAINS[chainId].v4PoolManager];
     default:
       throw Error(`no constructor shape for ${name}`);
   }
@@ -164,7 +203,7 @@ function build() {
       failed = true;
       continue;
     }
-    for (const chainId of Object.keys(CHAINS)) {
+    for (const chainId of chainsFor(entry)) {
       const {creation, runtime} = creationFor(name, Number(chainId), addr);
       if (runtime > 24_576) {
         console.error(`FAIL ${name}: runtime ${runtime} B exceeds EIP-170`);
@@ -192,12 +231,15 @@ async function plan(chainId) {
   const m = readManifest();
   const p = provider(chainId);
   const rows = [];
-  for (const name of REPLAY) {
+  // The replay set IS the mainnet suite being mirrored; there is nothing to
+  // replay onto the chain it came from.
+  for (const name of Number(chainId) === 1 ? [] : REPLAY) {
     const address = mainnetAddress(name);
     const code = await p.getCode(address);
     rows.push({name, kind: "replay", address, live: code.length > 2, data: readDeploy(`${name}.deploy.calldata.txt`)});
   }
   for (const [name, entry] of Object.entries(m.create3)) {
+    if (!chainsFor(entry).includes(Number(chainId))) continue;
     const address = getAddress(entry.address);
     const code = await p.getCode(address);
     const creation = fs.readFileSync(path.join(L2DIR, `${name}.${chainId}.creation.txt`), "utf8").trim();
