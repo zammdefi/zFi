@@ -4,14 +4,14 @@ pragma solidity ^0.8.36;
 
 /// @title zSwap v0.3
 /// @notice Permanently-deployed onchain HTML swap dapp for Ethereum mainnet.
-/// @dev Architecture: the HTML payload (437544 B) is the runtime bytecode of
+/// @dev Architecture: the HTML payload (440972 B) is the runtime bytecode of
 ///      17 data contracts, deployed separately and passed to the constructor.
 ///      html() reassembles them via EXTCODECOPY with proper ABI encoding
 ///      (offset + length + padded data) so any RPC client decodes directly.
 ///      request() implements ERC-5219 for first-class web3:// gateway
 ///      compatibility (ERC-4804). Splitting the page across 19 data contracts
 ///      means EIP-170 caps each chunk, not the dapp
-///      (24576 B per chunk, 29400 B headroom).
+///      (24576 B per chunk, 25972 B headroom).
 ///
 ///      The chunk count is fixed in the constructor arity and the page is
 ///      immutable, so it is sized to ceil(len/17) with headroom for a release
@@ -32,7 +32,7 @@ pragma solidity ^0.8.36;
 ///     directly as a web page, which this contract does, so no ERC-5219
 ///     support is required on the gateway side:
 ///       https://<addr>.w4eth.io/
-///     e.g. https://0x000000000000888741b254d37e1b27128afeaabc.w4eth.io/
+///     e.g. https://0x000000006513b7821171c8447ec7ecdfa3b956fd.w4eth.io/
 ///   - Via a wallet/browser with web3:// protocol support (e.g. the
 ///     Web3URL Browser Extension on Chrome/Firefox/Brave).
 ///   - Or via the "HOW TO READ THE DAPP" path above.
@@ -79,9 +79,25 @@ pragma solidity ^0.8.36;
 ///
 /// SLOW
 ///   The send tab can route through SLOW, the time-lock escrow at
-///   0x000000000000888741B254d37e1b27128AfEAaBC, by picking a delay. The
+///   0x000000006513B7821171C8447ec7ECdfa3b956Fd, by picking a delay. The
 ///   sender may reverse the transfer at any point before it matures; after
 ///   maturity the recipient claims it.
+///
+///   The same bytecode sits at that address on Ethereum, Base and Robinhood, so
+///   the delay is offered on every chain the page serves rather than on mainnet
+///   alone. Positions do not travel: they belong to the chain they were made
+///   on, which is why the list is re-read on a chain switch.
+///
+///   What does not travel is the keeper. SLOW's tip gate is deployed on all
+///   three, but only mainnet has a bot claiming from it, and a tip nobody will
+///   collect is worse for the sender than no tip - so auto-claim is offered on
+///   mainnet only. That is one flag, `slowTip`, in the chain table.
+///
+///   The panel is deliberately the common half of SLOW. Guardians, per-token
+///   balances and the full history live on SLOW's own page, which SLOW serves
+///   from its own bytes exactly as this contract serves this one; the send tab
+///   links out to it through the same gateway convention, carrying the chain,
+///   asset, amount, recipient and delay already typed here.
 ///
 ///   Positions are listed by reading the contract directly -
 ///   getOutboundTransfers / getInboundTransfers give the ids, pendingTransfers

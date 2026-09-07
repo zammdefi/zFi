@@ -28,6 +28,16 @@
     "PrecisionRouteL2": {
       "salt": "0x68575b073de49a94e3e3acf6f3a0d6e3b66267c7005f8b43570ffd7e09dfe2b0",
       "address": "0x000000D14E24e5FC8965bcDE58f21f704C944999"
+    },
+    "V4QuoteLensL2": {
+      "salt": "0x68575b073de49a94e3e3acf6f3a0d6e3b66267c70051c7d8651cda8dccb3f8a3",
+      "address": "0x00000000Dc6f467A7AA88e216a904Cf758453EbC",
+      "chains": [
+        1,
+        8453,
+        4663
+      ],
+      "why": "the page prices a hooked or non-canonical v4 pool here, and CREATE3 puts mainnet's, Base's and Robinhood's build - each bound to its own chain's Uniswap V4Quoter - at ONE address, so zSwap's chain table names the same lens everywhere"
     }
   }
 }

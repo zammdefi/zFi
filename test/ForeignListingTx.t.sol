@@ -9,7 +9,8 @@ import {TokenList} from "../src/utils/TokenList.sol";
 ///
 /// @dev The batch is whichever file FOREIGN_LISTING names (default: the Base
 ///      equivalents batch). The assertions are the page's own filter: each new
-///      listing must render as `k=eip155`, `c=<chain>`, `p=ERC-20`, carry decimals
+///      listing must render as `k=eip155`, `c=<chain>`, and `p=ERC-20` - or
+///      `p=Native` for a batch's zero-account row - carry decimals
 ///      that agree with the token on its own chain (checked by the generator), and
 ///      be reachable by the id the generator printed. Idempotent: a batch already
 ///      applied on chain is skipped rather than failed.
@@ -48,14 +49,23 @@ contract ForeignListingTxTest is Test {
             TokenList.Token memory t = reg.get(id);
             assertEq(t.chainId, chainId, "chain id");
             assertTrue(t.kind == TokenList.Kind.EVM, "kind");
-            assertTrue(t.standard == TokenList.Standard.ERC20, "standard must be ERC20 or the page drops it");
+            // The page keeps a row only if its standard is ERC-20, ERC-721 or
+            // Native, and `listForeign` leaves it UNKNOWN - so every listing must
+            // be followed by a `setStandard`. Which one depends on the account: a
+            // batch may carry the chain's NATIVE asset, whose account is the zero
+            // word and which has no contract to be an ERC-20.
+            bool isNative = accounts[i] == bytes32(0);
+            assertTrue(
+                t.standard == (isNative ? TokenList.Standard.NATIVE : TokenList.Standard.ERC20),
+                "standard must be NATIVE for the zero account and ERC20 otherwise, or the page drops it"
+            );
             assertEq(t.decimals, decs[i], "decimals");
             assertFalse(t.synced, "foreign listings are owner-attested, never synced");
             assertGt(bytes(t.symbol).length, 0, "symbol");
             string memory js = reg.json(id);
             assertTrue(_has(js, '"k":"eip155"'), "json namespace");
             assertTrue(_has(js, string.concat('"c":', vm.toString(uint256(chainId)))), "json chain");
-            assertTrue(_has(js, '"p":"ERC-20"'), "json standard");
+            assertTrue(_has(js, isNative ? '"p":"Native"' : '"p":"ERC-20"'), "json standard");
             assertTrue(_has(js, string.concat('"a":"', _hex20(accounts[i]), '"')), "json account is the token");
             emit log_named_string("listed", string.concat(t.symbol, " ", bytes(js).length > 120 ? "ok" : js));
         }

@@ -54,8 +54,14 @@ test, through the L2 variant.
   launcher-backed panels.
 - **Swapboard v1** (`0x000000fF3D7A2d...`) — legacy; `SB1` is zero on the
   L2s and the book scan covers one generation there.
-- **V4QuoteLens** — binds Uniswap's mainnet V4Quoter; the L2 quoters read v4
-  natively and `v4lens` stays zero in the chain table.
+- **V4QuoteLens** — binds Uniswap's mainnet V4Quoter as a constant, so the same
+  bytecode is useless anywhere else. Replaced rather than mirrored, and the
+  replacement covers mainnet too: `V4QuoteLensL2` is a CREATE3 entry in the
+  manifest with `chains: [1, 8453, 4663]`, live at
+  `0x00000000Dc6f467A7AA88e216a904Cf758453EbC` on all three, each build bound to
+  its own chain's Uniswap V4Quoter. It is the first entry here that is not
+  L2-only, which is what `chains` on a manifest entry exists for. See
+  `deploy/V4QuoteLensL2.md`.
 - **SLOW, TokenList, ZLISTLENS, WNS** — mainnet-rooted data the page already
   reads through `cfgRead`/`l1Read` from any chain.
 

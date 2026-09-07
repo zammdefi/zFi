@@ -103,5 +103,12 @@
     "tx": "0x76f7746b12e97689efaaa7c0638541a95adcb35e2d4388d6b8b9a25ebd462f02",
     "block": 50925496,
     "gas": "3200673"
+  },
+  {
+    "name": "V4QuoteLensL2",
+    "address": "0x00000000Dc6f467A7AA88e216a904Cf758453EbC",
+    "tx": "0xedda7345b997138c036008b1ddbc3b51403173c7870ad3e1428fffd30ad0716e",
+    "block": 50950187,
+    "gas": "818949"
   }
 ]
