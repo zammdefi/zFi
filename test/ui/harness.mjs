@@ -977,7 +977,11 @@ export class MockChain {
     // The page builds `swapDeep` straight out of these five words, so a test that
     // sets `deepQuote` is describing an order book without needing one.
     if (sel === SEL.DEEPQ && to === A.DEEPLENS.toLowerCase()) {
-      const q = this.deepQuote;
+      // A hop composes two different books/legs in one quote, so a fixture has to
+      // be able to answer per pair and per size. A function sees what was asked.
+      const body = '0x' + data.slice(8);
+      const ask = { tokenIn: wordAddr(body, 0), tokenOut: wordAddr(body, 1), amount: word(body, 2) };
+      const q = typeof this.deepQuote === 'function' ? this.deepQuote(ask) : this.deepQuote;
       if (!q) return '0x' + u256(0).repeat(5);
       return '0x' + u256(q.out) + u256(q.used) + u256(q.epoch ?? 0)
         + strip(q.order).padStart(64, '0') + u256(q.isBid ? 1 : 0);

@@ -102,9 +102,12 @@ test('the venue is Robinhood-only', async () => {
  * Every test above hands the page a working AMM quoter, which is the one thing
  * production never has for these pairs: DEEP has no pool anywhere, so zQuoter
  * reverts and the page threw "bad quote" before it had even awaited the book.
- * The lens was right, the leg was right, and no Deepstate market was reachable
- * - USDG/DEEP, DEEP/USDG and USDG/NVDA all read "No route" on the live chain.
- * So the case worth pinning is the one with no AMM answer at all.
+ * The lens was right, the leg was right, and every token whose only market is
+ * the book was unreachable: USDG/DEEP, DEEP/USDG and USDG/STATE all read "No
+ * route" on the live chain, while NVDA quoted fine throughout because it also
+ * has an AMM pool for the book to be compared against. That is the tell - the
+ * venue only failed where it was the sole venue. So the case worth pinning is
+ * the one with no AMM answer at all.
  */
 test('a pair only the book prices still quotes, with no AMM route to compare', async () => {
   const chain = new MockChain({ chainId: '0x1237' });
@@ -123,5 +126,134 @@ test('a pair only the book prices still quotes, with no AMM route to compare', a
   await p.typeAmount('amt', '1');
   assert.equal(p.text('stat'), '', 'the book alone must not read as "no route"');
   assert.equal(p.value('outAmt'), '666', 'and it is the book price that is shown');
+  p.close();
+});
+
+/**
+ * Reaching the book through an AMM.
+ *
+ * Every Deepstate book on the chain is quoted in USDG - NVDA, DEEP and STATE
+ * each book against it and nothing else - so ETH/DEEP is not a market and never
+ * will be. It is two legs: an AMM leg to USDG and then the book. The router
+ * already chains them, because a leg addressed to the router leaves its output
+ * as a transient credit and `swapDeep` spends that credit when one covers its
+ * `amountInMax`.
+ *
+ * That last word is the whole risk. `swapDeep` takes a literal maximum with no
+ * "spend whatever the last leg produced" form, so if the book leg is sized at
+ * what the AMM was *expected* to deliver and the AMM delivers a hair less, the
+ * credit no longer covers it, the router falls back to pulling from the caller,
+ * and the whole trade reverts. Sizing it at the AMM's guaranteed floor instead
+ * is what makes the composition safe, and that is what these pin.
+ */
+const HOPSWEEP = 'dc2c256f';
+
+function hopChain({ rate = 2500n * ETH } = {}) {
+  const chain = new MockChain({ chainId: '0x1237' });
+  chain.setNative(A.ACCOUNT, 10n * ETH);
+  chain.setErc20(DEEP, A.ACCOUNT, 1_000_000n * ETH);
+  // The AMM prices ETH -> USDG and nothing else; DEEP has no pool at all.
+  chain.quoteHandler = ({ selector, data }) => {
+    const inner = fixedRateQuoter({ rate });
+    const body = '0x' + data.slice(10);
+    if (!body.toLowerCase().includes(USDG.slice(2))) return null;
+    return inner({ selector, data });
+  };
+  // Only USDG books against DEEP, and the fill is proportional to what is sent.
+  chain.deepQuote = ({ tokenIn, tokenOut, amount }) => {
+    if (tokenIn.toLowerCase() !== USDG || tokenOut.toLowerCase() !== DEEP) return null;
+    return { out: amount * 10n ** 12n * 666n, used: amount, epoch: 3n, order: ORDER.slice(0, 66), isBid: true };
+  };
+  return chain;
+}
+
+test('ETH to DEEP composes an AMM leg into the book', async () => {
+  const chain = hopChain();
+  const p = await loadPage({ chain, hash: null });
+  await p.connect();
+  p.pickToken('toSel', 'DEEP');
+  p.pickToken('fromSel', 'ETH');
+  await p.settle();
+  await p.typeAmount('amt', '1');
+  assert.equal(p.text('stat'), '', 'a two-leg route must not read as no route');
+  assert.ok(Number(p.value('outAmt')) > 0, `expected DEEP out, got "${p.value('outAmt')}"`);
+
+  const built = await p.window.eval('last.callData');
+  assert.ok(built.includes(SWAPDEEP), 'no swapDeep leg in the composed calldata');
+  assert.ok(built.includes(ORDER.slice(2, 66)), 'the book leg must carry the order word the lens priced');
+  assert.ok(built.includes(HOPSWEEP), 'the surplus of the intermediate must be swept back');
+  assert.equal(await p.window.eval('last.msgValue.toString()'), (10n ** 18n).toString(),
+    'the ether leg is paid with the transaction value');
+  p.close();
+});
+
+test('the book leg is sized at the AMM floor, never at its expected output', async () => {
+  const seen = [];
+  const chain = hopChain();
+  const book = chain.deepQuote;
+  chain.deepQuote = (ask) => { seen.push(ask); return book(ask); };
+  const p = await loadPage({ chain, hash: null });
+  await p.connect();
+  p.pickToken('toSel', 'DEEP');
+  p.pickToken('fromSel', 'ETH');
+  await p.settle();
+  await p.typeAmount('amt', '1');
+  const priced = seen.filter(a => a.tokenIn.toLowerCase() === USDG && a.amount > 0n).pop();
+  assert.ok(priced, 'the book was never asked to price the second leg');
+  // 1 ETH at the fixture rate, less the 0.5% the AMM leg is allowed to slip.
+  const expected = 2500n * 10n ** 6n;
+  const floor = expected * 9950n / 10000n;
+  assert.ok(priced.amount <= floor,
+    `the book was sized at ${priced.amount}, above the AMM floor ${floor} - a short fill would revert`);
+  assert.ok(priced.amount > floor * 9990n / 10000n,
+    `sized at ${priced.amount}, needlessly far below the floor ${floor}`);
+  p.close();
+});
+
+test('DEEP to ETH takes the book first, then the AMM', async () => {
+  const chain = new MockChain({ chainId: '0x1237' });
+  chain.setNative(A.ACCOUNT, 10n * ETH);
+  chain.setErc20(DEEP, A.ACCOUNT, 1_000_000n * ETH);
+  chain.quoteHandler = ({ selector, data }) => {
+    const body = '0x' + data.slice(10);
+    if (!body.toLowerCase().includes(USDG.slice(2))) return null;
+    return fixedRateQuoter({ rate: ETH / 2500n, decIn: 6, decOut: 18 })({ selector, data });
+  };
+  chain.deepQuote = ({ tokenIn, tokenOut, amount }) => {
+    if (tokenIn.toLowerCase() !== DEEP || tokenOut.toLowerCase() !== USDG) return null;
+    return { out: amount / 10n ** 12n / 666n, used: amount, epoch: 1n, order: ORDER.slice(0, 66), isBid: false };
+  };
+  const p = await loadPage({ chain, hash: null });
+  await p.connect();
+  p.pickToken('fromSel', 'DEEP');
+  p.pickToken('toSel', 'ETH');
+  await p.settle();
+  await p.typeAmount('amt', '5000');
+  assert.equal(p.text('stat'), '', 'selling into the book through an AMM must quote');
+  const built = await p.window.eval('last.callData');
+  const bookAt = built.indexOf(SWAPDEEP);
+  assert.ok(bookAt > 0, 'no swapDeep leg');
+  // Selling means the book runs first and hands the AMM its credit, so the
+  // book leg has to appear ahead of the sweeps that clean up after it.
+  assert.ok(bookAt < built.indexOf(HOPSWEEP), 'the book leg must precede the sweeps');
+  assert.equal(await p.window.eval('last.msgValue.toString()'), '0', 'selling a token attaches no value');
+  assert.equal(await p.window.eval('last.spender'), await p.window.eval('ZROUTER'),
+    'the router has to be approved to pull the token being sold');
+  p.close();
+});
+
+test('a pair with a direct route is left alone', async () => {
+  const chain = hopChain();
+  let bookAsks = 0;
+  chain.deepQuote = () => { bookAsks++; return null; };
+  const p = await loadPage({ chain, hash: null });
+  await p.connect();
+  p.pickToken('toSel', 'USDG');
+  p.pickToken('fromSel', 'ETH');
+  await p.settle();
+  await p.typeAmount('amt', '1');
+  assert.ok(Number(p.value('outAmt')) > 0, 'the direct AMM route still quotes');
+  const built = await p.window.eval('last.callData');
+  assert.ok(!built.includes(SWAPDEEP), 'a pair the AMM prices must not be routed through the book');
   p.close();
 });

@@ -3003,6 +3003,11 @@ wrap:0n,outDiffers:false,poolOut:t.addr,to:null,spender:ZROUTER};
 }
 }
 if(!r&&dc)r=dc;
+if(!r&&isIn&&CHAIN_ID===4663){
+const hc=await deepHop(f,t,swapAmt,slipBps,deadline,rcv||acct||ZERO,quoteBlock,acct).catch(()=>null);
+if(my!==seq)return;
+if(hc)r=hc;
+}
 if(!r&&curveOnlyOut)throw Object.assign(Error(`exact-output is unavailable for this pair — enter an amount to PAY instead`),{exactOut:1});
 if(!r)throw Error("bad quote");
 if(r.best.amountIn<=0n||r.best.amountOut<=0n||(!isIn&&r.amountLimit<r.best.amountIn))throw Error("bad quote");
@@ -3412,6 +3417,46 @@ const isBid=BigInt("0x"+b.slice(256,320))===1n;
 const [t0,t1]=fa.toLowerCase()<ta.toLowerCase()?[fa,ta]:[ta,fa];
 return{inUsed,out,t0,t1,isBid,epoch,order};
 }catch{return null}
+};
+const HOP_HAIR=10000n;
+const hopAmm=async(fromA,toA,amt,slipBps,deadline,rcpt,blk,acct)=>{
+const tl=encBool(false)+encAddr(fromA)+encAddr(toA)+encUint(amt)+encUint(slipBps)+encUint(deadline);
+const qs=[{sel:"e453166e",d:encAddr(rcpt)+encAddr(acct||ZERO)+tl,u:4,v:9},
+{sel:"4c464f59",d:encAddr(rcpt)+tl,u:8,v:13}];
+const raw=await mc3Deep(qs.map(q=>({to:ZQUOTER,data:"0x"+q.sel+q.d})),blk);
+let best=null;
+qs.forEach((q,i)=>{try{const y=raw[i]?decQ(raw[i],slipBps,false,q.u,q.v,0):null;
+if(y&&y.best.amountOut>0n&&(!best||y.best.amountOut>best.best.amountOut))best=y}catch{}});
+return best;
+};
+const encDeepLeg=(bk,to,inMax,outMin,deadline)=>"0x"+SEL_SWAPDEEP+encAddr(to)+encAddr(bk.t0)+encAddr(bk.t1)
++encUint(bk.epoch)+strip0x(bk.order)+encUint(bk.isBid?1:0)+encUint(inMax)+encUint(outMin)+encUint(deadline);
+const deepHop=async(f,t,swapAmt,slipBps,deadline,to,blk,acct)=>{
+if(CHAIN_ID!==4663||!swapAmt||swapAmt<=0n)return null;
+const mid=(MONEY()[0]||"").toLowerCase();
+if(!mid||f.addr.toLowerCase()===mid||t.addr.toLowerCase()===mid)return null;
+const cut=x=>x-x/HOP_HAIR;
+const cand=(out,limit,calls,mv)=>({best:{source:SRC_DEEP,amountIn:swapAmt,amountOut:out,feeBps:0n},
+callData:encCalls(calls),fundedCallData:null,amountLimit:limit,msgValue:mv,
+wrap:0n,outDiffers:false,poolOut:t.addr,to:null,
+spender:f.addr===ZERO?null:ZROUTER,hopMid:mid});
+if(f.addr!==ZERO){
+const bk=await deepQuote(f.addr,mid,swapAmt);
+if(bk&&bk.out>0n){
+const midMin=cut(bk.out-(bk.out*slipBps)/10000n);
+const leg=midMin>0n?await hopAmm(mid,t.addr,midMin,slipBps,deadline,to,blk,acct):null;
+if(leg&&leg.best.amountOut>0n)return cand(leg.best.amountOut,leg.amountLimit,
+[encDeepLeg(bk,ZROUTER,swapAmt,midMin,deadline),leg.callData,encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
+}}
+const leg=await hopAmm(f.addr,mid,swapAmt,slipBps,deadline,ZROUTER,blk,acct);
+if(!leg)return null;
+const midIn=cut(leg.amountLimit);
+if(midIn<=0n)return null;
+const bk=await deepQuote(mid,t.addr,midIn);
+if(!bk||bk.out<=0n)return null;
+const outMin=bk.out-(bk.out*slipBps)/10000n;
+return cand(bk.out,outMin,
+[leg.callData,encDeepLeg(bk,to,midIn,outMin,deadline),encSweep(mid,0n,to),encSweep(f.addr,0n,to)],leg.msgValue);
 };
 const showAddr=async()=>{const a=account,short=a.slice(0,6)+"..."+a.slice(-4);
 addr.textContent=short;addr.title=a+" - click to disconnect";addr.classList.add("on");
