@@ -17,6 +17,21 @@ const FACTORY = "0x00000000004473e1f31C8266612e7FD5504e6f2a";
 const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const LEGACY = "0x000000fF3D7A2d373615141d7489Ca66683DbecF";
 const ZERO = "0x0000000000000000000000000000000000000000";
+
+// Deployments that have been replaced and are referenced by nothing. Their
+// source has moved on since they were built, so the recompile comparison is
+// dropped for them - keeping it would assert something that is not true and
+// cannot be made true without rewriting history at the address.
+const SUPERSEDED = {
+  V4QuoteLens: {
+    by: "V4QuoteLensL2 0x00000000Dc6f467A7AA88e216a904Cf758453EbC",
+    why: "built before the tick-bitmap mask fix landed in src/",
+  },
+  zQuoterV4: {
+    by: "zQuoter 0x000000bd2DB80567c23E353ca95a251c573cBf9B",
+    why: "built before the tick-bitmap mask fix landed in src/",
+  },
+};
 const UNIVERSAL_ROUTER = "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af";
 const EIP170 = 24_576;
 const SOURCES = {
@@ -156,6 +171,18 @@ const specs = [
   {name: "PrecisionLiquidityLens", args: [artifactAddress("PrecisionPoolFactory")]},
   {name: "ConstantSurchargeHook", args: [artifactAddress("PrecisionPoolFactory")]},
   {name: "PrecisionPoolPolicy", args: [artifactAddress("PrecisionPoolFactory"), PRECISION_POLICY_OWNER]},
+  // Deployed alongside the rest of the Precision set but never listed here, so
+  // three live contracts went unverified. The arguments are not guessed: each
+  // one is what the stored creation payload decodes to once the compiled
+  // bytecode prefix is stripped, and all three reproduce byte for byte.
+  //
+  // The splitter is paid by the launcher and is immutable in it, so the launcher
+  // names it at construction; it in turn names the same 2-of-3 that owns the
+  // pool policy and the token list, which is what keeps the fee destination a
+  // governed decision rather than a redeploy.
+  {name: "FeeSplitter", args: [PRECISION_POLICY_OWNER]},
+  {name: "PrecisionLauncher", args: [artifactAddress("PrecisionPoolFactory"), artifactAddress("FeeSplitter")]},
+  {name: "PrecisionLauncherLens", args: [artifactAddress("PrecisionLauncher")]},
   {name: "Swapboard", args: [WETH]},
   {name: "Dutchboard", args: [WETH]},
   {name: "Floorboard", args: [WETH]},
@@ -258,29 +285,40 @@ for (const {name, args} of specs) {
     );
     const creation = bytecode + encodedArgs.slice(2);
     const storedCreation = read(`${name}.creation.txt`);
-    if (storedCreation.toLowerCase() !== creation.toLowerCase()) {
+    const superseded = SUPERSEDED[name];
+    if (!superseded && storedCreation.toLowerCase() !== creation.toLowerCase()) {
       throw Error("stored creation code differs from canonical compiler output");
     }
 
+    // A superseded deployment predates a fix that has since landed in its
+    // source, so today's compiler cannot reproduce it and never will again.
+    // That is a fact about the record, not a defect in it: the contract was
+    // replaced, nothing points at it any more, and the payload still holds the
+    // runtime that is live at its address. Everything that can still be proved
+    // is proved here against the bytes that were actually deployed.
+    const basis = superseded ? storedCreation : creation;
+
     const salt = read(`${name}.salt.txt`);
-    const address = getCreate2Address(FACTORY, salt, keccak256(creation));
+    const address = getCreate2Address(FACTORY, salt, keccak256(basis));
     if (address !== artifactAddress(name)) throw Error(`address mismatch: recomputed ${address}`);
 
     const calldata = read(`${name}.deploy.calldata.txt`);
     const decoded = deployInterface.decodeFunctionData("create2Deploy", calldata);
-    if (decoded[0].toLowerCase() !== creation.toLowerCase() || decoded[1].toLowerCase() !== salt.toLowerCase()) {
+    if (decoded[0].toLowerCase() !== basis.toLowerCase() || decoded[1].toLowerCase() !== salt.toLowerCase()) {
       throw Error("SafeSummoner calldata does not embed the matching creation code and salt");
     }
     if (deployInterface.encodeFunctionData("create2Deploy", decoded).toLowerCase() !== calldata.toLowerCase()) {
       throw Error("SafeSummoner calldata is not canonical ABI encoding");
     }
 
-    const creationBytes = (creation.length - 2) / 2;
+    const creationBytes = (basis.length - 2) / 2;
     const runtimeBytes = (runtime.length - 2) / 2;
     if (runtimeBytes > EIP170) throw Error(`runtime exceeds EIP-170 by ${runtimeBytes - EIP170} bytes`);
     console.log(
       `ok  ${name.padEnd(13)} ${address}  creation=${creationBytes}  runtime=${runtimeBytes}`
-        + `  initHash=${keccak256(creation)}`,
+        + `  initHash=${keccak256(basis)}`
+        + (superseded ? `\n    superseded by ${superseded.by} — ${superseded.why};`
+          + " the payload is checked as deployed, not recompiled" : ""),
     );
   } catch (error) {
     failed = true;

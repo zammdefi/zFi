@@ -1097,6 +1097,7 @@ return{best:{source:Number(num(k)),feeBps:num(k+1),amountIn:ai,amountOut:ao},sou
 const merge=(est,exe)=>{if(!est)return exe;if(!exe)return null;return{...exe,best:est.best}};
 const NO_WALLET="No wallet detected.";
 let PROV=null;
+let walletChain=0;
 const prov=()=>PROV||window.ethereum;
 const RPC_SEED=["https://ethereum-rpc.publicnode.com","https://eth-mainnet.public.blastapi.io"];
 const RPC_STORE="zswap:rpc";
@@ -1257,7 +1258,7 @@ const pr=await laneGet("ParaSwap",`${ep}/prices?${q}`,ms);
 const route=pr&&pr.priceRoute;if(!route||!route.srcAmount)return null;
 const j=await lanePost("ParaSwap",`${ep}/transactions/${chainCfg().slvId}?ignoreChecks=true`,{
 srcToken:f===ZERO?OX_ETH:f,destToken:t===ZERO?OX_ETH:t,
-srcDecimals:route.srcDecimals,destDecimals:route.destDecimals,
+srcDecimals:route.srcDecimals,destDecimals:route.destDecimals,destAmount:route.destAmount,
 priceRoute:route,userAddress:solverExec,slippage:Number(slip)},ms);
 if(!j||!j.to||!j.data)return null;
 return{inp:bmax(BigInt(route.srcAmount),BigInt(route.srcAmountAfterFee||route.srcAmount)),
@@ -1279,7 +1280,7 @@ const pr=await laneGet("ParaSwap",`${ep}/prices?${q}`,ms);
 const route=pr&&pr.priceRoute;if(!route||!route.destAmount)return null;
 const j=await lanePost("ParaSwap",`${ep}/transactions/${chainCfg().slvId}?ignoreChecks=true`,{
 srcToken:f===ZERO?OX_ETH:f,destToken:t===ZERO?OX_ETH:t,
-srcDecimals:route.srcDecimals,destDecimals:route.destDecimals,
+srcDecimals:route.srcDecimals,destDecimals:route.destDecimals,srcAmount:route.srcAmount,
 priceRoute:route,userAddress:solverExec,slippage:Number(slip)},ms);
 if(!j||!j.to||!j.data)return null;
 return{out:bmin(BigInt(route.destAmount),BigInt(route.destAmountAfterFee||route.destAmount)),
@@ -1747,7 +1748,7 @@ const pretty=n>=1?n.toLocaleString("en-US",{maximumFractionDigits:4}):sigAmt(v,d
 el.innerHTML=`Balance: ${pretty} <a href="#" title="Use maximum (leaves gas for ETH)">Max</a>`};
 async function refreshBalance(){
 const f=TOKENS[fromSel.value];
-if(!account||!f){bal.textContent="";fromBalance=0n;render();return}
+if(!account||!f||offChain()){bal.textContent="";fromBalance=0n;render();return}
 const my=++bSeq;
 refreshBalance1();
 try{
@@ -1820,6 +1821,8 @@ try{LS[LAST_PAIR()]=JSON.stringify([TOKENS[fi].addr,TOKENS[ti].addr])}catch{}
 };
 const LAST_PAIR=()=>CHAIN_ID===1?"zswap:pair":"zswap:pair:"+CHAIN_ID;
 const me=()=>(account||"").toLowerCase();
+const offChain=()=>!!account&&!!walletChain&&walletChain!==CHAIN_ID;
+const offChainNote=()=>`Your wallet is on ${CHAINS[walletChain]?.name||"another network"} \u2014 switch it to ${chainCfg().name} to trade here.`;
 const advancePastDeadPair=()=>{
 if(!pairAuto||pairChosen)return false;
 const cur=TOKENS[toSel.value];
@@ -2712,6 +2715,7 @@ catch(e){stat.textContent=isRejection(e)?"":"Switch to a supported network.";ret
 chainId=await rpc(I,[]);
 if(!CHAINS[+chainId]){stat.textContent="Switch to a supported network.";return}
 }
+walletChain=+chainId||0;
 setChain(+chainId);showNet();
 sessionStorage.removeItem("dc");
 account=accs[0];sOpen();
@@ -2844,6 +2848,7 @@ stat.textContent="";
 const isIn=mode==="in";
 const inEl=isIn?amt:outAmt, outEl=isIn?outAmt:amt, inTok=isIn?f:t;
 outEl.value=""; fitFont(outEl);
+if(offChain()){stat.textContent=offChainNote();return}
 if(!inEl.value.trim())return;
 let swapAmt;
 try{swapAmt=parseUnits(inEl.value.trim(),inTok.dec)}
@@ -3398,7 +3403,8 @@ catch(e2){stat.textContent=isRejection(e2)
 :"This wallet could not add "+c.name+". Add the network there, then pick it again.";return}
 }
 const now=+(await rpc(I,[]).catch(()=>0));
-if(now!==next){stat.textContent="The wallet is still on "+(CHAINS[now]?.name||"another network")+" \u2014 select "+c.name+" there to use it.";return}
+if(now!==next){walletChain=now||walletChain;stat.textContent="The wallet is still on "+(CHAINS[now]?.name||"another network")+" \u2014 select "+c.name+" there to use it.";return}
+walletChain=now;
 }finally{switchNet.busy=false}
 setChain(next);showNet();
 if(LS[WK]==="wc"){await Promise.all([loadTokenList(),refreshBalance()].map(x=>Promise.resolve(x).catch(()=>{})));update();loadPos()}
@@ -3447,16 +3453,19 @@ if(f.addr!==ZERO){
 const bk=await deepQuote(f.addr,mid,swapAmt);
 if(bk&&bk.out>0n){
 const midMin=cut(bk.out-(bk.out*slipBps)/10000n);
-const leg=midMin>0n?await hopAmm(mid,t.addr,midMin,slipBps,deadline,to,blk,acct):null;
-if(leg&&leg.best.amountOut>0n)return cand(bk.inUsed,leg.best.amountOut,leg.amountLimit,
-[encDeepLeg(bk,ZROUTER,swapAmt,midMin,deadline),leg.callData,encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
-if(midMin>0n){
-const bk2=await deepQuote(mid,t.addr,midMin);
-if(bk2&&bk2.out>0n){
-const om2=bk2.out-(bk2.out*slipBps)/10000n;
-return cand(bk.inUsed,bk2.out,om2,[encDeepLeg(bk,ZROUTER,swapAmt,midMin,deadline),
-encDeepLeg(bk2,to,midMin,om2,deadline),encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
-}}
+const first=encDeepLeg(bk,ZROUTER,swapAmt,midMin,deadline);
+const [leg,bk2]=midMin>0n?await Promise.all([
+hopAmm(mid,t.addr,midMin,slipBps,deadline,to,blk,acct),
+deepQuote(mid,t.addr,midMin)]):[null,null];
+const ammOut=leg&&leg.best.amountOut>0n?leg.best.amountOut:0n;
+const bookOut=bk2&&bk2.out>0n?bk2.out:0n;
+if(ammOut>0n&&ammOut>=bookOut)return cand(bk.inUsed,ammOut,leg.amountLimit,
+[first,leg.callData,encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
+if(bookOut>0n){
+const om2=bookOut-(bookOut*slipBps)/10000n;
+return cand(bk.inUsed,bookOut,om2,
+[first,encDeepLeg(bk2,to,midMin,om2,deadline),encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
+}
 }}
 const leg=await hopAmm(f.addr,mid,swapAmt,slipBps,deadline,ZROUTER,blk,acct);
 if(!leg)return null;
@@ -3580,6 +3589,7 @@ wkBind(eth);
 try{
 const cid=await rpc(I,[]);
 wireWallet.probed=1;
+walletChain=+cid||0;
 const hop=!!CHAINS[+cid]&&+cid!==CHAIN_ID;
 if(hop){setChain(+cid);showNet();loadEthUsd();burnTotal()}
 const accs=sessionStorage.getItem("dc")?[]:await rpc("eth_accounts",[]);

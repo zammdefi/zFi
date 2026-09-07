@@ -312,3 +312,76 @@ test('a pair only two books can reach is routed through both', async () => {
   assert.equal(hop.out, expected.toString(), 'the second book must price what the first one guarantees');
   p.close();
 });
+
+/**
+ * Two ways out of the intermediate, and only one of them is best.
+ *
+ * Once the first leg has sold into a book, the credit sitting on the router can
+ * be taken by a pool OR by a second book - USDG has both an AMM market and a
+ * book against some tokens. Both second legs are priced on the same guaranteed
+ * midMin, so their outputs are directly comparable, and the page compares every
+ * other venue it knows about. Taking whichever answered first instead would
+ * quietly hand the trade to the pool whenever a pool existed, however much
+ * better the book was paying.
+ */
+const hopBoth = ({ ammRate }) => {
+  const chain = new MockChain({ chainId: '0x1237' });
+  chain.setNative(A.ACCOUNT, 10n * ETH);
+  chain.setErc20(DEEP, A.ACCOUNT, 1_000_000n * ETH);
+  // The pool prices USDG -> STATE and nothing else; DEEP has no pool at all.
+  chain.quoteHandler = ({ selector, data }) => {
+    const body = '0x' + data.slice(10);
+    if (!body.toLowerCase().includes(USDG.slice(2))) return null;
+    return fixedRateQuoter({ rate: ammRate * ETH, decIn: 6, decOut: 18 })({ selector, data });
+  };
+  chain.deepQuote = ({ tokenIn, tokenOut, amount }) => {
+    const a = tokenIn.toLowerCase(), b = tokenOut.toLowerCase();
+    // DEEP -> USDG at 1/800, and a USDG -> STATE book paying 50.
+    if (a === DEEP && b === USDG) {
+      return { out: amount / 10n ** 12n / 800n, used: amount, epoch: 1n, order: ORDER.slice(0, 66), isBid: false };
+    }
+    if (a === USDG && b === STATE) {
+      return { out: amount * 10n ** 12n * 50n, used: amount, epoch: 2n, order: ORDER.slice(0, 66), isBid: true };
+    }
+    return null;
+  };
+  return chain;
+};
+
+const IN = 5000n * ETH;
+// 5,000 DEEP -> 6.25 USDG, less the 0.5% the first leg may slip and the basis
+// point of headroom, is what either second leg is sized and priced on.
+const MID_MIN = (() => {
+  const out = IN / 10n ** 12n / 800n;
+  const slipped = out - (out * 50n) / 10000n;
+  return slipped - slipped / 10000n;
+})();
+
+const askHop = p => p.window.eval(`(async()=>{
+  const c = await deepHop({addr:"${DEEP}"},{addr:"${STATE}"},${IN}n,50n,
+    BigInt(Math.floor(Date.now()/1e3)+1800),"${A.ACCOUNT}",await blockNow(),"${A.ACCOUNT}");
+  if(!c) return null;
+  return {out:c.best.amountOut.toString(), books:(c.callData.match(/${SWAPDEEP}/g)||[]).length};
+})()`);
+
+test('the book takes the second leg when it pays more than the pool', async () => {
+  const p = await loadPage({ chain: hopBoth({ ammRate: 40n }), hash: null });
+  await p.connect();
+  await p.settle();
+  const hop = await askHop(p);
+  assert.ok(hop, 'a route exists through either second leg');
+  assert.equal(hop.books, 2, 'the better-paying book must take the second leg, not the pool');
+  assert.equal(hop.out, (MID_MIN * 10n ** 12n * 50n).toString(), 'and its price is what is quoted');
+  p.close();
+});
+
+test('the pool takes the second leg when it pays more than the book', async () => {
+  const p = await loadPage({ chain: hopBoth({ ammRate: 60n }), hash: null });
+  await p.connect();
+  await p.settle();
+  const hop = await askHop(p);
+  assert.ok(hop, 'a route exists through either second leg');
+  assert.equal(hop.books, 1, 'only the first leg is a book when the pool pays more');
+  assert.equal(hop.out, (MID_MIN * 60n * 10n ** 12n).toString(), 'and its price is what is quoted');
+  p.close();
+});

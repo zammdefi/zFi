@@ -335,3 +335,45 @@ describe('following a link to another chain', () => {
     p.close();
   });
 });
+
+/**
+ * A link's chain that the wallet has not followed.
+ *
+ * The page adopts the chain a link names whether or not a wallet is present,
+ * which is what makes a shared trade open as the trade that was shared. But a
+ * connected wallet's reads stay with that wallet - deliberately, because the
+ * curated node pool must never learn a connected user's account - so while the
+ * two disagree, every balance and every quote on screen would be answered by
+ * the chain the WALLET is on while the page names the other one.
+ *
+ * That is worse than showing nothing: zQuoter and zRouter sit at the same
+ * address on all three chains, so the wallet answers such a call with a real
+ * price from the wrong market rather than with silence. The page holds both
+ * back and says which way to move instead.
+ */
+describe('a link whose chain the wallet has not followed', () => {
+  test('shows neither a balance nor a price from the chain the wallet sits on', async () => {
+    const chain = new MockChain({ chainId: BASE, autoConnected: true });
+    chain.setNative(A.ACCOUNT, 10n * ETH);
+    const p = await loadPage({ chain, hash: 'chain=4663&token=ETH&out=USDG&amount=1' });
+    await p.waitFor(() => p.window.eval('CHAIN_ID') === 4663, { label: 'link chain adopted' });
+    await p.settle();
+    assert.ok(p.window.eval('!!account'), 'the wallet is connected for this to mean anything');
+    assert.equal(p.text('bal'), '', "a Base balance must not be shown as Robinhood's");
+    assert.equal(p.value('outAmt'), '', 'no price may be taken from the chain the wallet is on');
+    assert.match(p.text('stat'), /Robinhood/, 'the message names the chain the page is on');
+    assert.match(p.text('stat'), /Base/, 'and the chain the wallet is on');
+    p.close();
+  });
+
+  test('prices normally once the wallet and the page agree', async () => {
+    const chain = new MockChain({ chainId: '0x1237', autoConnected: true });
+    chain.setNative(A.ACCOUNT, 10n * ETH);
+    const p = await loadPage({ chain, hash: 'chain=4663&token=ETH&out=USDG&amount=1' });
+    await p.settle();
+    assert.equal(p.window.eval('CHAIN_ID'), 4663);
+    assert.doesNotMatch(p.text('stat'), /switch it to/, 'a wallet already there is not told to move');
+    assert.match(p.text('bal'), /Balance/, 'and its balance is its own to show');
+    p.close();
+  });
+});
