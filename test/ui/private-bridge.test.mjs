@@ -763,3 +763,44 @@ describe('the rescue key', () => {
     p.close();
   });
 });
+
+describe('a deposit that never landed', () => {
+  async function lostDeposit() {
+    const p = await open();
+    await unlock(p);
+    p.type('pvAmt', '0.01');
+    p.chain.failNextReceipt = true;          // accepted by the wallet, thrown out by the chain
+    p.click('pvGo');
+    await p.waitFor(() => p.chain.sentTo(ROUTER).length === 1);
+    await p.waitFor(() => /reverted/.test(p.text('stat')), { label: 'the failed receipt' });
+    assert.equal(p.window.__relayPosts.length, 0, 'nothing was sent to the relay');
+    assert.match(p.text('pvList'), /settle/, 'fresh: still offered as settle');
+    const real = p.window.Date.now;
+    p.window.Date.now = () => real() + 11 * 60 * 1000;
+    poke(p);
+    await p.waitFor(() => /deposit not seen/.test(p.text('pvList')), { label: 'the stale warning', timeout: 15000 });
+    return p;
+  }
+
+  test('is called out after ten minutes, and the warning clears the moment the chain shows the deposit', async () => {
+    const p = await lostDeposit();
+    p.queueConfirm(false);
+    p.click(p.$('pvList').querySelector('button[data-a="forget"]'));
+    assert.match(p.text('pvList'), /0\.01 ETH/, 'declined: the record stays');
+    p.chain.logs.push(wrapLog(F.depositId, F.amountWei));
+    advance(p);
+    poke(p);
+    await p.waitFor(() => !/deposit not seen/.test(p.text('pvList')), { label: 'the warning to clear once the Wrap is seen', timeout: 15000 });
+    assert.match(p.text('pvList'), /settle/, 'a deposit the chain shows is offered for settling, never for forgetting');
+    p.close();
+  });
+
+  test('can be forgotten once confirmed', async () => {
+    const p = await lostDeposit();
+    p.queueConfirm(true);
+    p.click(p.$('pvList').querySelector('button[data-a="forget"]'));
+    assert.match(p.text('pvList'), /No deposits yet/, 'confirmed: the record is gone');
+    assert.equal(Object.keys(p.window.localStorage).filter(k => k.startsWith('zswap:cpn:')).map(k => JSON.parse(p.window.localStorage[k]).length)[0], 0, 'and not stored either');
+    p.close();
+  });
+});

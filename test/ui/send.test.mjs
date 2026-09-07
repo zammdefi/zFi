@@ -572,3 +572,185 @@ describe('recovery paths', () => {
     p.close();
   });
 });
+
+/**
+ * SLOW is one address on Ethereum, Base and Robinhood — the same bytecode at
+ * 0x000000006513B7821171C8447ec7ECdfa3b956Fd on all three — so the lock is not
+ * a mainnet feature the other two chains fall back out of. What does not travel
+ * is the keeper: the tip gate is deployed everywhere, but only mainnet has a
+ * bot watching it, and a tip nobody will ever claim is worse than no tip.
+ */
+describe('SLOW on the other chains', () => {
+  const BASE = '0x2105', RH = '0x1237';
+
+  async function onChain(hex) {
+    const chain = new MockChain({ chainId: hex });
+    chain.setNative(A.ACCOUNT, 10n * ETH);
+    const p = await loadPage({ chain, hash: null });
+    await p.connect({ pin: false });
+    p.click('tabSend');
+    await p.settle();
+    return p;
+  }
+
+  for (const [name, hex, id] of [['Base', BASE, 8453], ['Robinhood', RH, 4663]]) {
+    test(`${name} offers the same lock, at the same address`, async () => {
+      const p = await onChain(hex);
+      assert.equal(p.window.eval('CHAIN_ID'), id);
+      assert.equal(p.visible('dlyL'), true, 'the delay is offered off mainnet');
+
+      await p.typeAmount('amt', '2');
+      await recipient(p, A.OTHER);
+      p.select('dly', '86400');
+      await p.settle();
+      p.click('swap');
+      await p.waitFor(() => p.chain.sent.length > 0, { label: 'deposit' });
+      await p.settle();
+
+      const tx = p.chain.lastSent;
+      assert.equal(tx.to.toLowerCase(), A.SLOW.toLowerCase(), 'one SLOW, every chain');
+      assert.equal(selectorOf(tx.data), SEL.DEPOSITTO);
+      assert.equal(word('0x' + tx.data.slice(10), 3), 86400n);
+      assert.equal(BigInt(tx.value), 2n * ETH);
+      p.close();
+    });
+
+    test(`${name} does not sell a keeper tip nobody is running`, async () => {
+      const p = await onChain(hex);
+      p.select('dly', '86400');
+      await p.settle();
+      assert.equal(p.visible('tipL'), false, 'no keeper watches this chain, so nothing is offered');
+      p.close();
+    });
+  }
+
+  test('mainnet still offers the tip', async () => {
+    const p = await setup();
+    p.select('dly', '86400');
+    await p.settle();
+    assert.equal(p.visible('tipL'), true);
+    p.close();
+  });
+});
+
+/**
+ * The panel is a shortcut, not the whole contract: guardians, per-token
+ * balances and the transfer history live on SLOW's own page, which SLOW serves
+ * from its own bytes. The link hands that page what has already been typed
+ * here rather than making it be typed twice.
+ */
+describe('the link out to SLOW\'s own page', () => {
+  test('is a send-tab affordance only', async () => {
+    const p = await setup();
+    assert.equal(p.visible('slowMoreL'), true);
+    p.click('tabSwap');
+    await p.settle();
+    assert.equal(p.visible('slowMoreL'), false, 'there is nothing to hand over from a swap');
+    p.close();
+  });
+
+  test('carries the chain, asset, amount, recipient and delay across', async () => {
+    const p = await setup();
+    p.pickToken('fromSel', 'USDC');
+    await p.settle();
+    await p.typeAmount('amt', '100');
+    await recipient(p, A.OTHER);
+    p.select('dly', '259200');
+    await p.settle();
+
+    const href = p.$('slowMore').href;
+    const [base, route] = href.split('#');
+    assert.equal(base, `https://${p.window.eval('SLOW_PAGE')}.w4eth.io/`,
+      'the page is read off chain through the gateway, not off a server');
+    const q = new URLSearchParams(route.replace('/pay?', ''));
+    assert.equal(q.get('chain'), '1');
+    assert.equal(q.get('asset').toLowerCase(), A.USDC.toLowerCase());
+    assert.equal(q.get('amount'), '100');
+    assert.equal(q.get('to').toLowerCase(), A.OTHER.toLowerCase());
+    assert.equal(q.get('delay'), '259200');
+    p.close();
+  });
+
+  test('names the chain the page is actually on', async () => {
+    const chain = new MockChain({ chainId: '0x1237' });
+    chain.setNative(A.ACCOUNT, 10n * ETH);
+    const p = await loadPage({ chain, hash: null });
+    await p.connect({ pin: false });
+    p.click('tabSend');
+    await p.settle();
+    assert.match(p.$('slowMore').href, /chain=4663/);
+    p.close();
+  });
+
+  test('keeps the gateway it was itself served from', async () => {
+    const chain = new MockChain();
+    chain.setNative(A.ACCOUNT, 10n * ETH);
+    const p = await loadPage({
+      chain, hash: null,
+      url: 'https://0x000000bd2db80567c23e353ca95a251c573cbf9b.1.w3link.io/',
+    });
+    await p.connect({ pin: false });
+    p.click('tabSend');
+    await p.settle();
+    assert.match(p.$('slowMore').href,
+      new RegExp(`^https://${p.window.eval('SLOW_PAGE')}\\.1\\.w3link\\.io/`),
+      'an onchain-served page swaps the address and keeps the gateway that served it');
+    p.close();
+  });
+});
+
+/**
+ * SLOW's reverts reach the user through the page's REVERTS table, and the ones
+ * the send tab can actually provoke are worth naming.
+ *
+ * The 1155 receiver check is the one worth being precise about, because it is
+ * easy to overstate. A locked transfer mints an ERC-1155 position, so the
+ * recipient's code has to answer `onERC1155Received` - and real wallets do.
+ * A 7702-delegated EOA is FINE: checked against a live delegate on mainnet,
+ * which returns the magic value and takes the deposit. What fails is an
+ * address whose code implements no hook at all, which in practice means a
+ * contract that was never meant to hold tokens. The page previews the deposit
+ * with an eth_call before asking for a signature, so this costs nothing but a
+ * message - and an undecoded `0x9c05499b` reads like the page is broken
+ * rather than like the recipient cannot hold the position.
+ */
+describe('what SLOW says when it refuses', () => {
+  const cases = [
+    ['9c05499b', /does not accept ERC-1155/i],
+    ['49378211', /already settled/i],
+    ['621e25c3', /has not run out/i],
+    ['7a6fcaa6', /already ran out/i],
+    ['c6734163', /guardian/i],
+    ['2d193ecf', /guardian/i],
+    ['c9252135', /grace period/i],
+  ];
+
+  test('every one is decoded rather than shown as a selector', async () => {
+    const p = await setup();
+    for (const [sel, want] of cases) {
+      const msg = p.window.eval(`explain({data:"0x${sel}"})`);
+      assert.match(msg, want, `0x${sel} should be explained, got: ${msg}`);
+      assert.doesNotMatch(msg, /0x[0-9a-f]{8}/i, `0x${sel} leaked the raw selector: ${msg}`);
+    }
+    p.close();
+  });
+
+  test('a deposit the recipient cannot hold is refused before it is signed', async () => {
+    const p = await setup();
+    await p.typeAmount('amt', '2');
+    await recipient(p, A.OTHER);
+    p.select('dly', '86400');
+    await p.settle();
+
+    // The page previews with eth_call first; make that preview revert the way
+    // SLOW does when the recipient's code implements no ERC-1155 hook.
+    p.chain.revertOn(A.SLOW, SEL.DEPOSITTO, 'execution reverted: 0x9c05499b');
+
+    p.click('swap');
+    await p.waitFor(() => /does not accept ERC-1155/i.test(p.text('stat')) || p.chain.sent.length > 0,
+      { label: 'the refusal' });
+    assert.equal(p.chain.sent.length, 0, 'nothing was signed');
+    assert.match(p.text('stat'), /does not accept ERC-1155/i);
+    p.close();
+  });
+});

@@ -65,6 +65,7 @@
       <dt>Value</dt><dd>0 ETH</dd>
     </dl>
     <div class="row" style="margin-top:12px">
+      <div class="row" id="wallet-list"><span class="hint">Looking for wallets…</span></div>
       <button id="connect">Connect</button>
       <button id="check" class="ghost" disabled>Run checks</button>
       <button id="simulate" class="ghost" disabled>Simulate</button>
@@ -121,14 +122,66 @@ const $ = (id) => document.getElementById(id);
 const show = (el, t, c) => { el.textContent = t; el.className = 'msg show ' + (c || ''); };
 let provider = null, account = null, checksPassed = false;
 
-const announced = [];
-window.addEventListener('eip6963:announceProvider', (e) => { announced.push(e.detail); if (!provider) provider = e.detail.provider; });
-window.dispatchEvent(new Event('eip6963:requestProvider'));
+// Every installed wallet announces itself under EIP-6963. Taking the first to
+// answer picks whichever extension won the race — usually not the one you meant
+// — and `window.ethereum` is worse, since the last extension to load overwrites
+// it. So collect them all and let the choice be explicit.
+const wallets = new Map(); // rdns -> { info, provider }
+let chosen = null;
+
+window.addEventListener('eip6963:announceProvider', (e) => {
+  wallets.set(e.detail.info.rdns, e.detail);
+  renderWallets();
+});
+function scan() { window.dispatchEvent(new Event('eip6963:requestProvider')); }
+scan();
+// Extensions inject asynchronously, so keep asking for a moment.
+for (const ms of [50, 150, 400, 900, 1800]) setTimeout(scan, ms);
+
+function legacy() {
+  // Pre-6963 wallets, and the array some multi-wallet setups expose.
+  const out = [];
+  const eth = window.ethereum;
+  if (!eth) return out;
+  const list = Array.isArray(eth.providers) ? eth.providers : [eth];
+  for (const p of list) {
+    const name = p.isMetaMask ? 'MetaMask' : p.isRabby ? 'Rabby'
+      : p.isCoinbaseWallet ? 'Coinbase Wallet' : p.isBraveWallet ? 'Brave' : 'Injected wallet';
+    out.push({ info: { name, rdns: 'legacy:' + name }, provider: p });
+  }
+  return out;
+}
+
+function renderWallets() {
+  const box = $('wallet-list');
+  const seen = new Map(wallets);
+  for (const w of legacy()) if (![...seen.values()].some((x) => x.provider === w.provider)) seen.set(w.info.rdns, w);
+
+  box.textContent = '';
+  if (!seen.size) {
+    const s = document.createElement('span');
+    s.className = 'hint';
+    s.textContent = 'No wallet detected yet.';
+    box.appendChild(s);
+    return;
+  }
+  for (const w of seen.values()) {
+    const b = document.createElement('button');
+    b.className = chosen === w.provider ? '' : 'ghost';
+    b.textContent = w.info.name;
+    b.onclick = () => { chosen = provider = w.provider; renderWallets(); connect(); };
+    box.appendChild(b);
+  }
+}
+
 async function getProvider() {
+  if (chosen) return chosen;
   for (let i = 0; i < 20; i++) {
-    if (provider) return provider;
-    if (window.ethereum) return (provider = window.ethereum);
-    window.dispatchEvent(new Event('eip6963:requestProvider'));
+    if (wallets.size === 1) return (provider = [...wallets.values()][0].provider);
+    if (wallets.size > 1) return null; // ambiguous: make the user pick
+    const l = legacy();
+    if (l.length === 1) return (provider = l[0].provider);
+    scan();
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
@@ -143,6 +196,14 @@ $('p-hash').textContent = EXPECTED_HASH;
 const call = (to, data) => provider.request({ method: 'eth_call', params: [{ to, data }, 'latest'] });
 const enc = (sel, words) => sel + words.map((w) => w.replace(/^0x/, '').padStart(64, '0')).join('');
 
+// The connect-time switch is not a standing guarantee: the wallet can be moved
+// to another chain from a second tab, and not every wallet emits chainChanged.
+// These payloads are chain-specific but share one CREATE3 target address, so a
+// send on the wrong chain burns that address. Re-read the chain at send time.
+async function requireChain(p) {
+  const c = await p.request({ method: 'eth_chainId' });
+  if (c !== BASE) throw Error('Wallet is on chain ' + c + ', not Base (' + BASE + '). Reconnect and try again.');
+}
 async function ensureBase(p) {
   const c = await p.request({ method: 'eth_chainId' });
   if (c === BASE) return;
@@ -155,7 +216,7 @@ async function ensureBase(p) {
   }
 }
 
-$('connect').onclick = async () => {
+async function connect() {
   try {
     const p = await getProvider();
     if (!p) return show($('checks'),
@@ -171,7 +232,8 @@ $('connect').onclick = async () => {
     $('q-go').disabled = false;
     show($('checks'), 'Connected. Run checks.', '');
   } catch (e) { show($('checks'), e.message || String(e), 'bad'); }
-};
+}
+$('connect').onclick = connect;
 
 $('check').onclick = async () => {
   checksPassed = false; $('simulate').disabled = true; $('send').disabled = true;
@@ -331,6 +393,7 @@ $('q-go').onclick = async () => {
     }
 
     show($('q-out'), '3/3 confirm in your wallet…\nestimated gas ' + BigInt(gas).toString(), 'warn');
+    await requireChain(provider);
     const h = await provider.request({ method: 'eth_sendTransaction', params: [qTx()] });
     $('q-out').innerHTML = 'Sent: <a href="https://basescan.org/tx/' + h +
       '" target="_blank" rel="noopener">' + h + '</a><br>Quoter: ' + Q_ADDR;
@@ -342,6 +405,7 @@ $('q-send').onclick = async () => {
   if (!qChecks) return show($('q-out'), 'Run checks first.', 'bad');
   show($('q-out'), 'Confirm in your wallet…', 'warn');
   try {
+    await requireChain(provider);
     const h = await provider.request({ method: 'eth_sendTransaction', params: [qTx()] });
     $('q-out').innerHTML = 'Sent: <a href="https://basescan.org/tx/' + h + '" target="_blank" rel="noopener">' + h + '</a>';
     $('q-out').className = 'msg show ok';
@@ -352,6 +416,7 @@ $('send').onclick = async () => {
   if (!checksPassed) return show($('out'), 'Run checks first.', 'bad');
   show($('out'), 'Confirm in your wallet…', 'warn');
   try {
+    await requireChain(provider);
     const hash = await provider.request({ method: 'eth_sendTransaction', params: [tx()] });
     $('out').innerHTML = 'Sent: <a href="https://basescan.org/tx/' + hash + '" target="_blank" rel="noopener">' + hash + '</a>';
     $('out').className = 'msg show ok';

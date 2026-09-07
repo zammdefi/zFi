@@ -41,12 +41,12 @@ export const config = {
   privateKey: req("PRIVATE_KEY"),
 
   slow: (process.env.SLOW_ADDRESS ||
-    "0x000000000000888741b254d37e1b27128afeaabc").toLowerCase(),
+    "0x000000006513b7821171c8447ec7ecdfa3b956fd").toLowerCase(),
   gate: (process.env.GATE_ADDRESS ||
-    "0xb8B546b93a82f4Aa6f0345142dF5679B659ef3D4").toLowerCase(),
+    "0x76D1956b3BE7c0D09A16dE00DcE9B6f54ef28D34").toLowerCase(),
 
   // SLOW's deploy block; the gate is created in its constructor, same block.
-  startBlock: BigInt(process.env.START_BLOCK || "24986598"),
+  startBlock: BigInt(process.env.START_BLOCK || "25913818"),
   // Deliberately large. The wide-range sources serve the whole history in a
   // couple of requests, and being frugal with free endpoints matters more than
   // window size -- a capped source shrinks itself to fit on first contact, so

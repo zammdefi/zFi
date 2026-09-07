@@ -8,8 +8,8 @@ const ERC20_TRANSFER_ABI = [
   "function symbol() view returns (string)"
 ];
 // SLOW protocol — time-delayed transfers with reverse / clawback / optional keeper tip.
-// Verified source: 0x000000000000888741B254d37e1b27128AfEAaBC
-const SLOW_ADDRESS = "0x000000000000888741B254d37e1b27128AfEAaBC";
+// Verified source: 0x000000006513B7821171C8447ec7ECdfa3b956Fd
+const SLOW_ADDRESS = "0x000000006513B7821171C8447ec7ECdfa3b956Fd";
 const SLOW_ABI = [
   "function gate() view returns (address)",
   "function depositTo(address token, address to, uint256 amount, uint96 delay, bytes data) payable returns (uint256)",

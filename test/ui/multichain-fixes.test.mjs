@@ -124,12 +124,21 @@ describe('a wallet the user disconnected on purpose', () => {
 });
 
 describe('without a wallet', () => {
-  test('the network chip cycles the chain and the choice survives a reload', async () => {
+  test('the network mark opens a list, and the pick survives a reload', async () => {
     const p = await loadPage({ walletless: true, hash: null });
     p.click('net');
     await p.settle();
-    assert.equal(p.reloads(), 1, 'the chip reloads onto the next chain');
-    assert.equal(p.window.localStorage.getItem('zswap:chain'), '4663', 'chains cycle in id order');
+    const rows = [...p.$('wkList').querySelectorAll('.tkr')];
+    assert.deepEqual(rows.map(r => r.textContent), ['Ethereum', 'Robinhood', 'Base'],
+      'every supported chain is offered, not only the next one in a rotation');
+    assert.equal(rows.filter(r => r.classList.contains('cur')).length, 1, 'exactly one row is marked');
+    assert.equal(rows[0].getAttribute('aria-current'), 'true', 'and it is the chain in force');
+    assert.equal(p.reloads(), 0, 'opening the list does not move the page on its own');
+    // Base is last in the list, so a rotation could never have reached it first.
+    p.click(rows[2]);
+    await p.settle();
+    assert.equal(p.reloads(), 1, 'choosing a chain reloads onto it');
+    assert.equal(p.window.localStorage.getItem('zswap:chain'), '8453', 'the chain chosen is the chain stored');
     p.close();
     const q = await loadPage({ walletless: true, hash: null, storage: { 'zswap:chain': '8453' } });
     await q.settle();
@@ -190,5 +199,75 @@ describe('share links', () => {
     await q.settle();
     assert.doesNotMatch(String(q.copied()), /chain=/);
     q.close();
+  });
+});
+
+/**
+ * The chain mark used to hand the wallet a switch request and then say nothing
+ * at all: a decline looked identical to a switch that worked, and a wallet that
+ * added a network without selecting it left the page building transactions for
+ * a chain the wallet was not on.
+ */
+describe('switching the wallet between chains', () => {
+  const pickRow = async (p, name) => {
+    p.click('net');
+    await p.settle();
+    const row = [...p.$('wkList').querySelectorAll('.tkr')].find(r => r.textContent === name);
+    assert.ok(row, `no ${name} row`);
+    p.click(row);
+    await p.settle();
+  };
+
+  test('a declined switch says so and leaves the page where it was', async () => {
+    const p = await onBase();
+    await p.settle();
+    p.chain.failOn = {
+      wallet_switchEthereumChain: Object.assign(Error('User rejected the request'), { code: 4001 }),
+    };
+    await pickRow(p, 'Robinhood');
+    assert.equal(p.window.eval('CHAIN_ID'), 8453, 'the page stays on the chain the wallet is on');
+    assert.match(p.text('stat'), /declined the switch/);
+    assert.match(p.text('stat'), /Base/, 'and names where it stayed');
+    assert.equal(p.reloads(), 0, 'nothing reloads onto a chain the wallet refused');
+    p.close();
+  });
+
+  test('an unknown network is added, and the page follows only if the wallet selected it', async () => {
+    const p = await onBase();
+    await p.settle();
+    p.chain.failOn = {
+      wallet_switchEthereumChain: Object.assign(Error('Unrecognized chain ID'), { code: 4902 }),
+    };
+    await pickRow(p, 'Robinhood');
+    assert.ok(p.chain.log.some(r => r.method === 'wallet_addEthereumChain'
+      && r.params[0].chainId === '0x1237'), 'the page offers to add the chain it could not select');
+    assert.equal(p.window.eval('CHAIN_ID'), 4663, 'and follows the wallet there');
+    p.close();
+  });
+
+  test('a wallet that adds without selecting is reported, not assumed', async () => {
+    const p = await onBase();
+    await p.settle();
+    p.chain.addSelects = false;
+    p.chain.failOn = {
+      wallet_switchEthereumChain: Object.assign(Error('Unrecognized chain ID'), { code: 4902 }),
+    };
+    await pickRow(p, 'Robinhood');
+    assert.equal(p.window.eval('CHAIN_ID'), 8453,
+      'the page must not claim a chain the wallet never selected');
+    assert.match(p.text('stat'), /still on Base/i);
+    assert.equal(p.reloads(), 0);
+    p.close();
+  });
+
+  test('choosing the chain already in force does nothing', async () => {
+    const p = await onBase();
+    await p.settle();
+    const before = p.chain.log.length;
+    await pickRow(p, 'Base');
+    assert.ok(!p.chain.log.slice(before).some(r => r.method === 'wallet_switchEthereumChain'),
+      'no wallet prompt for a chain the wallet is already on');
+    assert.equal(p.reloads(), 0);
+    p.close();
   });
 });

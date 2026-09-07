@@ -15,10 +15,15 @@ const listRow = (s, a, o = {}) => ({
   a, n: `${s} Token`, s, d: 18, t: '#888', r: 1, u: '', au: '', l: '', desc: '', e: [], v: true, ...o,
 });
 
-// rankedIds() — one eth_call per loadTokenList run.
-const RANKED = 'df7ca268';
+// One eth_call opens a `loadTokenList` run, and counting it is how "loaded
+// twice" is caught. WHICH call that is depends on the path: the loader asks
+// `summariesPaged` first, to learn each row's chain and standard without
+// dragging its logo down too, and falls back to `rankedIds` only if that read
+// is unavailable. Counting both keeps this measuring "how many loads" rather
+// than "which read the loader happens to open with".
+const OPENERS = ['9ca6a2bc', 'df7ca268']; // summariesPaged, rankedIds
 const countRanked = chain => chain.log.filter(r =>
-  r.method === 'eth_call' && String(r.params?.[0]?.data || '').slice(2, 10) === RANKED).length;
+  r.method === 'eth_call' && OPENERS.includes(String(r.params?.[0]?.data || '').slice(2, 10))).length;
 
 const listChain = (rows, autoConnected = true) => {
   // Authorised by default, so wireWallet's auto-reconnect path runs at load —

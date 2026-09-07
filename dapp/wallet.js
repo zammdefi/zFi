@@ -342,6 +342,21 @@ async function connectWithWallet(walletKey, options = {}) {
   } finally { _isConnecting = false; }
 }
 
+// The connect-time switch is a snapshot, not a standing guarantee: a wallet can
+// be moved from another tab, and not every wallet emits chainChanged (some
+// mobile in-app browsers do not). Every calldata this page builds is mainnet
+// calldata, so re-read the chain immediately before signing rather than trust
+// the event. Throws, so callers get the error path they already have.
+window.requireChain = async function() {
+  const p = _connectedWalletProvider;
+  if (!p) throw new Error('Wallet is not connected.');
+  const c = await p.request({ method: 'eth_chainId' });
+  if (BigInt(c) !== 1n) {
+    try { window.disconnectWallet(); } catch (e) {}
+    throw new Error('Wallet is on chain ' + BigInt(c) + ', not Ethereum mainnet. Reconnect on mainnet and try again.');
+  }
+};
+
 window.disconnectWallet = function() {
   if (_connectedWalletProvider && _walletEventHandlers) { try { _connectedWalletProvider.removeListener('accountsChanged', _walletEventHandlers.accountsChanged); _connectedWalletProvider.removeListener('chainChanged', _walletEventHandlers.chainChanged); } catch (e) {} }
   _walletEventHandlers = null;

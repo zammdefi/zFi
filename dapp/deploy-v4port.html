@@ -162,7 +162,7 @@ async function getProvider() {
 
 const codeAt=(a)=>provider.request({method:'eth_getCode',params:[a,'latest']});
 const pad=(a)=>a.replace(/^0x/,'').toLowerCase().padStart(64,'0');
-function initcodeFor(hex){
+function initcodeFor(){
   const cfg=PM[chainHex];
   if(!cfg||!window.V4PORTL2_INITCODE)return null;
   return window.V4PORTL2_INITCODE+pad(cfg.pm);
@@ -186,6 +186,23 @@ function renderChains(){
     b.className=(chainHex===hex)?'':'ghost';
     b.title=chainHex===hex?'On '+cfg.name:'Switch to '+cfg.name;
     b.onclick=()=>pickChain(hex);
+  }
+}
+// Wallets pad the gas limit, so a balance that merely covers the estimate still
+// fails at signing time — and on a deploy page that means a half-finished
+// rollout rather than a clean refusal. deploy-base.html had this check; the
+// other pages sent without it.
+async function requireHeadroom(p, from, tx) {
+  if (!tx) return;
+  const [g, price, bal] = await Promise.all([
+    p.request({ method: 'eth_estimateGas', params: [tx] }),
+    p.request({ method: 'eth_gasPrice', params: [] }),
+    p.request({ method: 'eth_getBalance', params: [from, 'latest'] }),
+  ]);
+  const cost = BigInt(g) * BigInt(price);
+  if (BigInt(bal) < (cost * 3n) / 2n) {
+    throw Error('Insufficient gas headroom — nothing sent.\ncost ~' + cost + ' wei, balance '
+      + BigInt(bal) + ' wei.\nWallets pad the limit; top up before retrying.');
   }
 }
 async function readChain(){
@@ -280,6 +297,11 @@ $('d-sim').onclick=async()=>{
 $('d-send').onclick=async()=>{
   show($('d-out'),'Confirm in your wallet…');
   try{
+    // The initcode below is chosen by chainHex. A wallet moved from another tab
+    // leaves that stale, so confirm the chain still matches before signing.
+    const now=await provider.request({method:'eth_chainId'});
+    if(now!==chainHex){await readChain();return show($('d-out'),'The wallet moved to another chain. Run the checks again.','bad')}
+    try{await requireHeadroom(provider,account,tx())}catch(e){return show($('d-out'),e.message||String(e),'bad')}
     const h=await provider.request({method:'eth_sendTransaction',params:[tx()]});
     show($('d-out'),'Sent: '+h+'\n-> '+ADDR,'ok');
   }catch(e){show($('d-out'),e.message||String(e),'bad')}

@@ -2,10 +2,13 @@
 
 Settles expired **tipped** SLOW transfers through `SLOWGate` and collects the relayer tip.
 
-- `SLOW` — [0x000000000000888741b254d37e1b27128afeaabc](https://etherscan.io/address/0x000000000000888741b254d37e1b27128afeaabc)
-- `SLOWGate` — [0xb8B546b93a82f4Aa6f0345142dF5679B659ef3D4](https://etherscan.io/address/0xb8B546b93a82f4Aa6f0345142dF5679B659ef3D4)
+- `SLOW` — [0x000000006513b7821171c8447ec7ecdfa3b956fd](https://etherscan.io/address/0x000000006513b7821171c8447ec7ecdfa3b956fd)
+- `SLOWGate` — [0x76D1956b3BE7c0D09A16dE00DcE9B6f54ef28D34](https://etherscan.io/address/0x76D1956b3BE7c0D09A16dE00DcE9B6f54ef28D34)
 
-Ethereum mainnet only.
+Ethereum mainnet only. SLOW itself is at the same address on Base (8453) and Robinhood
+(4663), and the gate is deployed there too, so a second instance pointed at either
+chain would work - but nothing runs there yet, which is why zSwap only offers the
+tip on mainnet. Point a copy at an L2 before flipping that flag, not after.
 
 ## How it earns
 
@@ -130,7 +133,7 @@ shape and gas balance, so the log distinguishes idle from stuck.
 | `MAX_BATCH` | no | `10` | Max ids per `claimMany`. |
 | `LOG_CHUNK` | no | `250000` | Backfill window. Large on purpose — capped sources shrink themselves to fit. |
 | `POLL_MS` | no | `180000` | Poll interval. Three minutes; see below. |
-| `START_BLOCK` | no | `24986598` | SLOW's deploy block. |
+| `START_BLOCK` | no | `25913818` | SLOW's deploy block. |
 | `ONE_SHOT` | no | — | `true` runs a single pass and exits (cron mode). Exit code is the liveness signal. |
 | `HEARTBEAT_EVERY` | no | `20` | Passes between heartbeat lines in worker mode. `0` disables. |
 | `DRY_RUN` | no | — | `true` logs decisions without sending. |

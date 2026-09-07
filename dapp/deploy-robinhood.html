@@ -197,7 +197,6 @@ async function getProvider() {
 const call = (to, data) => provider.request({ method: 'eth_call', params: [{ to, data }, 'latest'] });
 const codeAt = (a) => provider.request({ method: 'eth_getCode', params: [a, 'latest'] });
 const enc = (sel, words) => sel + words.map((w) => w.replace(/^0x/, '').padStart(64, '0')).join('');
-const keccak = async (hex) => null; // not needed in-page; hashes are pinned in the initcode files
 
 // bytes argument at a fixed one-word offset, which is all these two calls need.
 function encWithBytes(sel, head, hex) {
@@ -216,6 +215,31 @@ $('q-code').textContent = window.ZQUOTER_RH_INITCODE
   ? ((window.ZQUOTER_RH_INITCODE.length - 2) / 2) + ' bytes'
   : 'MISSING — zquoterrobinhood-initcode.js did not load';
 
+// The connect-time switch is not a standing guarantee: the wallet can be moved
+// to another chain from a second tab, and not every wallet emits chainChanged.
+// These payloads are chain-specific but share one CREATE3 target address, so a
+// send on the wrong chain burns that address. Re-read the chain at send time.
+// Wallets pad the gas limit, so a balance that merely covers the estimate still
+// fails at signing time — and on a deploy page that means a half-finished
+// rollout rather than a clean refusal. deploy-base.html had this check; the
+// other pages sent without it.
+async function requireHeadroom(p, from, tx) {
+  if (!tx) return;
+  const [g, price, bal] = await Promise.all([
+    p.request({ method: 'eth_estimateGas', params: [tx] }),
+    p.request({ method: 'eth_gasPrice', params: [] }),
+    p.request({ method: 'eth_getBalance', params: [from, 'latest'] }),
+  ]);
+  const cost = BigInt(g) * BigInt(price);
+  if (BigInt(bal) < (cost * 3n) / 2n) {
+    throw Error('Insufficient gas headroom — nothing sent.\ncost ~' + cost + ' wei, balance '
+      + BigInt(bal) + ' wei.\nWallets pad the limit; top up before retrying.');
+  }
+}
+async function requireChain(p) {
+  const c = await p.request({ method: 'eth_chainId' });
+  if (c !== RH) throw Error('Wallet is on chain ' + c + ', not Robinhood (' + RH + '). Reconnect and try again.');
+}
 async function ensureRH(p) {
   const c = await p.request({ method: 'eth_chainId' });
   if (c === RH) return;
@@ -226,7 +250,7 @@ async function ensureRH(p) {
       chainId: RH, chainName: 'Robinhood Chain',
       nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
       rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
-      blockExplorerUrls: ['https://explorer.mainnet.chain.robinhood.com'] }] });
+      blockExplorerUrls: ['https://robinscan.io'] }] });
   }
 }
 
@@ -292,8 +316,10 @@ $('c-check').onclick = async () => {
 $('c-send').onclick = async () => {
   show($('c-out'), 'Confirm in your wallet…');
   try {
-    const h = await provider.request({ method: 'eth_sendTransaction',
-      params: [{ from: account, to: VANITY_MARKET, data: CLAIM_CD, value: '0x0' }] });
+    await requireChain(provider);
+    const claim = { from: account, to: VANITY_MARKET, data: CLAIM_CD, value: '0x0' };
+    await requireHeadroom(provider, account, claim);
+    const h = await provider.request({ method: 'eth_sendTransaction', params: [claim] });
     show($('c-out'), 'Sent: ' + h + '\nRun the step 2 check once it confirms.', 'ok');
   } catch (e) { show($('c-out'), e.message || String(e), 'bad'); }
 };
@@ -345,6 +371,8 @@ $('r-sim').onclick = async () => {
 $('r-send').onclick = async () => {
   show($('r-out'), 'Confirm in your wallet…');
   try {
+    await requireChain(provider);
+    await requireHeadroom(provider, account, routerTx());
     const h = await provider.request({ method: 'eth_sendTransaction', params: [routerTx()] });
     show($('r-out'), 'Sent: ' + h + '\nRouter: ' + ROUTER_ADDR, 'ok');
   } catch (e) { show($('r-out'), e.message || String(e), 'bad'); }
@@ -405,6 +433,8 @@ $('q-sim').onclick = async () => {
 $('q-send').onclick = async () => {
   show($('q-out'), 'Confirm in your wallet…');
   try {
+    await requireChain(provider);
+    await requireHeadroom(provider, account, quoterTx());
     const h = await provider.request({ method: 'eth_sendTransaction', params: [quoterTx()] });
     show($('q-out'), 'Sent: ' + h + '\nQuoter: ' + Q_ADDR, 'ok');
   } catch (e) { show($('q-out'), e.message || String(e), 'bad'); }

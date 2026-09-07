@@ -35,7 +35,17 @@ const coder = AbiCoder.defaultAbiCoder();
 export const A = {
   ZERO: '0x0000000000000000000000000000000000000000',
   V4PORT: '0x000000dfb53Fa7f1c486470034741d5BCBE14BE9',
-  V4LENS: '0x000000c3aE1692983941495162A4AAB40660E65F',
+  // The L2s share a port that is NOT mainnet's. Answering only for mainnet's
+  // meant a v4 swap on Base or Robinhood aimed at an address the mock did not
+  // know, so nothing asserted the page picks the right one per chain.
+  V4PORT_L2: '0x508ad1b0ae31FaF295c5af8C5c2bE9e33E0D19C4',
+  // MUST track `v4lens` in zSwap.html's chain table. The mock answers the lens
+  // call by address; when the page moved to the CREATE3 lens and this did not,
+  // every hooked-pool quote silently fell through to the plain router and the
+  // v4pool tests failed on the TARGET rather than on anything about v4.
+  V4LENS: '0x00000000Dc6f467A7AA88e216a904Cf758453EbC',
+  // Must track `DEEPLENS` in zSwap.html — the mock answers by address.
+  DEEPLENS: '0x000000d579c1829a4b9bb720f0c26062ae608c45',
   WETH: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
   USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
@@ -50,8 +60,8 @@ export const A = {
   OFFERING: '0x000000A4Ad929C9E108aD2B1D2fBeDe0C2Ae57e1',
   // TapVest — the singleton that releases a cause's vested ether.
   TAPVEST: '0x0000000060cdD33cbE020fAE696E70E7507bF56D',
-  SLOW: '0x000000000000888741B254d37e1b27128AfEAaBC',
-  SLOW_GATE: '0xb8B546b93a82f4Aa6f0345142dF5679B659ef3D4',
+  SLOW: '0x000000006513B7821171C8447ec7ECdfa3b956Fd',
+  SLOW_GATE: '0x76D1956b3BE7c0D09A16dE00DcE9B6f54ef28D34',
   SB2: '0x000000dA7bb4B2A9E3e80e9A4D4157E26CA6189b',
   SB1: '0x000000fF3D7A2d373615141d7489Ca66683DbecF',
   SBVIEW: '0x000000E0b25449F32f7D9259aC449bA88E78dFCE',
@@ -119,7 +129,8 @@ export const SEL = {
   BY_CREATOR: '7d78be2b', TOKEN1: 'd21220a7', BY_CREATOR_N: 'aa5e6b5b', RESERVE0: '443cb4bc',
   PAIR_COUNT: '355da246',
   REMOVE: 'e39b0eb5', REMOVE_LOSSY: '0cc55f06', ADDEXACT: 'cc0025e4',
-  RANKEDIDS: 'df7ca268', LISTJSON: '74e18e96', FLOOR_BID: '3d8d260b',
+  RANKEDIDS: 'df7ca268', LISTJSON: '74e18e96', FLOOR_BID: '3d8d260b', SUMMARIES: '9ca6a2bc',
+  DEEPQ: '1a0dc93f',
   NS_CID: 'fb021939', NS_RES: '4f896d4f', NS_REV: '9af8b7aa',
   ENS_RSLV: '0178b8bf', ENS_EADDR: '3b3b57de', ENS_ENAME: '691f3431',
   ENS_RESOLVE: '9061b923', ENS_SUPPORTS: '01ffc9a7',
@@ -137,6 +148,57 @@ const ZERO_ADDR = '0x' + '0'.repeat(40);
 export const word = (hex, i) => BigInt('0x' + strip(hex).slice(i * 64, (i + 1) * 64));
 export const wordAddr = (hex, i) => '0x' + strip(hex).slice(i * 64 + 24, (i + 1) * 64);
 const u256 = v => BigInt(v).toString(16).padStart(64, '0');
+const FOREIGN_FLAG = 1n << 255n;
+/**
+ * The listing id `TokenList` would give the registry row at index `i`.
+ *
+ * NOT an index. `idOf` returns the token's own ADDRESS for a listing on the
+ * registry's own chain, and `keccak256(kind, chainId, account) | 1<<255` for
+ * everything else - every other chain's rows, the native asset, reservations.
+ * The page reads that bit to decide which ids can possibly carry the connected
+ * chain BEFORE it spends a `json` read on them, so a mock that numbers every
+ * row 1..n hands an L2 page a list of certain misses and the dropdown empties.
+ * The low bits stay the 1-based row index so `json(id)` can still look the row
+ * up; only the flag has to be real.
+ */
+const listingId = (row, i) =>
+  (row && row.c !== undefined && Number(row.c) !== 1 ? FOREIGN_FLAG : 0n) | BigInt(i + 1);
+const listingRow = (rows, id) => rows[Number((BigInt(id) & ~FOREIGN_FLAG)) - 1];
+
+/**
+ * `summariesPaged(start,count)` as the registry returns it, built from the same
+ * `registry` rows the tests already declare.
+ *
+ * The page reads this BEFORE it reads any `json`, to learn each row's chain and
+ * standard without pulling its logo down with it. Deriving it here rather than
+ * asking every test to declare a second shape means a suite that sets
+ * `chain.registry` keeps describing one list, and the two reads cannot disagree
+ * with each other the way two hand-written fixtures would.
+ */
+const STANDARD_OF = {Native: 1, 'ERC-20': 2, 'ERC-721': 3, 'ERC-1155': 4, Tacit: 5};
+function encodeSummaries(rows, order) {
+  const tuples = order.map((i) => {
+    const r = rows[i];
+    const name = strOf(String(r.n ?? '')), sym = strOf(String(r.s ?? ''));
+    // 14 head words; the two strings are the last two and are never read by the
+    // page, but they have to be encoded or every offset after them is wrong.
+    const head = [
+      u256(listingId(r, i)), u256(0), u256(Number(r.c) || 0), u256(r.d ?? 0),
+      u256(r.k === 'eip155' ? 0 : 2), u256(STANDARD_OF[r.p] ?? 0),
+      u256(r.x === false ? 0 : 1), u256(r.o ? 1 : 0), u256(r.v ? 1 : 0),
+      u256(0), u256(r.r ?? 0), u256(r.f ? 1 : 0),
+      u256(14 * 32), u256(14 * 32 + name.length / 2),
+    ];
+    return head.join('') + name + sym;
+  });
+  let off = tuples.length * 32, heads = '', tails = '';
+  for (const t of tuples) { heads += u256(off); off += t.length / 2; tails += t; }
+  return '0x' + u256(32) + u256(tuples.length) + heads + tails;
+}
+const strOf = (s) => {
+  const hex = Buffer.from(s, 'utf8').toString('hex');
+  return u256(Buffer.byteLength(s)) + (hex + '0'.repeat(64)).slice(0, Math.ceil(hex.length / 64) * 64 || 0);
+};
 const addrWord = a => strip(a).toLowerCase().padStart(64, '0');
 const PLAUNCH = '0x0000002fc8e77585a008aa45d78a71ad36293aee';
 const FEE_POOL = '0x' + 'fe'.repeat(20);
@@ -380,6 +442,8 @@ export class MockChain {
     // which is the case the page must survive by falling back to the
     // registry's own listing order.
     this.conviction = null;
+    // Set to {out, used, epoch, order, isBid} to give chain 4663 an order book.
+    this.deepQuote = null;
     this.nftOwner = new Map();     // `${collection}:${id}` -> holder
     // loot token -> {dao, shares, sharesSupply, lootSupply}, via setCause().
     this.causes = new Map();
@@ -695,6 +759,13 @@ export class MockChain {
   }
 
   async dispatch(method, params) {
+    // One-shot per-method failure, so a test can make the wallet decline exactly
+    // the call it cares about rather than the next call of any kind.
+    if (this.failOn && this.failOn[method]) {
+      const e = this.failOn[method];
+      delete this.failOn[method];
+      throw e;
+    }
     switch (method) {
       case 'eth_chainId': return this.chainId;
       case 'eth_accounts': return this.autoConnected ? this.accounts : [];
@@ -759,6 +830,10 @@ export class MockChain {
         return '0x' + '11'.repeat(32) + '22'.repeat(32) + this.sigV.toString(16).padStart(2, '0');
       }
       case 'wallet_switchEthereumChain': this.chainId = params[0].chainId; return null;
+      // A real wallet adds the network and usually, but not always, selects it.
+      case 'wallet_addEthereumChain':
+        if (this.addSelects !== false) this.chainId = params[0].chainId;
+        return null;
       case 'wallet_revokePermissions': return null;
       case 'wallet_getCapabilities':
         if (!this.capabilities) throw Error('method not supported');
@@ -895,17 +970,34 @@ export class MockChain {
     // returning empty, which is what the page's allow-failure batch relies on.
     if (to === A.ZLISTLENS.toLowerCase() && sel === SEL.RANKEDIDS) {
       if (!this.conviction) throw Error('conviction lens unreachable');
-      const ids = this.conviction.map(i => u256(i));
+      const ids = this.conviction.map(i => u256(listingId(this.registry ? this.registry[i - 1] : null, i - 1)));
       return '0x' + u256(32) + u256(ids.length) + ids.join('');
+    }
+    // DeepstateQuoteLens.quoteDeepRoute -> (out, used, epoch, order, isBid).
+    // The page builds `swapDeep` straight out of these five words, so a test that
+    // sets `deepQuote` is describing an order book without needing one.
+    if (sel === SEL.DEEPQ && to === A.DEEPLENS.toLowerCase()) {
+      const q = this.deepQuote;
+      if (!q) return '0x' + u256(0).repeat(5);
+      return '0x' + u256(q.out) + u256(q.used) + u256(q.epoch ?? 0)
+        + strip(q.order).padStart(64, '0') + u256(q.isBid ? 1 : 0);
+    }
+    if (sel === SEL.SUMMARIES && (to === A.ZLISTLENS.toLowerCase() || to === A.TOKENLIST.toLowerCase())) {
+      const lens = to === A.ZLISTLENS.toLowerCase();
+      if (lens && !this.conviction) throw Error('conviction lens unreachable');
+      if (!this.registry) throw Error('no registry');
+      // The lens answers in conviction order; the registry in its own.
+      const order = lens ? this.conviction.map((i) => i - 1) : this.registry.map((_, i) => i);
+      return encodeSummaries(this.registry, order);
     }
     if (to === A.TOKENLIST.toLowerCase() && sel === SEL.RANKEDIDS) {
       if (!this.registry) throw Error('no registry');
-      const ids = this.registry.map((_, i) => u256(i + 1));
+      const ids = this.registry.map((row, i) => u256(listingId(row, i)));
       return '0x' + u256(32) + u256(ids.length) + ids.join('');
     }
     if (to === A.TOKENLIST.toLowerCase() && sel === SEL.LISTJSON) {
       if (!this.registry) throw Error('no registry');
-      const row = this.registry[Number(word('0x' + data.slice(8), 0)) - 1];
+      const row = listingRow(this.registry, word('0x' + data.slice(8), 0));
       if (!row) throw Error('no such id');
       const body = Buffer.from(JSON.stringify(row), 'utf8').toString('hex');
       return '0x' + u256(32) + u256(body.length / 2) + body.padEnd(Math.ceil(body.length / 64) * 64, '0');
@@ -968,7 +1060,7 @@ export class MockChain {
       });
       return coder.encode(['uint256', 'uint256'], [q ? word(body, 6) : 0n, q || 0n]);
     }
-    if (to === A.V4PORT.toLowerCase()) return '0x';           // pre-flight eth_call
+    if (to === A.V4PORT.toLowerCase() || to === A.V4PORT_L2.toLowerCase()) return '0x'; // pre-flight eth_call
     if (to === A.SB2.toLowerCase() || to === A.SB1.toLowerCase()) return this.board(sel, data);
     if (sel === SEL.MARKETS) {
       const body = '0x' + data.slice(8);
@@ -2121,6 +2213,13 @@ export function assertAddressesMatchPage(assert) {
   }
   const mc3 = html.match(/const MC3="(0x[0-9a-fA-F]{40})"/);
   assert.equal(mc3[1].toLowerCase(), A.MC3.toLowerCase(), 'MC3 fixture matches the page');
+  // Both v4 ports come from the chain table, so a redeploy of either has to
+  // update the fixture rather than quietly stop being exercised.
+  for (const [chain, key] of [[1, 'V4PORT'], [8453, 'V4PORT_L2'], [4663, 'V4PORT_L2']]) {
+    const m = html.match(new RegExp(`${chain}:\\{name:[^}]*?v4port:"(0x[0-9a-fA-F]{40})"`));
+    assert.ok(m, `page still names a v4 port for chain ${chain}`);
+    assert.equal(m[1].toLowerCase(), A[key].toLowerCase(), `chain ${chain} v4 port matches the fixture`);
+  }
 }
 
 /**
