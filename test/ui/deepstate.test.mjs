@@ -257,3 +257,58 @@ test('a pair with a direct route is left alone', async () => {
   assert.ok(!built.includes(SWAPDEEP), 'a pair the AMM prices must not be routed through the book');
   p.close();
 });
+
+/**
+ * Both legs can be the book.
+ *
+ * DEEP and STATE each book against USDG and nothing else, and neither has an
+ * AMM pool, so DEEP/STATE is two book legs with USDG in between - no AMM
+ * anywhere in the route. The router allows it: the fill lock is restored after
+ * each fill, so the second `swapDeep` does not read as nested and spends the
+ * credit the first one left.
+ *
+ * This also pins the shape of the composed call, because a route that is priced
+ * correctly and then encoded with the wrong arity throws inside the quote, gets
+ * swallowed by the catch that guards it, and reads on screen as an ordinary
+ * "no route" - or, worse, as a working quote that came from somewhere else.
+ */
+const STATE = '0xbfb7b3ff3d498a559b946b836d26f0e168f273d5';
+
+test('a pair only two books can reach is routed through both', async () => {
+  const chain = new MockChain({ chainId: '0x1237' });
+  chain.setNative(A.ACCOUNT, 10n * ETH);
+  chain.setErc20(DEEP, A.ACCOUNT, 1_000_000n * ETH);
+  // No AMM route exists for anything here.
+  chain.quoteHandler = () => null;
+  chain.deepQuote = ({ tokenIn, tokenOut, amount }) => {
+    const inTok = tokenIn.toLowerCase(), outTok = tokenOut.toLowerCase();
+    // DEEP -> USDG at 1/800 (18 dec in, 6 dec out)
+    if (inTok === DEEP && outTok === USDG) {
+      return { out: amount / 10n ** 12n / 800n, used: amount, epoch: 1n, order: ORDER.slice(0, 66), isBid: false };
+    }
+    // USDG -> STATE at 50 (6 dec in, 18 dec out)
+    if (inTok === USDG && outTok === STATE) {
+      return { out: amount * 10n ** 12n * 50n, used: amount, epoch: 2n, order: ORDER.slice(0, 66), isBid: true };
+    }
+    return null;
+  };
+  const p = await loadPage({ chain, hash: null });
+  await p.connect();
+  await p.window.eval(`addCustomToken("${STATE}",0)`).catch(() => {});
+  await p.settle();
+  const hop = await p.window.eval(`(async()=>{
+    const c = await deepHop({addr:"${DEEP}"},{addr:"${STATE}"},${5000n * ETH}n,50n,
+      BigInt(Math.floor(Date.now()/1e3)+1800),"${A.ACCOUNT}",await blockNow(),"${A.ACCOUNT}");
+    if(!c) return null;
+    return {out:c.best.amountOut.toString(), books:(c.callData.match(/${SWAPDEEP}/g)||[]).length,
+            msgValue:c.msgValue.toString()};
+  })()`);
+  assert.ok(hop, 'two books that share a quote asset must compose into a route');
+  assert.equal(hop.books, 2, 'a book-to-book route is two swapDeep legs, not one');
+  assert.equal(hop.msgValue, '0', 'selling a token attaches no value');
+  // 5000 DEEP -> 6.25 USDG, less 0.5% slippage and the basis point, times 50.
+  const mid = (5000n * ETH / 10n ** 12n / 800n) * 9950n / 10000n;
+  const expected = (mid - mid / 10000n) * 10n ** 12n * 50n;
+  assert.equal(hop.out, expected.toString(), 'the second book must price what the first one guarantees');
+  p.close();
+});

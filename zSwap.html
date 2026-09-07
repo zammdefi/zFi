@@ -634,7 +634,7 @@ function chainWipe(){
 solversJob=null;solverLanes=null;solverFill=null;solverExec=null;
 _laneHit.clear();_laneWait.clear();_strikes.clear();laneOverride=null;laneOverrideFor="";
 bnVal="";bnAt=0;bnJob=null;
-candCache={};chCache={};metaCache.clear();fwdCache.clear();
+candCache={};chCache={};metaCache.clear();fwdCache.clear();deadOutputs.clear();
 for(const o of[codeSeen,logoCache,cbSeen,fcPool,fcFloorPx])for(const k in o)delete o[k];
 mc3Cap=mc3Clamp(Number(LS[MC3_KEY()]));qPair=qpClamp(Number(LS[QP_KEY()]));qpWon=0;
 ++seq;++bSeq;++b1Seq;++bookSeq;++posSeq;++lqSeq;++chSeq;++floorSeq;++fcSeq;++cbSeq;
@@ -2703,6 +2703,9 @@ try{accs=await rpc("eth_requestAccounts",[])}
 catch(e){err(e);return}
 if(!accs[0])return;
 let chainId=await rpc(I,[]);
+if(linkChain&&CHAINS[linkChain]&&+chainId!==linkChain){
+try{await rpc("wallet_switchEthereumChain",[{chainId:"0x"+linkChain.toString(16)}]);chainId=await rpc(I,[])}catch{}
+}
 if(!CHAINS[+chainId]){
 try{await rpc("wallet_switchEthereumChain",[{chainId:"0x1"}])}
 catch(e){stat.textContent=isRejection(e)?"":"Switch to a supported network.";return}
@@ -3436,7 +3439,7 @@ if(CHAIN_ID!==4663||!swapAmt||swapAmt<=0n)return null;
 const mid=(MONEY()[0]||"").toLowerCase();
 if(!mid||f.addr.toLowerCase()===mid||t.addr.toLowerCase()===mid)return null;
 const cut=x=>x-x/HOP_HAIR;
-const cand=(out,limit,calls,mv)=>({best:{source:SRC_DEEP,amountIn:swapAmt,amountOut:out,feeBps:0n},
+const cand=(inp,out,limit,calls,mv)=>({best:{source:SRC_DEEP,amountIn:inp,amountOut:out,feeBps:0n},
 callData:encCalls(calls),fundedCallData:null,amountLimit:limit,msgValue:mv,
 wrap:0n,outDiffers:false,poolOut:t.addr,to:null,
 spender:f.addr===ZERO?null:ZROUTER,hopMid:mid});
@@ -3445,8 +3448,15 @@ const bk=await deepQuote(f.addr,mid,swapAmt);
 if(bk&&bk.out>0n){
 const midMin=cut(bk.out-(bk.out*slipBps)/10000n);
 const leg=midMin>0n?await hopAmm(mid,t.addr,midMin,slipBps,deadline,to,blk,acct):null;
-if(leg&&leg.best.amountOut>0n)return cand(leg.best.amountOut,leg.amountLimit,
+if(leg&&leg.best.amountOut>0n)return cand(bk.inUsed,leg.best.amountOut,leg.amountLimit,
 [encDeepLeg(bk,ZROUTER,swapAmt,midMin,deadline),leg.callData,encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
+if(midMin>0n){
+const bk2=await deepQuote(mid,t.addr,midMin);
+if(bk2&&bk2.out>0n){
+const om2=bk2.out-(bk2.out*slipBps)/10000n;
+return cand(bk.inUsed,bk2.out,om2,[encDeepLeg(bk,ZROUTER,swapAmt,midMin,deadline),
+encDeepLeg(bk2,to,midMin,om2,deadline),encSweep(mid,0n,to),encSweep(f.addr,0n,to)],0n);
+}}
 }}
 const leg=await hopAmm(f.addr,mid,swapAmt,slipBps,deadline,ZROUTER,blk,acct);
 if(!leg)return null;
@@ -3455,7 +3465,7 @@ if(midIn<=0n)return null;
 const bk=await deepQuote(mid,t.addr,midIn);
 if(!bk||bk.out<=0n)return null;
 const outMin=bk.out-(bk.out*slipBps)/10000n;
-return cand(bk.out,outMin,
+return cand(swapAmt,bk.out,outMin,
 [leg.callData,encDeepLeg(bk,to,midIn,outMin,deadline),encSweep(mid,0n,to),encSweep(f.addr,0n,to)],leg.msgValue);
 };
 const showAddr=async()=>{const a=account,short=a.slice(0,6)+"..."+a.slice(-4);
@@ -3885,7 +3895,7 @@ const data="0x"+SEL_COLL_BIDS+encAddr(FLOOR)+encAddr(collection)+encAddr(quote)
 const raw=await rpc(C,[{to:FLOORVIEW,data},L]).catch(()=>null);
 if(!raw)return[];
 const rows=decBidRows(raw);
-return rows.filter(r=>r.anyId&&r.remaining>0n)
+return rows.filter(r=>r.anyId&&r.remaining>0n&&r.initial>0n&&r.price>0n)
 .sort((a,b)=>{const l=b.proceeds*a.remaining,r=a.proceeds*b.remaining;return l>r?1:l<r?-1:0});
 }
 async function floorCandidates(tokenIn,tokenOut,block){
@@ -7739,7 +7749,7 @@ const go=document.createElement("button");go.type="button";go.textContent="Play 
 go.onclick=()=>{sBlip();invPlay()};
 scEl.appendChild(go);
 };
-let lSeq=0,listReady=false;
+let lSeq=0,listReady=false,linkChain=0;
 const lkWrote=Object.create(null);
 const lkKeep=(el,v)=>{const w=lkWrote[el.id];
 if(el.value!==""&&el.value!==w&&(w!==undefined||el.type!=="select-one"))return false;
@@ -7762,7 +7772,7 @@ try{update()}catch{}
 return;}
 const wantChain=+q.get("chain")||0;
 if(CHAINS[wantChain]&&wantChain!==CHAIN_ID){
-if(prov()){if(wireWallet.probed)stat.textContent=`This link is for ${CHAINS[wantChain].name} \u2014 switch your wallet there to use it.`;return}
+linkChain=wantChain;
 setChain(wantChain);showNet();await loadTokenList();if(my!==lSeq)return;
 }
 const at=a=>a?TOKENS.findIndex(t=>t.addr.toLowerCase()===a):-1;

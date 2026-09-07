@@ -103,10 +103,18 @@ describe('a wallet on mainnet', () => {
     p.close();
   });
 
-  test('a link for another chain is named rather than silently misapplied', async () => {
+  // The hazard this guards is that "USDC" is a different contract on each
+  // chain, so a Base link resolved against mainnet's list buys the wrong token.
+  // The page now adopts the link's chain before it resolves either symbol,
+  // which answers that at the source rather than with a warning.
+  test('a link for another chain resolves its symbols on that chain', async () => {
     const chain = new MockChain();
     const p = await loadPage({ chain, hash: 'token=ETH&out=USDC&chain=8453' });
-    await p.waitFor(() => /This link is for Base/.test(p.text('stat')), { label: 'chain notice' });
+    await p.waitFor(() => p.window.eval('CHAIN_ID') === 8453, { label: 'link chain adopted' });
+    await p.settle();
+    const picked = p.window.eval('TOKENS[toSel.value].addr').toLowerCase();
+    assert.equal(picked, '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      "the link's USDC must be Base's, never mainnet's");
     p.close();
   });
 });
@@ -268,6 +276,62 @@ describe('switching the wallet between chains', () => {
     assert.ok(!p.chain.log.slice(before).some(r => r.method === 'wallet_switchEthereumChain'),
       'no wallet prompt for a chain the wallet is already on');
     assert.equal(p.reloads(), 0);
+    p.close();
+  });
+});
+
+/**
+ * A shared link names its chain.
+ *
+ * Following one used to be abandoned outright whenever a wallet extension was
+ * present and pointed somewhere else: the handler set a message and returned
+ * before the pair, the amount or the recipient were ever applied. So a link to
+ * a Robinhood trade opened, for anyone with MetaMask on mainnet, as the mainnet
+ * default pair - the trade that was shared simply was not shown.
+ *
+ * Reading a chain needs no wallet, and the swap button already asks the wallet
+ * to switch when it disagrees, so the page follows the link either way and says
+ * what will happen.
+ */
+describe('following a link to another chain', () => {
+  const linked = (extra = {}) => {
+    const chain = new MockChain({ chainId: BASE });
+    chain.setNative(A.ACCOUNT, 10n * ETH);
+    return loadPage({ chain, hash: 'chain=4663&token=ETH&out=USDG&amount=1', ...extra });
+  };
+
+  test('a disconnected visitor lands on the trade that was shared', async () => {
+    const p = await loadPage({ walletless: true, hash: 'chain=4663&token=ETH&out=USDG&amount=1' });
+    await p.settle();
+    assert.equal(p.window.eval('CHAIN_ID'), 4663, 'the page follows the chain in the link');
+    assert.equal(p.value('amt'), '1', 'and the amount it carried');
+    p.close();
+  });
+
+  test('a wallet on another chain no longer discards the link', async () => {
+    const p = await linked();
+    p.chain.autoConnected = true;
+    await p.settle();
+    await p.waitFor(() => p.window.eval('CHAIN_ID') === 4663, { label: 'link chain adopted' });
+    assert.equal(p.value('amt'), '1', 'the amount in the link is applied, not dropped');
+    const sel = p.text('fromSel') + '/' + p.text('toSel');
+    assert.ok(/ETH/.test(sel), `the pair in the link is applied, got ${sel}`);
+    p.close();
+  });
+
+  // A status line is not a durable surface - the quote that follows owns it.
+  // What has to hold is that connecting adopts the chain the link named rather
+  // than dragging the page back to wherever the wallet happened to be.
+  test('connecting from a link asks the wallet for the link chain', async () => {
+    const p = await linked();
+    await p.waitFor(() => p.window.eval('CHAIN_ID') === 4663, { label: 'link chain adopted' });
+    await p.settle();
+    p.click('addr');
+    await p.settle();
+    const asked = p.chain.log.filter(r => r.method === 'wallet_switchEthereumChain');
+    assert.ok(asked.length, 'connecting must ask the wallet to join the chain the link named');
+    assert.equal(asked[asked.length - 1].params[0].chainId, '0x1237', 'and it must ask for Robinhood');
+    assert.equal(p.window.eval('CHAIN_ID'), 4663, 'the page stays on the chain that was shared');
     p.close();
   });
 });
